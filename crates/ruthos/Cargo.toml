@@ -1,0 +1,17 @@
+[package]
+name = "ruthos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eframe = { workspace = true }
+egui = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ruthos-core = { workspace = true }
+ruthos-ui = { workspace = true }

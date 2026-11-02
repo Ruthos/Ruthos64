@@ -1,0 +1,25 @@
+[package]
+name = "ruthos-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+egui = { workspace = true }
+eframe = { workspace = true }
+egui_extras = { workspace = true }
+egui-wgpu = { workspace = true }
+rfd = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+crossbeam-channel = { workspace = true }
+parking_lot = { workspace = true }
+image = { workspace = true }
+ruthos-core = { workspace = true }
+ruthos-dicom = { workspace = true }
+ruthos-net = { workspace = true }
+ruthos-render = { workspace = true }

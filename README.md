@@ -1,0 +1,142 @@
+# Ruthos
+
+**A Horos-inspired DICOM viewer for Windows, written in Rust.**
+
+Ruthos is a community project to bring the Horos / OsiriX experience to Windows: the same database window, the same 2D viewer, the same tools, the same corner annotations, built as a single native binary on a modern GPU stack. It is not a port of Horos. Horos is Objective-C and Cocoa to the bone, so Ruthos re-implements its feature set and user interface on top of Rust libraries.
+
+> **Status: pre-alpha, design stage.** There is no runnable build yet. This README describes what Ruthos is going to be and how it is organised, so contributors can orient themselves before the first line of code lands.
+
+---
+
+## Why
+
+Horos is the free DICOM viewer of choice in a large number of veterinary and small clinical practices. It is also Mac-only, and its upstream has slowed. Practices on Windows have Weasis, OHIF in a browser, or paid tools, none of which feel like Horos. Ruthos exists to fill that gap: a free, open viewer that a Horos user can sit down at and already know how to use.
+
+Three things justify a new codebase rather than another wrapper:
+
+- **One small native binary.** No Java runtime, no bundled browser, no Python. Install it and open studies.
+- **GPU first.** Window/level, colour lookup tables, MPR and volume rendering all run on the GPU through `wgpu`, so large CT and CBCT volumes stay interactive on ordinary clinic hardware.
+- **The Horos workflow.** Albums and smart albums, the series thumbnail drawer, propagate settings, key images, ROI tools and the familiar toolbars. Where Horos made a design decision, Ruthos follows it unless there is a strong reason not to.
+
+## What it will look like
+
+Ruthos mirrors the two windows that make up a Horos session.
+
+**Database window.** A source list on the left (local database, albums, smart albums, PACS nodes), an outline table of studies with series as expandable rows, a series thumbnail strip along the bottom, and the Horos toolbar: Import, Export, Query/Retrieve, Send, Anonymize, Trash, 2D Viewer, Key Images and ROIs, Report, modality and date filters, Search.
+
+**2D viewer window.** A series thumbnail drawer on the left, the image viewport with the Horos four-corner annotation layout, and the viewer toolbar: Database, Window tiling, Series, Annotations, Patient, Tools, WL/WW and CLUT, Reconstruction, Orientation, Fusion, Export, Sync, Propagate settings, Play and Speed.
+
+The annotation layout follows the Horos defaults:
+
+| Position | Content |
+|---|---|
+| Top left | Image size, view size, WL/WW, mouse position in pixels and mm |
+| Top right | Patient name, ID and age, study description, series description, series number |
+| Bottom left | Zoom and rotation, image position, compression, slice thickness and location |
+| Bottom right | MRI timing (TE/TR), field strength, acquisition date |
+| Edge midpoints | Orientation letters |
+
+**Tool palette.** The 2D tools from Horos: window/level, zoom, pan, rotate, length, angle, Cobb angle, dynamic angle, rectangle, oval, open and closed polygon, pencil, point, text, arrow, brush ROI, repulsor and ROI selector.
+
+Colour lookup tables and volume-rendering presets are read directly from the Horos definition files, so "Hot Iron", "Jet", "VR Bones" and the rest look the same.
+
+## Roadmap
+
+Work is organised in tiers. Each tier is usable on its own.
+
+### Tier 1: a complete 2D viewer
+
+- Import files and folders into a local database; watch folders
+- Database window with albums, smart albums, search and filters
+- 2D viewer: window/level, presets, CLUTs, zoom, pan, rotate, flip, scroll, cine
+- Multi-series tiling, sync and propagate settings
+- Measurement and ROI tools with the ROI inspector and ROI manager
+- Key images, comments and study state
+- Hounsfield and pixel value readout, histograms and plots
+- DICOM listener (C-STORE SCP), send (C-STORE SCU), query/retrieve (C-FIND, C-MOVE), echo
+- Export to DICOM, JPEG, PNG and MP4; anonymisation
+- Preferences window
+- Import an existing Horos database folder, including albums, comments and key images
+
+### Tier 2: 3D
+
+- Orthogonal and oblique MPR, curved MPR, thick slab, MIP and MinIP
+- GPU volume rendering with the Horos preset library
+- PET-CT and other fusion
+- ROI volumes and 3D position
+
+### Tier 3: the long tail
+
+- Surface rendering and mesh export
+- Reports
+- Hanging protocols
+- A plugin interface (Horos plugins are Objective-C bundles and do not carry over)
+- DICOM print and structured reports
+
+Not planned: anything that depended on Apple-only services in Horos (iChat, Mail scripting, disc burning, QuickTime, iCloud).
+
+## Architecture
+
+Ruthos is a Cargo workspace. Each crate has a single job and a clear boundary.
+
+| Crate | Job |
+|---|---|
+| `ruthos-core` | Data model (Study, Series, Image, Album), SQLite storage, import pipeline, file store, smart-album predicates, Horos database migration |
+| `ruthos-dicom` | Wraps [dicom-rs](https://github.com/Enet4/dicom-rs). Decoding to typed pixel buffers, rescale, geometry, default WL, CLUT and preset loaders |
+| `ruthos-net` | DICOM networking on the dicom-rs upper layer: listener, send, query/retrieve, echo |
+| `ruthos-render` | `wgpu` pipelines. Tier 1: texture upload, WL/CLUT shader, ROI geometry, annotation text. Tier 2: volume pipelines |
+| `ruthos-ui` | The windows, one module per Horos window, built with `egui` |
+| `ruthos` | The application binary, settings, updates |
+
+### Technology choices
+
+- **Language:** Rust, stable toolchain, MSVC target on Windows.
+- **DICOM:** dicom-rs. Pure-Rust codecs for JPEG, RLE, deflate, JPEG-LS and JPEG 2000 (via the `openjp2` port rather than Grok, to stay clear of AGPL).
+- **Rendering:** `wgpu` over DirectX 12, with Vulkan as a fallback.
+- **UI:** `egui` with a custom theme and a small set of purpose-built widgets (toolbar, source list, outline table, thumbnail strip) that give the Horos look.
+- **Storage:** SQLite via `rusqlite`.
+- **Minimum platform:** Windows 10 version 1809 or later, 64-bit.
+
+### Features, not workarounds
+
+dicom-rs is strict and standards-based, and Ruthos leans on that. Vendor-specific quirks are handled in one isolated module behind a single trait, each with a test file, so they never leak into feature code.
+
+## Relationship to Horos
+
+Ruthos is an independent project. It is not affiliated with or endorsed by the Horos Project or Nimble Co LLC. "Horos" and "OsiriX" are trademarks of their respective owners.
+
+Ruthos borrows from Horos under the terms of its licence: icons, colour lookup tables, volume-rendering presets, annotation defaults, window-level presets, and the shape of its database schema. Where Horos logic is translated into Rust, the source file is credited in a comment.
+
+## Licence
+
+Ruthos is licensed under the **GNU Lesser General Public License v3.0**, the same licence as Horos. This is deliberate: it keeps Ruthos free to reuse Horos assets and logic, and it keeps Ruthos free.
+
+## Building
+
+There is nothing to build yet. When there is, you will need:
+
+1. The Rust toolchain via [rustup](https://rustup.rs). Stable channel, `x86_64-pc-windows-msvc` target.
+2. Microsoft Visual C++ Build Tools (the "Desktop development with C++" workload) for the MSVC linker.
+3. Git.
+
+Then:
+
+```powershell
+git clone https://github.com/Ruthos/ruthos.git
+cd ruthos
+cargo build --release
+```
+
+## Contributing
+
+The project is at the design stage, so the most useful contributions right now are:
+
+- Horos users describing the workflows they rely on, as issues
+- Sample DICOM studies that can be redistributed, especially veterinary CR, DR, CT and MRI
+- Review of the architecture above before it hardens into code
+
+If you know Horos well, the `ruthos-ui` crate is organised by Horos window name (Browser, Viewer, ThumbnailsList, Query, Send, ROI, ROIManager, Preferences and so on), so you will find your way around.
+
+## Not for diagnostic use
+
+Ruthos is not a medical device and has not been cleared or approved by any regulatory body. It is provided for research, education and informational purposes. Do not use it as the sole basis for clinical decisions.

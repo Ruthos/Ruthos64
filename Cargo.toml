@@ -1,0 +1,76 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ruthos-core",
+    "crates/ruthos-dicom",
+    "crates/ruthos-net",
+    "crates/ruthos-render",
+    "crates/ruthos-ui",
+    "crates/ruthos",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-3.0-only"
+repository = "https://github.com/Ruthos/ruthos"
+authors = ["The Ruthos contributors"]
+rust-version = "1.85"
+
+[workspace.dependencies]
+ruthos-core = { path = "crates/ruthos-core" }
+ruthos-dicom = { path = "crates/ruthos-dicom" }
+ruthos-net = { path = "crates/ruthos-net" }
+ruthos-render = { path = "crates/ruthos-render" }
+ruthos-ui = { path = "crates/ruthos-ui" }
+
+# UI and GPU
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "x11", "wayland"] }
+egui = "0.37"
+egui_extras = "0.37"
+egui-wgpu = "0.37"
+wgpu = "30.0"
+bytemuck = { version = "1.25", features = ["derive"] }
+
+# DICOM
+dicom-core = "0.10"
+dicom-object = "0.10"
+dicom-dictionary-std = "0.10"
+dicom-encoding = "0.10"
+dicom-pixeldata = { version = "0.10", default-features = false, features = ["native", "rayon", "openjp2", "image"] }
+dicom-ul = "0.10"
+dicom-transfer-syntax-registry = "0.10"
+
+# Storage and files
+rusqlite = { version = "0.41", features = ["bundled"] }
+directories = "6.0"
+walkdir = "2.5"
+notify = "8.2"
+rfd = "0.17"
+plist = "1.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Utilities
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rayon = "1.12"
+crossbeam-channel = "0.5"
+uuid = { version = "1.29", features = ["v4"] }
+parking_lot = "0.12"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true

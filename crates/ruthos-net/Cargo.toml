@@ -1,0 +1,20 @@
+[package]
+name = "ruthos-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dicom-core = { workspace = true }
+dicom-object = { workspace = true }
+dicom-dictionary-std = { workspace = true }
+dicom-encoding = { workspace = true }
+dicom-ul = { workspace = true }
+dicom-transfer-syntax-registry = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+crossbeam-channel = { workspace = true }

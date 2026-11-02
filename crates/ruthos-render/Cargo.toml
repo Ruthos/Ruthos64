@@ -1,0 +1,17 @@
+[package]
+name = "ruthos-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+ruthos-dicom = { workspace = true }

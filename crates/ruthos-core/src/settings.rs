@@ -1,0 +1,80 @@
+//! Application settings, stored as JSON in the user's config folder.
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    /// Root of the data folder. `None` means the platform default.
+    pub data_root: Option<PathBuf>,
+    /// Copy imported files into the database folder (true) or link to them
+    /// where they are (false). Horos calls these "Copy" and "Link".
+    pub copy_files_on_import: bool,
+    /// DICOM listener.
+    pub listener_enabled: bool,
+    pub listener_port: u16,
+    pub listener_ae_title: String,
+    /// Poll interval for the incoming folder, in seconds.
+    pub incoming_scan_seconds: u64,
+    /// Viewer defaults.
+    pub annotations_level: u8,
+    pub default_clut: String,
+    pub thumbnail_size: u32,
+    /// Window geometry remembered between runs.
+    pub browser_window_size: Option<[f32; 2]>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            data_root: None,
+            copy_files_on_import: true,
+            listener_enabled: true,
+            listener_port: 11112,
+            listener_ae_title: "RUTHOS".to_string(),
+            incoming_scan_seconds: 2,
+            annotations_level: 2,
+            default_clut: "No CLUT".to_string(),
+            thumbnail_size: 100,
+            browser_window_size: None,
+        }
+    }
+}
+
+impl Settings {
+    pub fn file_path() -> PathBuf {
+        if let Some(dirs) = directories::ProjectDirs::from("org", "Ruthos", "Ruthos") {
+            dirs.config_dir().join("settings.json")
+        } else {
+            PathBuf::from("ruthos-settings.json")
+        }
+    }
+
+    pub fn load() -> Self {
+        let path = Self::file_path();
+        match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
+                tracing::warn!("settings at {} unreadable ({e}), using defaults", path.display());
+                Self::default()
+            }),
+            Err(_) => Self::default(),
+        }
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::file_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(path, text)
+    }
+
+    pub fn data_root(&self) -> PathBuf {
+        self.data_root
+            .clone()
+            .unwrap_or_else(crate::paths::DataPaths::default_root)
+    }
+}
