@@ -4,7 +4,7 @@
 
 Ruthos is a community project to bring the Horos / OsiriX experience to Windows: the same database window, the same 2D viewer, the same tools, the same corner annotations, built as a single native binary on a modern GPU stack. It is not a port of Horos. Horos is Objective-C and Cocoa to the bone, so Ruthos re-implements its feature set and user interface on top of Rust libraries.
 
-> **Status: pre-alpha, design stage.** There is no runnable build yet. This README describes what Ruthos is going to be and how it is organised, so contributors can orient themselves before the first line of code lands.
+> **Status: pre-alpha.** It builds and runs. Today it is a patient archive with a working 2D viewer: import folders or files (or drop them on the window), a DICOM listener that receives from modalities straight into the archive, a Horos-style database window with albums and smart albums, and a GPU viewer with window/level, CLUTs, zoom, pan, rotate, flip, cine, measurements, ROIs and the Horos corner annotations. See the roadmap below for what is still missing from Tier 1.
 
 ---
 
