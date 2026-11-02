@@ -406,7 +406,7 @@ impl ViewerState {
         let mut panes = Vec::with_capacity(cells);
         match tiling.mode {
             TilingMode::Series => {
-                let base = current.position();
+                let base = current.position().min(current.positions().saturating_sub(cells));
                 for k in 0..cells {
                     let mut p = current.clone();
                     p.set_position(base + k);
@@ -454,8 +454,8 @@ impl ViewerState {
             return;
         }
         let Some(a) = self.sync_source() else { return };
-        let base = self.panes[a].position().saturating_sub(a);
         let src = self.panes[a].clone();
+        let n = src.positions();
         for (k, p) in self.panes.iter_mut().enumerate() {
             if p.locked {
                 continue;
@@ -464,6 +464,7 @@ impl ViewerState {
                 p.series_idx = src.series_idx;
                 p.images = src.images.clone();
                 p.load_error = None;
+                p.set_position(k.min(n.saturating_sub(1)));
             }
             p.view = src.view;
             p.clut = src.clut.clone();
@@ -471,7 +472,6 @@ impl ViewerState {
             if k != a {
                 p.fit_pending = src.fit_pending;
             }
-            p.set_position(base + k);
         }
     }
 
@@ -492,14 +492,37 @@ impl ViewerState {
             return;
         }
         if self.tiled_series() {
-            let base = pos.saturating_sub(self.active);
-            for (k, p) in self.panes.iter_mut().enumerate() {
-                if !p.locked {
-                    p.set_position(base + k);
-                }
-            }
+            let delta = pos as i64 - self.panes[self.active].position() as i64;
+            self.step_block(delta);
         } else {
             self.panes[self.active].set_position(pos);
+        }
+        self.selected_roi = None;
+    }
+
+    /// Move every unlocked cell of a tiled series by `delta`, stopping when
+    /// the first or last of them reaches an end of the series. Cells never go
+    /// blank, and locked cells stay where they are.
+    fn step_block(&mut self, delta: i64) {
+        let unlocked: Vec<usize> = (0..self.panes.len()).filter(|&k| !self.panes[k].locked).collect();
+        let Some(&first) = unlocked.first() else { return };
+        let n = self.panes[first].positions() as i64;
+        if n == 0 {
+            return;
+        }
+        let (mut lo, mut hi) = (i64::MIN, i64::MAX);
+        for &k in &unlocked {
+            let pos = self.panes[k].position().min((n - 1) as usize) as i64;
+            lo = lo.max(-pos);
+            hi = hi.min(n - 1 - pos);
+        }
+        let d = delta.clamp(lo, hi);
+        if d == 0 {
+            return;
+        }
+        for &k in &unlocked {
+            let pos = (self.panes[k].position().min((n - 1) as usize) as i64 + d) as usize;
+            self.panes[k].set_position(pos);
         }
         self.selected_roi = None;
     }
@@ -566,18 +589,7 @@ impl ViewerState {
             return;
         }
         if self.tiled_series() {
-            let Some(k0) = self.sync_source() else { return };
-            let n = self.panes[k0].positions() as i64;
-            if n == 0 {
-                return;
-            }
-            let base = (self.panes[k0].position() as i64 - k0 as i64 + delta).rem_euclid(n) as usize;
-            for (k, p) in self.panes.iter_mut().enumerate() {
-                if !p.locked {
-                    p.set_position(base + k);
-                }
-            }
-            self.selected_roi = None;
+            self.step_block(delta);
             return;
         }
         let p = &mut self.panes[self.active];
