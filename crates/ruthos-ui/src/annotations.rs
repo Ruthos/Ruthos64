@@ -47,6 +47,8 @@ pub struct AnnotationContext<'a> {
     pub transform: &'a ViewTransform,
     pub mouse_pixel: Option<(i64, i64)>,
     pub level: AnnotationLevel,
+    /// Space kept clear at the bottom-right corner (the lock control).
+    pub bottom_right_inset: f32,
 }
 
 pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
@@ -228,7 +230,7 @@ pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
         for (i, t) in br.iter().enumerate() {
             shadow_text(
                 painter,
-                Pos2::new(rect.right() - margin, rect.bottom() - margin - (n - 1 - i) as f32 * line),
+                Pos2::new(rect.right() - margin, rect.bottom() - margin - ctx.bottom_right_inset - (n - 1 - i) as f32 * line),
                 Align2::RIGHT_BOTTOM,
                 t,
                 font.clone(),

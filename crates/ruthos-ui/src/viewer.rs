@@ -137,6 +137,10 @@ pub struct Pane {
     pub image_idx: usize,
     pub frame_idx: u32,
     pub view: ViewState,
+    pub clut: String,
+    /// A locked cell keeps its image, window, colours and measurements:
+    /// tools, keys, scrolling and the toolbar leave it alone.
+    pub locked: bool,
     fit_pending: bool,
     window_initialised_for: Option<i64>,
     load_error: Option<String>,
@@ -144,12 +148,15 @@ pub struct Pane {
 
 impl Pane {
     fn new(shared: &Shared, series: &SeriesRow, series_idx: usize) -> Self {
+        let clut = shared.settings.lock().default_clut.clone();
         Self {
             series_idx,
             images: shared.db.images_for_series(series.id).unwrap_or_default(),
             image_idx: 0,
             frame_idx: 0,
             view: ViewState::default(),
+            clut,
+            locked: false,
             fit_pending: true,
             window_initialised_for: None,
             load_error: None,
@@ -211,7 +218,6 @@ pub struct ViewerState {
     /// always pans, as in Horos.
     pub tool: Tool,
     pub right_tool: Tool,
-    pub clut: String,
     pub annotations: AnnotationLevel,
     pub bilinear: bool,
 
@@ -262,6 +268,13 @@ struct CalibrateDraft {
 }
 
 const FRAME_CACHE: usize = 24;
+
+/// Size of the lock control in a cell's bottom-right corner.
+const LOCK_CHIP: Vec2 = Vec2::new(40.0, 18.0);
+
+fn lock_chip_rect(cell: Rect) -> Rect {
+    Rect::from_min_size(Pos2::new(cell.right() - 6.0 - LOCK_CHIP.x, cell.bottom() - 6.0 - LOCK_CHIP.y), LOCK_CHIP)
+}
 const GPU_CACHE: usize = 8;
 
 impl ViewerState {
@@ -277,7 +290,6 @@ impl ViewerState {
         let _ = shared.db.mark_study_opened(study.id);
         let id = shared.next_id();
         let settings = shared.settings.lock();
-        let clut = settings.default_clut.clone();
         let annotations = match settings.annotations_level {
             0 => AnnotationLevel::None,
             1 => AnnotationLevel::Partial,
@@ -294,7 +306,6 @@ impl ViewerState {
             tiling: Tiling { mode: TilingMode::Series, rows: 1, cols: 1 },
             tool: Tool::WindowLevel,
             right_tool: Tool::Zoom,
-            clut,
             annotations,
             bilinear: true,
             rois: HashMap::new(),
@@ -360,6 +371,10 @@ impl ViewerState {
     pub fn select_series(&mut self, shared: &Shared, idx: usize) {
         let a = self.active;
         if idx >= self.series.len() || idx == self.panes[a].series_idx {
+            return;
+        }
+        if self.panes[a].locked {
+            self.refuse_locked();
             return;
         }
         self.persist_pane(shared, a);
@@ -438,16 +453,20 @@ impl ViewerState {
         if !self.tiled_series() {
             return;
         }
-        let a = self.active;
+        let Some(a) = self.sync_source() else { return };
         let base = self.panes[a].position().saturating_sub(a);
         let src = self.panes[a].clone();
         for (k, p) in self.panes.iter_mut().enumerate() {
+            if p.locked {
+                continue;
+            }
             if p.series_idx != src.series_idx {
                 p.series_idx = src.series_idx;
                 p.images = src.images.clone();
                 p.load_error = None;
             }
             p.view = src.view;
+            p.clut = src.clut.clone();
             p.window_initialised_for = src.window_initialised_for;
             if k != a {
                 p.fit_pending = src.fit_pending;
@@ -468,15 +487,49 @@ impl ViewerState {
 
     /// Scroll the active cell (or the whole tiled series) to a position.
     fn set_active_position(&mut self, pos: usize) {
+        if self.active_locked() {
+            self.refuse_locked();
+            return;
+        }
         if self.tiled_series() {
             let base = pos.saturating_sub(self.active);
             for (k, p) in self.panes.iter_mut().enumerate() {
-                p.set_position(base + k);
+                if !p.locked {
+                    p.set_position(base + k);
+                }
             }
         } else {
             self.panes[self.active].set_position(pos);
         }
         self.selected_roi = None;
+    }
+
+    fn active_locked(&self) -> bool {
+        self.panes[self.active].locked
+    }
+
+    fn refuse_locked(&mut self) {
+        self.set_status("This cell is locked");
+    }
+
+    /// The unlocked cell a tiled series takes its series, view and position
+    /// from: the active cell, or the first unlocked one.
+    fn sync_source(&self) -> Option<usize> {
+        if !self.panes[self.active].locked {
+            return Some(self.active);
+        }
+        self.panes.iter().position(|p| !p.locked)
+    }
+
+    fn toggle_lock(&mut self, k: usize) {
+        if let Some(p) = self.panes.get_mut(k) {
+            p.locked = !p.locked;
+            let msg = if p.locked { "Cell locked: image, window, colours and measurements are kept" } else { "Cell unlocked" };
+            self.set_status(msg);
+            self.selected_roi = None;
+            self.drag_draft = None;
+            self.angle_draft = None;
+        }
     }
 
     /// Store WL, rotation and flips for every shown series, as Horos does.
@@ -503,14 +556,20 @@ impl ViewerState {
     }
 
     fn step_image(&mut self, delta: i64) {
+        if self.active_locked() {
+            return;
+        }
         if self.tiled_series() {
-            let n = self.panes[0].positions() as i64;
+            let Some(k0) = self.sync_source() else { return };
+            let n = self.panes[k0].positions() as i64;
             if n == 0 {
                 return;
             }
-            let base = (self.panes[0].position() as i64 + delta).rem_euclid(n) as usize;
+            let base = (self.panes[k0].position() as i64 - k0 as i64 + delta).rem_euclid(n) as usize;
             for (k, p) in self.panes.iter_mut().enumerate() {
-                p.set_position(base + k);
+                if !p.locked {
+                    p.set_position(base + k);
+                }
             }
             self.selected_roi = None;
             return;
@@ -843,6 +902,29 @@ impl ViewerState {
     }
 
     fn toolbar(&mut self, ui: &mut Ui, shared: &Shared) {
+        // A locked cell ignores the toolbar: whatever a menu changes is put back.
+        let guard = if self.active_locked() {
+            let p = &self.panes[self.active];
+            Some((p.view, p.clut.clone(), p.fit_pending, p.image_idx, p.frame_idx))
+        } else {
+            None
+        };
+        self.toolbar_inner(ui, shared);
+        if let Some((view, clut, fit, image_idx, frame_idx)) = guard {
+            let p = &mut self.panes[self.active];
+            let changed = p.view != view || p.clut != clut || p.image_idx != image_idx || p.frame_idx != frame_idx;
+            p.view = view;
+            p.clut = clut;
+            p.fit_pending = fit;
+            p.image_idx = image_idx;
+            p.frame_idx = frame_idx;
+            if changed {
+                self.refuse_locked();
+            }
+        }
+    }
+
+    fn toolbar_inner(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.horizontal(|ui| {
             if ToolbarButton::new(icons::DATABASE, "Database").tooltip("Show the database window").show(ui).clicked() {
                 shared.focus_browser.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -988,11 +1070,11 @@ impl ViewerState {
             // CLUT menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button((icons::rich(icons::CLUT, 16.0), egui::RichText::new(format!("  {}  ", crate::widgets::truncate(&self.clut, 12))).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
+                ui.menu_button((icons::rich(icons::CLUT, 16.0), egui::RichText::new(format!("  {}  ", crate::widgets::truncate(&self.panes[self.active].clut, 12))).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                         for name in shared.cluts.names() {
-                            if ui.selectable_label(self.clut == name, name).clicked() {
-                                self.clut = name.to_string();
+                            if ui.selectable_label(self.panes[self.active].clut == name, name).clicked() {
+                                self.panes[self.active].clut = name.to_string();
                                 ui.close();
                             }
                         }
@@ -1129,7 +1211,7 @@ impl ViewerState {
         let current = self.panes[self.active].position().min(n - 1);
         let mut v = current;
         ui.spacing_mut().slider_width = ui.available_width() - 70.0;
-        ui.add(egui::Slider::new(&mut v, 0..=n - 1).show_value(false));
+        ui.add_enabled(!self.active_locked(), egui::Slider::new(&mut v, 0..=n - 1).show_value(false));
         ui.label(egui::RichText::new(format!("{}/{}", v + 1, n)).size(11.5).color(Color32::from_gray(200)));
         if v != current {
             self.set_active_position(v);
@@ -1137,7 +1219,7 @@ impl ViewerState {
     }
 
     fn tick_cine(&mut self, ui: &mut Ui) {
-        if !self.playing {
+        if !self.playing || self.active_locked() {
             return;
         }
         let now = Instant::now();
@@ -1174,6 +1256,17 @@ impl ViewerState {
         });
         // Don't steal keys from text fields.
         if ui.ctx().memory(|m| m.focused().is_some()) {
+            return;
+        }
+        if self.active_locked() {
+            if esc {
+                self.drag_draft = None;
+                self.angle_draft = None;
+                self.selected_roi = None;
+            }
+            if down || up || pgdown || pgup || home || end || space || del || r || f || h || v || i_key {
+                self.refuse_locked();
+            }
             return;
         }
         if down {
@@ -1264,7 +1357,7 @@ impl ViewerState {
         else {
             return;
         };
-        let clut = shared.cluts.get(&self.clut).cloned().unwrap_or_else(ruthos_dicom::Clut::grayscale);
+        let clut = shared.cluts.get(&self.panes[self.active].clut).cloned().unwrap_or_else(ruthos_dicom::Clut::grayscale);
         let rgb = ruthos_dicom::pixels::frame_to_rgb8(&frame, self.panes[self.active].view.window_center, self.panes[self.active].view.window_width, &clut);
         match image::RgbImage::from_raw(frame.width, frame.height, rgb) {
             Some(img) => match img.save(&path) {
@@ -1418,7 +1511,7 @@ impl ViewerState {
             let clut = Arc::new(
                 shared
                     .cluts
-                    .get(&self.clut)
+                    .get(&self.panes[k].clut)
                     .cloned()
                     .unwrap_or_else(ruthos_dicom::Clut::grayscale),
             );
@@ -1481,8 +1574,35 @@ impl ViewerState {
             transform: &transform,
             mouse_pixel: if active { self.mouse_pixel } else { None },
             level,
+            bottom_right_inset: LOCK_CHIP.y + 4.0,
         };
         annotations::draw(&painter, rect, &ctx);
+
+        // Lock control: a check box with a padlock.
+        let chip = lock_chip_rect(rect);
+        let locked = self.panes[k].locked;
+        let hovered = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| chip.contains(p));
+        let color = if locked {
+            theme::ROI_SELECTED
+        } else if hovered {
+            Color32::from_gray(235)
+        } else {
+            Color32::from_gray(175)
+        };
+        painter.rect_filled(chip.expand(2.0), 4.0, Color32::from_black_alpha(140));
+        let box_rect = Rect::from_center_size(Pos2::new(chip.left() + 8.0, chip.center().y), Vec2::splat(12.0));
+        painter.rect_stroke(box_rect, 2.0, egui::Stroke::new(1.2, color), egui::StrokeKind::Inside);
+        if locked {
+            painter.line_segment([box_rect.left_center() + Vec2::new(2.5, 0.5), box_rect.center() + Vec2::new(-0.5, 3.0)], egui::Stroke::new(1.6, color));
+            painter.line_segment([box_rect.center() + Vec2::new(-0.5, 3.0), box_rect.right_top() + Vec2::new(-2.0, 2.5)], egui::Stroke::new(1.6, color));
+        }
+        painter.text(
+            Pos2::new(chip.right() - 2.0, chip.center().y),
+            Align2::RIGHT_CENTER,
+            if locked { icons::LOCKED } else { icons::UNLOCKED },
+            icons::font(14.0),
+            color,
+        );
 
         if self.playing && active {
             shadow_text(
@@ -1499,6 +1619,17 @@ impl ViewerState {
     fn handle_input(&mut self, ui: &mut Ui, response: &egui::Response, t: &mut ViewTransform, frame: &Frame, key: &FrameKey) {
         let hover = response.hover_pos();
         self.mouse_pixel = hover.and_then(|p| t.pixel_at(p));
+
+        // The lock control in the bottom-right corner.
+        let chip = lock_chip_rect(t.rect);
+        if response.clicked_by(PointerButton::Primary) && response.interact_pointer_pos().is_some_and(|p| chip.contains(p)) {
+            let k = self.active;
+            self.toggle_lock(k);
+            return;
+        }
+        if self.active_locked() {
+            return;
+        }
 
         // Wheel: scroll images; ctrl+wheel / pinch: zoom.
         if response.hovered() {

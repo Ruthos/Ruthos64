@@ -40,6 +40,8 @@ pub const RESET: &str = "\u{E038}"; // arrow counter clockwise
 pub const KEY_IMAGE: &str = "\u{E46A}"; // star
 pub const PLAY: &str = "\u{E3D0}";
 pub const PAUSE: &str = "\u{E39E}";
+pub const LOCKED: &str = "\u{E308}"; // lock simple
+pub const UNLOCKED: &str = "\u{E30A}"; // lock simple open
 
 // Tools
 pub const TOOL_WL: &str = "\u{E18C}"; // circle half
