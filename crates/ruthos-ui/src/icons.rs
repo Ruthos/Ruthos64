@@ -55,25 +55,58 @@ pub const TOOL_POINT: &str = "\u{E1D6}"; // crosshair
 /// Inter (SIL Open Font Licence), the UI typeface.
 pub const INTER_BYTES: &[u8] = include_bytes!("../../../assets/fonts/Inter.ttf");
 
-/// Register Inter as the text face and Phosphor as the icon fallback, keeping
-/// egui's bundled fonts behind them for anything they lack.
+/// The font family icons are drawn with. It contains only Phosphor, so icon
+/// code points never collide with a text face, and text never reaches
+/// Phosphor's blank ligature glyphs for ordinary letters.
+pub fn family() -> egui::FontFamily {
+    egui::FontFamily::Name("icons".into())
+}
+
+pub fn font(size: f32) -> egui::FontId {
+    egui::FontId::new(size, family())
+}
+
+/// A glyph as rich text in the icon family, for use inside labels and menus.
+pub fn rich(glyph: &str, size: f32) -> egui::RichText {
+    egui::RichText::new(glyph).family(family()).size(size)
+}
+
+/// Register the text face and the icon family.
+///
+/// Text uses the Windows system face, Segoe UI, when it is installed, so the
+/// app reads like any other Windows program; Inter (bundled) is the fallback.
+/// egui's own fonts stay behind them for anything either lacks.
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
+    let mut text_faces: Vec<String> = Vec::new();
+
+    if let Some(segoe) = load_system_font(&["segoeui.ttf"]) {
+        fonts.font_data.insert("segoe".to_string(), std::sync::Arc::new(egui::FontData::from_owned(segoe)));
+        text_faces.push("segoe".to_string());
+    }
     fonts
         .font_data
         .insert("inter".to_string(), std::sync::Arc::new(egui::FontData::from_static(INTER_BYTES)));
+    text_faces.push("inter".to_string());
     fonts
         .font_data
         .insert("phosphor".to_string(), std::sync::Arc::new(egui::FontData::from_static(FONT_BYTES)));
-    // Phosphor first: it only covers the Private Use Area, so text falls
-    // through to Inter, while Inter's own PUA glyphs never shadow the icons.
+
     let proportional = fonts.families.entry(egui::FontFamily::Proportional).or_default();
-    proportional.insert(0, "phosphor".to_string());
-    proportional.insert(1, "inter".to_string());
-    fonts
-        .families
-        .entry(egui::FontFamily::Monospace)
-        .or_default()
-        .push("phosphor".to_string());
+    for (i, face) in text_faces.iter().enumerate() {
+        proportional.insert(i, face.clone());
+    }
+    fonts.families.insert(family(), vec!["phosphor".to_string()]);
     ctx.set_fonts(fonts);
+}
+
+fn load_system_font(candidates: &[&str]) -> Option<Vec<u8>> {
+    let windir = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+    for name in candidates {
+        let path = windir.join("Fonts").join(name);
+        if let Ok(bytes) = std::fs::read(&path) {
+            return Some(bytes);
+        }
+    }
+    None
 }

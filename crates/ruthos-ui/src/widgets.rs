@@ -95,7 +95,7 @@ impl<'a> ToolbarButton<'a> {
                 Pos2::new(rect.center().x, rect.top() + 6.0),
                 Align2::CENTER_TOP,
                 self.glyph,
-                FontId::proportional(theme::TOOLBAR_ICON_SIZE),
+                crate::icons::font(theme::TOOLBAR_ICON_SIZE),
                 icon_color,
             );
             painter.text(
@@ -175,7 +175,7 @@ pub fn source_row(ui: &mut Ui, glyph: &str, text: &str, count: Option<i64>, sele
             Pos2::new(rect.left() + 9.0, rect.center().y),
             Align2::LEFT_CENTER,
             glyph,
-            FontId::proportional(15.0),
+            crate::icons::font(15.0),
             if selected { Color32::WHITE } else { Color32::from_gray(90) },
         );
         painter.text(

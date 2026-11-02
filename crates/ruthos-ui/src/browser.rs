@@ -457,7 +457,7 @@ impl BrowserState {
         ui.horizontal(|ui| {
             source_header(ui, "ALBUMS");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button(icons::PLUS).on_hover_text("New album").clicked() {
+                if ui.add(egui::Button::new(icons::rich(icons::PLUS, 13.0)).small()).on_hover_text("New album").clicked() {
                     self.modal = Some(Modal::NewAlbum { name: String::new() });
                 }
             });
@@ -610,7 +610,7 @@ impl BrowserState {
                             let is_exp = expanded.contains(&s.id);
                             row.col(|ui| {
                                 let glyph = if is_exp { icons::CARET_DOWN } else { icons::CARET_RIGHT };
-                                if ui.add(egui::Label::new(RichText::new(glyph).color(Color32::from_gray(90))).sense(Sense::click())).clicked() {
+                                if ui.add(egui::Label::new(icons::rich(glyph, 13.0).color(Color32::from_gray(90))).sense(Sense::click())).clicked() {
                                     actions.push(Action::ToggleExpand(s.id));
                                 }
                             });
@@ -719,7 +719,7 @@ impl BrowserState {
                                 se.number_of_images.to_string(),
                                 unix_to_local(se.date_added),
                                 se.comment.clone(),
-                                if se.number_of_key_images > 0 { format!("{} {}", icons::KEY_IMAGE, se.number_of_key_images) } else { String::new() },
+                                if se.number_of_key_images > 0 { format!("{} key", se.number_of_key_images) } else { String::new() },
                             ];
                             for text in cells.iter() {
                                 row.col(|ui| {

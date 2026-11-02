@@ -530,7 +530,7 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 let glyph = self.tool.glyph();
-                ui.menu_button(egui::RichText::new(format!("{glyph}  {} {}", self.tool.label(), icons::CARET_DOWN)).size(13.0), |ui| {
+                ui.menu_button((icons::rich(glyph, 16.0), egui::RichText::new(format!("  {}  ", self.tool.label())).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     // One row per tool; the three columns assign it to the
                     // left, right or middle mouse button.
                     ui.horizontal(|ui| {
@@ -557,7 +557,7 @@ impl ViewerState {
                                 self.middle_tool = t;
                                 changed = true;
                             }
-                            if ui.selectable_label(self.tool == t, format!("{}  {}", t.glyph(), t.label())).clicked() {
+                            if ui.selectable_label(self.tool == t, (icons::rich(t.glyph(), 15.0), egui::RichText::new(format!("  {}", t.label())))).clicked() {
                                 self.tool = t;
                                 changed = true;
                                 ui.close();
@@ -575,7 +575,7 @@ impl ViewerState {
             // WL/WW menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button(egui::RichText::new(format!("{}  WL/WW {}", icons::WLWW, icons::CARET_DOWN)).size(13.0), |ui| {
+                ui.menu_button((icons::rich(icons::WLWW, 16.0), egui::RichText::new("  WL/WW  ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     if ui.button("Default WL & WW").clicked() {
                         self.apply_default_window(shared, false);
                         ui.close();
@@ -607,7 +607,7 @@ impl ViewerState {
             // CLUT menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button(egui::RichText::new(format!("{}  {} {}", icons::CLUT, crate::widgets::truncate(&self.clut, 12), icons::CARET_DOWN)).size(13.0), |ui| {
+                ui.menu_button((icons::rich(icons::CLUT, 16.0), egui::RichText::new(format!("  {}  ", crate::widgets::truncate(&self.clut, 12))).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                         for name in shared.cluts.names() {
                             if ui.selectable_label(self.clut == name, name).clicked() {
@@ -628,7 +628,7 @@ impl ViewerState {
             // Orientation menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button(egui::RichText::new(format!("{}  Orientation {}", icons::ORIENTATION, icons::CARET_DOWN)).size(13.0), |ui| {
+                ui.menu_button((icons::rich(icons::ORIENTATION, 16.0), egui::RichText::new("  Orientation  ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     if ui.button("Rotate 90° clockwise").clicked() {
                         self.view.rotation_deg = (self.view.rotation_deg + 90.0).rem_euclid(360.0);
                         self.fit_pending = true;
@@ -1025,7 +1025,7 @@ impl ViewerState {
                 Pos2::new(rect.center().x, rect.top() + 6.0),
                 Align2::CENTER_TOP,
                 icons::PLAY,
-                FontId::proportional(14.0),
+                icons::font(14.0),
                 Color32::from_gray(200),
             );
         }
