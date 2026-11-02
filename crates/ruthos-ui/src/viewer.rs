@@ -522,13 +522,19 @@ impl ViewerState {
     }
 
     fn toggle_lock(&mut self, k: usize) {
-        if let Some(p) = self.panes.get_mut(k) {
-            p.locked = !p.locked;
-            let msg = if p.locked { "Cell locked: image, window, colours and measurements are kept" } else { "Cell unlocked" };
-            self.set_status(msg);
-            self.selected_roi = None;
-            self.drag_draft = None;
-            self.angle_draft = None;
+        let Some(p) = self.panes.get_mut(k) else { return };
+        p.locked = !p.locked;
+        let locked = p.locked;
+        self.set_status(if locked { "Cell locked: image, window, colours and measurements are kept" } else { "Cell unlocked" });
+        self.selected_roi = None;
+        self.drag_draft = None;
+        self.angle_draft = None;
+        // Locking the active cell hands the keys and slider to the next
+        // unlocked one, so scrolling carries on around the locked image.
+        if locked && k == self.active {
+            if let Some(next) = (0..self.panes.len()).map(|i| (k + 1 + i) % self.panes.len()).find(|&i| !self.panes[i].locked) {
+                self.active = next;
+            }
         }
     }
 
@@ -1391,9 +1397,19 @@ impl ViewerState {
             })
             .collect();
 
-        // A press in another cell makes it the active one before any tool runs.
+        // A press or a wheel turn in another cell makes it the active one
+        // before any tool runs, so scrolling follows the pointer.
         if cells > 1 {
-            if let Some(p) = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None }) {
+            let target = ui.input(|i| {
+                if i.pointer.any_pressed() {
+                    i.pointer.interact_pos()
+                } else if i.smooth_scroll_delta.y.abs() > 0.0 || (i.zoom_delta() - 1.0).abs() > 1e-3 {
+                    i.pointer.hover_pos()
+                } else {
+                    None
+                }
+            });
+            if let Some(p) = target {
                 if let Some(k) = rects.iter().position(|r| r.contains(p)) {
                     if k < self.panes.len() {
                         self.activate(k);
