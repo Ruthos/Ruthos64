@@ -11,6 +11,8 @@ pub const TOOLBAR_HEIGHT: f32 = 68.0;
 pub const TOOLBAR_ICON_SIZE: f32 = 25.0;
 pub const TOOLBAR_LABEL_SIZE: f32 = 11.0;
 pub const THUMB_SIZE: f32 = 100.0;
+/// Height of the database window's bottom pane: thumbnails and preview.
+pub const PREVIEW_HEIGHT: f32 = 262.0;
 pub const TABLE_ROW_HEIGHT: f32 = 26.0;
 pub const TABLE_HEADER_HEIGHT: f32 = 28.0;
 

@@ -6,20 +6,52 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
-use egui::{Color32, Context, RichText, Sense, Ui};
+use crossbeam_channel::{unbounded, Receiver};
+use egui::{Align2, Color32, Context, FontId, Pos2, RichText, Sense, Ui, Vec2};
 use egui_extras::{Column, TableBuilder};
 
 use ruthos_core::db::StudySort;
 use ruthos_core::import::ImportSummary;
-use ruthos_core::{AlbumRow, DateFilter, ImportEvent, ImportMode, Importer, SeriesRow, StudyFilter, StudyRow};
+use ruthos_core::{AlbumRow, DateFilter, ImageRow, ImportEvent, ImportMode, Importer, SeriesRow, StudyFilter, StudyRow};
+use ruthos_dicom::Frame;
+use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTransform};
 
-use crate::shared::Shared;
+use crate::annotations::{self, AnnotationContext, AnnotationLevel};
 use crate::icons;
-use crate::theme;
 use crate::icons::Bitmap;
-use crate::widgets::{menu_item, source_header, source_row, thumbnail_cell, toolbar_caption, toolbar_separator, truncate, ToolbarButton};
+use crate::shared::Shared;
+use crate::theme;
+use crate::widgets::{
+    menu_item, shadow_text, source_header, source_row, thumbnail_cell, toolbar_caption, toolbar_separator, truncate,
+    ToolbarButton,
+};
+
+/// Paint-callback key of the preview pane; viewers use small numbers.
+const PREVIEW_KEY: u64 = u64::MAX - 7;
+
+/// The preview of the selected series at the bottom right, as in Horos.
+#[derive(Default)]
+struct Preview {
+    image: Option<ImageRow>,
+    series: Option<SeriesRow>,
+    study: Option<StudyRow>,
+    frame: Option<Arc<Frame>>,
+    gpu: Option<Arc<GpuImage>>,
+    rx: Option<Receiver<(i64, Result<Frame, String>)>>,
+    requested: Option<i64>,
+    error: Option<String>,
+}
+
+/// Horos's built-in smart albums: a name and the filter behind it.
+#[derive(Clone)]
+struct BuiltinAlbum {
+    name: String,
+    filter: StudyFilter,
+    count: i64,
+}
 
 #[derive(Debug, Clone)]
 enum RowKind {
@@ -58,6 +90,11 @@ pub struct BrowserState {
     pub selected_series: Option<i64>,
     albums: Vec<AlbumRow>,
     selected_album: Option<i64>,
+    builtin_albums: Vec<BuiltinAlbum>,
+    selected_builtin: Option<usize>,
+    /// Studies that have report text, for the Report column.
+    reports: HashSet<i64>,
+    preview: Preview,
     modalities: Vec<String>,
     dirty: bool,
     sidebar_visible: bool,
@@ -83,6 +120,10 @@ impl BrowserState {
             selected_series: None,
             albums: Vec::new(),
             selected_album: None,
+            builtin_albums: Vec::new(),
+            selected_builtin: None,
+            reports: HashSet::new(),
+            preview: Preview::default(),
             modalities: Vec::new(),
             dirty: true,
             sidebar_visible: true,
@@ -110,9 +151,42 @@ impl BrowserState {
         self.dirty = true;
     }
 
+    /// The built-in albums, recomputed with the database.
+    fn builtin_albums(&self, shared: &Shared) -> Vec<BuiltinAlbum> {
+        let mut list = vec![
+            ("Cases with comments".to_string(), StudyFilter { has_comment: true, ..Default::default() }),
+            ("Just Added (last hour)".to_string(), StudyFilter { added_within_secs: Some(3600), ..Default::default() }),
+            ("Just Opened (today)".to_string(), StudyFilter { opened_within_secs: Some(24 * 3600), ..Default::default() }),
+        ];
+        for m in &self.modalities {
+            list.push((
+                format!("Today {m}"),
+                StudyFilter { modality: m.clone(), date: DateFilter::Today, ..Default::default() },
+            ));
+        }
+        list.into_iter()
+            .map(|(name, filter)| {
+                let count = shared.db.list_studies(&filter).map(|v| v.len() as i64).unwrap_or(0);
+                BuiltinAlbum { name, filter, count }
+            })
+            .collect()
+    }
+
     fn reload(&mut self, shared: &Shared) {
         let mut filter = self.filter.clone();
         filter.album_id = None;
+        if let Some(b) = self.selected_builtin.and_then(|i| self.builtin_albums.get(i)) {
+            let smart = &b.filter;
+            filter.has_comment = smart.has_comment;
+            filter.added_within_secs = smart.added_within_secs;
+            filter.opened_within_secs = smart.opened_within_secs;
+            if filter.modality.trim().is_empty() {
+                filter.modality = smart.modality.clone();
+            }
+            if filter.date == DateFilter::Any {
+                filter.date = smart.date;
+            }
+        }
         if let Some(album_id) = self.selected_album {
             if let Some(album) = self.albums.iter().find(|a| a.id == album_id) {
                 if let Some(smart) = ruthos_core::Database::smart_album_filter(album) {
@@ -138,6 +212,11 @@ impl BrowserState {
         self.albums = shared.db.albums().unwrap_or_default();
         self.modalities = shared.db.modalities().unwrap_or_default();
         self.counts = shared.db.counts().unwrap_or((0, 0, 0));
+        self.reports = shared.db.studies_with_reports().unwrap_or_default().into_iter().collect();
+        self.builtin_albums = self.builtin_albums(shared);
+        if self.selected_builtin.is_some_and(|i| i >= self.builtin_albums.len()) {
+            self.selected_builtin = None;
+        }
         self.series_cache.clear();
         if let Some(sel) = self.selected_study {
             if !self.studies.iter().any(|s| s.id == sel) {
@@ -272,11 +351,20 @@ impl BrowserState {
             .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT).inner_margin(egui::Margin::symmetric(10, 3)))
             .show(ui, |ui| self.status_bar(ui, shared));
 
+        self.update_preview(shared);
         if self.selected_study.is_some() {
             egui::Panel::bottom("browser-thumbs")
-                .exact_size(theme::THUMB_SIZE + 54.0)
+                .exact_size(theme::PREVIEW_HEIGHT)
                 .frame(egui::Frame::NONE.fill(Color32::from_rgb(228, 228, 228)).inner_margin(egui::Margin::symmetric(8, 4)))
-                .show(ui, |ui| self.thumbnail_strip(ui, shared));
+                .show(ui, |ui| {
+                    let avail = ui.available_rect_before_wrap();
+                    let preview_w = (avail.width() * 0.42).clamp(260.0, 640.0);
+                    let strip = egui::Rect::from_min_max(avail.min, Pos2::new(avail.right() - preview_w - 8.0, avail.bottom()));
+                    let pane = egui::Rect::from_min_max(Pos2::new(avail.right() - preview_w, avail.top()), avail.max);
+                    let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip));
+                    self.thumbnail_strip(&mut strip_ui, shared);
+                    self.preview_pane(ui, shared, pane);
+                });
         }
 
         if self.sidebar_visible {
@@ -365,20 +453,17 @@ impl BrowserState {
                     shared.open_reports.lock().push(id);
                 }
             }
-            toolbar_separator(ui);
-            if ToolbarButton::new(icons::SMART_ALBUM, "Preferences").tooltip("Settings (Ctrl+,)").show(ui).clicked() {
-                shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
 
             // Right-aligned filter group: sort, date, modality, search. Each
             // column has a fixed width so the labels never wrap.
             const SORT_W: f32 = 118.0;
             const DATE_W: f32 = 118.0;
             const MOD_W: f32 = 84.0;
-            const SEARCH_W: f32 = 210.0;
             let spacing = ui.spacing().item_spacing.x;
-            let group_w = SORT_W + DATE_W + MOD_W + SEARCH_W + spacing * 3.0;
-            let gap = ui.available_width() - group_w;
+            // The search field takes what is left, within reason.
+            let fixed_w = SORT_W + DATE_W + MOD_W + spacing * 3.0;
+            let search_w = (ui.available_width() - fixed_w - 6.0).clamp(96.0, 230.0);
+            let gap = ui.available_width() - fixed_w - search_w;
             if gap > 0.0 {
                 ui.add_space(gap);
             }
@@ -412,7 +497,7 @@ impl BrowserState {
             ui.vertical(|ui| {
                 ui.set_width(DATE_W);
                 ui.add_space(4.0);
-                toolbar_caption(ui, "Date");
+                toolbar_caption(ui, "Time Interval");
                 egui::ComboBox::from_id_salt("date-filter")
                     .selected_text(self.filter.date.label())
                     .width(DATE_W - 4.0)
@@ -429,9 +514,9 @@ impl BrowserState {
                 ui.set_width(MOD_W);
                 ui.add_space(4.0);
                 toolbar_caption(ui, "Modality");
-                let text = if self.filter.modality.is_empty() { "Any".to_string() } else { self.filter.modality.clone() };
+                let text = if self.filter.modality.is_empty() { "All".to_string() } else { self.filter.modality.clone() };
                 egui::ComboBox::from_id_salt("modality-filter").selected_text(text).width(MOD_W - 4.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(self.filter.modality.is_empty(), "Any").clicked() {
+                    if ui.selectable_label(self.filter.modality.is_empty(), "All").clicked() {
                         self.filter.modality.clear();
                         changed = true;
                     }
@@ -444,13 +529,13 @@ impl BrowserState {
                 });
             });
             ui.vertical(|ui| {
-                ui.set_width(SEARCH_W);
+                ui.set_width(search_w);
                 ui.add_space(4.0);
                 toolbar_caption(ui, "Search");
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut self.filter.text)
                         .hint_text("Name, ID, description…")
-                        .desired_width(SEARCH_W - 4.0),
+                        .desired_width(search_w - 4.0),
                 );
                 changed |= r.changed();
             });
@@ -462,9 +547,19 @@ impl BrowserState {
 
     fn source_list(&mut self, ui: &mut Ui, shared: &Shared) {
         source_header(ui, "LOCAL");
-        if source_row(ui, Bitmap::Database, "Local Database", Some(self.counts.0), self.selected_album.is_none()).clicked() {
+        let all_selected = self.selected_album.is_none() && self.selected_builtin.is_none();
+        if source_row(ui, Bitmap::Database, "Database", Some(self.counts.0), all_selected).clicked() {
             self.selected_album = None;
+            self.selected_builtin = None;
             self.dirty = true;
+        }
+        let builtins = self.builtin_albums.clone();
+        for (i, b) in builtins.iter().enumerate() {
+            if source_row(ui, Bitmap::SmartAlbum, &b.name, Some(b.count), self.selected_builtin == Some(i)).clicked() {
+                self.selected_builtin = Some(i);
+                self.selected_album = None;
+                self.dirty = true;
+            }
         }
 
         ui.horizontal(|ui| {
@@ -484,6 +579,7 @@ impl BrowserState {
             let r = source_row(ui, glyph, &album.name, Some(album.number_of_studies), self.selected_album == Some(album.id));
             if r.clicked() {
                 self.selected_album = Some(album.id);
+                self.selected_builtin = None;
                 self.dirty = true;
             }
             r.context_menu(|ui| {
@@ -535,6 +631,10 @@ impl BrowserState {
         r.on_hover_text(tip);
 
         ui.add_space(8.0);
+        if source_row(ui, icons::SMART_ALBUM, "Preferences…", None, false).on_hover_text("Settings (Ctrl+,)").clicked() {
+            shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        ui.add_space(4.0);
         ui.label(RichText::new(format!("{}", shared.paths.root.display())).size(10.0).color(Color32::from_gray(130)));
         if let Some(note) = shared.renderer_note.lock().clone() {
             ui.add_space(4.0);
@@ -592,6 +692,9 @@ impl BrowserState {
         let albums = &self.albums;
         let selected_album = self.selected_album;
 
+        let reports = &self.reports;
+        let ctx = ui.ctx().clone();
+
         let text_color = Color32::from_gray(30);
         let row_h = theme::TABLE_ROW_HEIGHT;
         TableBuilder::new(ui)
@@ -600,17 +703,34 @@ impl BrowserState {
             .sense(Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::exact(20.0))
-            .column(Column::initial(210.0).at_least(100.0).clip(true))
-            .column(Column::initial(100.0).at_least(60.0).clip(true))
-            .column(Column::initial(135.0).at_least(80.0).clip(true))
-            .column(Column::initial(70.0).at_least(40.0).clip(true))
-            .column(Column::initial(220.0).at_least(80.0).clip(true))
-            .column(Column::initial(60.0).at_least(40.0))
+            .column(Column::initial(200.0).at_least(100.0).clip(true))
+            .column(Column::exact(46.0))
+            .column(Column::initial(90.0).at_least(60.0).clip(true))
+            .column(Column::initial(46.0).at_least(36.0))
+            .column(Column::initial(96.0).at_least(50.0).clip(true))
             .column(Column::initial(130.0).at_least(80.0).clip(true))
-            .column(Column::initial(160.0).at_least(60.0).clip(true))
+            .column(Column::initial(66.0).at_least(40.0).clip(true))
+            .column(Column::initial(200.0).at_least(80.0).clip(true))
+            .column(Column::initial(56.0).at_least(40.0))
+            .column(Column::initial(125.0).at_least(80.0).clip(true))
+            .column(Column::initial(150.0).at_least(60.0).clip(true))
             .column(Column::remainder().at_least(70.0).clip(true))
             .header(theme::TABLE_HEADER_HEIGHT, |mut header| {
-                for title in ["", "Patient Name", "Patient ID", "Study Date", "Modality", "Description", "Images", "Date Added", "Comments", "Status"] {
+                for title in [
+                    "",
+                    "Patient Name",
+                    "Report",
+                    "Patient ID",
+                    "Age",
+                    "Accession",
+                    "Study Date",
+                    "Modality",
+                    "Description",
+                    "Images",
+                    "Date Added",
+                    "Comments",
+                    "Status",
+                ] {
                     header.col(|ui| {
                         ui.label(RichText::new(title).strong().color(Color32::from_gray(80)));
                     });
@@ -631,9 +751,12 @@ impl BrowserState {
                                     actions.push(Action::ToggleExpand(s.id));
                                 }
                             });
-                            let cells: [String; 9] = [
+                            let cells: [String; 12] = [
                                 s.patient_name.clone(),
+                                String::new(),
                                 s.patient_id.clone(),
+                                s.age_at_study().unwrap_or_default(),
+                                s.accession_number.clone(),
                                 match (&s.study_date, &s.study_time) {
                                     (Some(d), Some(t)) => format!("{d} {t}"),
                                     (Some(d), None) => d.clone(),
@@ -647,6 +770,15 @@ impl BrowserState {
                                 state_label(s.state).to_string(),
                             ];
                             for (ci, text) in cells.iter().enumerate() {
+                                if ci == 1 {
+                                    let has_report = reports.contains(&s.id);
+                                    row.col(|ui| {
+                                        if has_report {
+                                            ui.add(icons::image(&ctx, Bitmap::Report, 17.0));
+                                        }
+                                    });
+                                    continue;
+                                }
                                 row.col(|ui| {
                                     let mut rt = RichText::new(text).color(if is_sel { Color32::WHITE } else { text_color });
                                     if ci == 0 {
@@ -722,8 +854,11 @@ impl BrowserState {
                             let is_sel = selected_series == Some(se.id);
                             row.set_selected(is_sel);
                             row.col(|_| {});
-                            let cells: [String; 9] = [
+                            let cells: [String; 12] = [
                                 format!("    {}", se.display_name()),
+                                String::new(),
+                                String::new(),
+                                String::new(),
                                 String::new(),
                                 se.series_date.clone().unwrap_or_default(),
                                 se.modality.clone(),
@@ -797,6 +932,132 @@ impl BrowserState {
                 }
             }
         }
+    }
+
+    /// Keep the preview on the selected series' representative image,
+    /// decoding on a thread so the window never waits.
+    fn update_preview(&mut self, shared: &Shared) {
+        let Some(study_id) = self.selected_study else {
+            self.preview = Preview::default();
+            return;
+        };
+        let series_id = match self.selected_series {
+            Some(id) => Some(id),
+            None => self.series_for(shared, study_id).first().map(|s| s.id),
+        };
+        let Some(series_id) = series_id else {
+            self.preview = Preview::default();
+            return;
+        };
+        let wanted = self.preview.series.as_ref().map(|s| s.id) != Some(series_id);
+        if wanted {
+            let series = self.series_for(shared, study_id).iter().find(|s| s.id == series_id).cloned();
+            let image = shared.db.representative_image(series_id).ok().flatten();
+            self.preview = Preview {
+                study: self.studies.iter().find(|s| s.id == study_id).cloned(),
+                series,
+                ..Preview::default()
+            };
+            if let Some(img) = image {
+                let (tx, rx) = unbounded();
+                let path = shared.resolve(&img.path);
+                let id = img.id;
+                std::thread::Builder::new()
+                    .name("ruthos-preview".into())
+                    .spawn(move || {
+                        let result = ruthos_dicom::decode_frame(&path, 0).map_err(|e| e.to_string());
+                        let _ = tx.send((id, result));
+                    })
+                    .ok();
+                self.preview.requested = Some(id);
+                self.preview.rx = Some(rx);
+                self.preview.image = Some(img);
+            }
+        }
+        if let Some(rx) = &self.preview.rx {
+            if let Ok((id, result)) = rx.try_recv() {
+                if Some(id) == self.preview.requested {
+                    match result {
+                        Ok(frame) => {
+                            let frame = Arc::new(frame);
+                            self.preview.gpu =
+                                Some(Arc::new(GpuImage::upload(&shared.render_state.device, &shared.render_state.queue, &frame)));
+                            self.preview.frame = Some(frame);
+                        }
+                        Err(e) => self.preview.error = Some(e),
+                    }
+                }
+                self.preview.rx = None;
+            }
+        }
+    }
+
+    /// The preview pane: the image with Horos' corner annotations.
+    fn preview_pane(&mut self, ui: &mut Ui, _shared: &Shared, rect: egui::Rect) {
+        let response = ui.allocate_rect(rect, Sense::click());
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.rect_filled(rect, 3.0, Color32::BLACK);
+        let (Some(frame), Some(gpu), Some(series), Some(study), Some(image)) = (
+            self.preview.frame.clone(),
+            self.preview.gpu.clone(),
+            self.preview.series.clone(),
+            self.preview.study.clone(),
+            self.preview.image.clone(),
+        ) else {
+            let text = match &self.preview.error {
+                Some(e) => format!("Could not decode image:\n{e}"),
+                None if self.preview.requested.is_some() => "Loading\u{2026}".to_string(),
+                None => "No image".to_string(),
+            };
+            shadow_text(&painter, rect.center(), Align2::CENTER_CENTER, &text, FontId::proportional(13.0), Color32::from_gray(160));
+            return;
+        };
+        let (c, w) = match (series.window_center, series.window_width) {
+            (Some(c), Some(w)) if w > 0.0 => (c as f32, w as f32),
+            _ => frame.default_window(),
+        };
+        let aspect = frame
+            .meta
+            .pixel_spacing
+            .map(|[row, col]| if col > 0.0 { (row / col) as f32 } else { 1.0 })
+            .unwrap_or(1.0);
+        let mut view = ViewState { window_center: c, window_width: w, ..ViewState::default() };
+        view.rotation_deg = series.rotation_angle as f32;
+        view.flip_horizontal = series.x_flipped;
+        view.flip_vertical = series.y_flipped;
+        view.fit(rect.shrink(2.0), frame.width, frame.height, aspect);
+        let transform = ViewTransform::new(rect, frame.width, frame.height, aspect, view);
+        painter.add(egui_wgpu::Callback::new_paint_callback(
+            rect,
+            ImageCallback {
+                key: PREVIEW_KEY,
+                image: gpu,
+                clut: Arc::new(ruthos_dicom::Clut::grayscale()),
+                transform,
+                inverted: frame.inverted,
+                interpolation: Interpolation::Bilinear,
+            },
+        ));
+        let count = series.number_of_images.max(1) as usize;
+        let index = image.instance_number.map(|n| (n.max(1) - 1) as usize).unwrap_or(0).min(count - 1);
+        let ctx = AnnotationContext {
+            study: &study,
+            series: &series,
+            image: &image,
+            frame: &frame,
+            image_index: index,
+            image_count: count,
+            transform: &transform,
+            mouse_pixel: None,
+            level: AnnotationLevel::Full,
+            bottom_right_inset: 0.0,
+        };
+        annotations::draw(&painter, rect, &ctx);
+        let _ = Vec2::ZERO;
+        if response.double_clicked() {
+            self.open_requests.push((study.id, Some(series.id)));
+        }
+        response.on_hover_text("Double-click to open in the 2D viewer");
     }
 
     fn thumbnail_strip(&mut self, ui: &mut Ui, shared: &Shared) {

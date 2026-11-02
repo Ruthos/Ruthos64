@@ -113,6 +113,14 @@ impl RuthosApp {
         }
 
         let mut browser = BrowserState::new();
+        // Developer option: select a study in the database window at startup.
+        if let Some(v) = std::env::var("RUTHOS_SELECT_STUDY").ok().filter(|v| !v.is_empty()) {
+            let id = v.trim().parse::<i64>().ok().or_else(|| {
+                let filter = ruthos_core::StudyFilter { text: v.clone(), ..Default::default() };
+                shared.db.list_studies(&filter).ok()?.first().map(|s| s.id)
+            });
+            browser.selected_study = id;
+        }
         if !startup_paths.is_empty() {
             browser.open_next_import = true;
             browser.import_paths(&shared, startup_paths);
@@ -323,6 +331,7 @@ impl eframe::App for RuthosApp {
         }
 
         if let Some(id) = self.startup_open.take() {
+            self.browser.selected_study = Some(id);
             self.open_viewer(id, None);
         }
         for (study, series) in self.browser.take_open_requests() {
