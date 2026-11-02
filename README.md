@@ -123,7 +123,7 @@ You will need:
 Then:
 
 ```powershell
-git clone https://github.com/Ruthos/ruthos.git
+git clone https://github.com/Ruthos/Ruthos64.git
 cd ruthos
 cargo build --release
 cargo test --workspace
