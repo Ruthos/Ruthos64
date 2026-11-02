@@ -15,6 +15,7 @@ use ruthos_net::{ListenerConfig, NetEvent, StoreScp};
 use ruthos_render::ImageRenderer;
 
 use crate::browser::BrowserState;
+use crate::prefs::PrefsState;
 use crate::shared::Shared;
 use crate::theme;
 use crate::viewer::ViewerState;
@@ -32,6 +33,7 @@ pub struct RuthosApp {
     startup_open: Option<i64>,
     /// Internal errors waiting to be acknowledged in a dialog.
     error_dialog: Vec<String>,
+    prefs: Option<PrefsState>,
 }
 
 impl RuthosApp {
@@ -78,31 +80,10 @@ impl RuthosApp {
 
         // DICOM listener writes to the incoming folder; the scanner imports.
         let mut startup_error = None;
-        let scp = if settings.listener_enabled {
-            let cfg = ListenerConfig {
-                port: settings.listener_port,
-                ae_title: settings.listener_ae_title.clone(),
-                out_dir: paths.incoming_dir(),
-            };
-            match StoreScp::start(cfg) {
-                Ok(s) => {
-                    let mut st = shared.net_status.lock();
-                    st.running = true;
-                    st.ae_title = settings.listener_ae_title.clone();
-                    st.port = settings.listener_port;
-                    Some(s)
-                }
-                Err(e) => {
-                    let msg = format!("DICOM listener could not start on port {}: {e}", settings.listener_port);
-                    tracing::warn!("{msg}");
-                    shared.net_status.lock().last_error = Some(msg.clone());
-                    startup_error = Some(msg);
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let scp = start_listener(&shared, &settings);
+        if settings.listener_enabled && scp.is_none() {
+            startup_error = shared.net_status.lock().last_error.clone();
+        }
 
         let incoming_stop = Arc::new(AtomicBool::new(false));
         IncomingScanner::spawn(
@@ -112,6 +93,11 @@ impl RuthosApp {
             shared.import_tx.clone(),
             incoming_stop.clone(),
         );
+
+        // Developer option: open Preferences at startup for screenshots.
+        if std::env::var_os("RUTHOS_OPEN_PREFS").is_some() {
+            shared.open_prefs.store(true, Ordering::Relaxed);
+        }
 
         let mut browser = BrowserState::new();
         if !startup_paths.is_empty() {
@@ -139,6 +125,7 @@ impl RuthosApp {
             pending_focus: None,
             startup_open,
             error_dialog: Vec::new(),
+            prefs: None,
         })
     }
 
@@ -164,6 +151,71 @@ impl RuthosApp {
             Ok(v) => self.viewers.push(Arc::new(Mutex::new(v))),
             Err(e) => tracing::warn!("could not open viewer: {e}"),
         }
+    }
+
+    /// The Preferences window: opened on request, closed on Cancel, Save or
+    /// the window's close button. Saved settings are applied live where
+    /// they can be.
+    fn preferences(&mut self, ctx: &egui::Context) {
+        let id = ViewportId::from_hash_of("ruthos-prefs");
+        if self.shared.open_prefs.swap(false, Ordering::Relaxed) {
+            if self.prefs.is_none() {
+                self.prefs = Some(PrefsState::new(&self.shared));
+            }
+            ctx.send_viewport_cmd_to(id, ViewportCommand::Focus);
+        }
+        let Some(prefs) = self.prefs.as_mut() else { return };
+        let shared = self.shared.clone();
+        let mut close = false;
+        let mut saved = None;
+        ctx.show_viewport_immediate(
+            id,
+            ViewportBuilder::default()
+                .with_title("Ruthos Preferences")
+                .with_inner_size([640.0, 520.0])
+                .with_min_inner_size([560.0, 420.0])
+                .with_resizable(true),
+            |ctx, _class| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+                    if let Err(msg) = crate::crash::guarded(|| prefs.show(ui, &shared)) {
+                        shared.errors.lock().push(format!("The Preferences window was closed after an internal error: {msg}"));
+                        prefs.close_requested = true;
+                    }
+                });
+                close = prefs.close_requested;
+                saved = prefs.saved.take();
+            },
+        );
+        if let Some(settings) = saved {
+            self.apply_settings(&settings);
+        }
+        if close {
+            self.prefs = None;
+        }
+    }
+
+    /// Apply saved preferences to the running application.
+    fn apply_settings(&mut self, settings: &ruthos_core::Settings) {
+        let (running_port, running_ae) = {
+            let st = self.shared.net_status.lock();
+            (st.port, st.ae_title.clone())
+        };
+        let wanted = (settings.listener_enabled, settings.listener_port, settings.listener_ae_title.clone());
+        let current = (self.scp.is_some(), running_port, running_ae);
+        if wanted != current {
+            if let Some(mut scp) = self.scp.take() {
+                scp.stop();
+                self.shared.net_status.lock().running = false;
+            }
+            self.scp = start_listener(&self.shared, settings);
+            if settings.listener_enabled && self.scp.is_none() {
+                let last_error = self.shared.net_status.lock().last_error.clone();
+                if let Some(msg) = last_error {
+                    self.report_error(msg);
+                }
+            }
+        }
+        self.browser.mark_dirty();
     }
 
     /// Queue an internal error for the dialog, without repeating the same
@@ -277,6 +329,8 @@ impl eframe::App for RuthosApp {
             );
         }
 
+        self.preferences(&ctx);
+
         let caught = std::mem::take(&mut *self.shared.errors.lock());
         for msg in caught {
             self.report_error(msg);
@@ -305,3 +359,32 @@ impl eframe::App for RuthosApp {
         let _ = self.shared.settings.lock().save();
     }
 }
+
+/// Start the DICOM listener from the settings, recording its state.
+fn start_listener(shared: &Shared, settings: &ruthos_core::Settings) -> Option<StoreScp> {
+    if !settings.listener_enabled {
+        return None;
+    }
+    let cfg = ListenerConfig {
+        port: settings.listener_port,
+        ae_title: settings.listener_ae_title.clone(),
+        out_dir: shared.paths.incoming_dir(),
+    };
+    match StoreScp::start(cfg) {
+        Ok(s) => {
+            let mut st = shared.net_status.lock();
+            st.running = true;
+            st.ae_title = settings.listener_ae_title.clone();
+            st.port = settings.listener_port;
+            st.last_error = None;
+            Some(s)
+        }
+        Err(e) => {
+            let msg = format!("DICOM listener could not start on port {}: {e}", settings.listener_port);
+            tracing::warn!("{msg}");
+            shared.net_status.lock().last_error = Some(msg);
+            None
+        }
+    }
+}
+

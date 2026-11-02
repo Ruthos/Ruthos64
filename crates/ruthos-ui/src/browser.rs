@@ -247,6 +247,10 @@ impl BrowserState {
         ui.style_mut().visuals = theme::browser_visuals();
         let ctx = ui.ctx().clone();
 
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
+            shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
         // Files dropped onto the window are imported.
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if !dropped.is_empty() {
@@ -357,6 +361,10 @@ impl BrowserState {
                 }
             }
             ToolbarButton::new(Bitmap::Report, "Report").enabled(false).tooltip("Reports arrive in Tier 3").show(ui);
+            toolbar_separator(ui);
+            if ToolbarButton::new(icons::SMART_ALBUM, "Preferences").tooltip("Settings (Ctrl+,)").show(ui).clicked() {
+                shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
 
             // Right-aligned filter group: sort, date, modality, search. Each
             // column has a fixed width so the labels never wrap.

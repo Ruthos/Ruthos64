@@ -14,7 +14,9 @@ pub struct DataPaths {
 impl DataPaths {
     /// Default location: `%LOCALAPPDATA%\Ruthos\Ruthos Data`.
     pub fn default_root() -> PathBuf {
-        if let Some(dirs) = directories::ProjectDirs::from("org", "Ruthos", "Ruthos") {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
+            PathBuf::from(local).join("Ruthos").join("Ruthos Data")
+        } else if let Some(dirs) = directories::ProjectDirs::from("org", "Ruthos", "Ruthos") {
             dirs.data_local_dir().join("Ruthos Data")
         } else {
             std::env::current_dir()

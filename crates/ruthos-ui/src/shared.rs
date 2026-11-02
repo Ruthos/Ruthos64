@@ -52,6 +52,8 @@ pub struct Shared {
     /// A note about the graphics adapter when it is worth knowing, e.g. a
     /// software renderer is in use.
     pub renderer_note: Mutex<Option<String>>,
+    /// Set by the Preferences button; the app opens the window.
+    pub open_prefs: AtomicBool,
 }
 
 impl Shared {
@@ -82,6 +84,7 @@ impl Shared {
             viewer_keys_to_forget: Mutex::new(Vec::new()),
             errors: Mutex::new(Vec::new()),
             renderer_note: Mutex::new(None),
+            open_prefs: AtomicBool::new(false),
         })
     }
 

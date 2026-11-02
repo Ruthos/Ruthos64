@@ -72,8 +72,11 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// `%APPDATA%\Ruthos\settings.json` on Windows.
     pub fn file_path() -> PathBuf {
-        if let Some(dirs) = directories::ProjectDirs::from("org", "Ruthos", "Ruthos") {
+        if let Some(roaming) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
+            PathBuf::from(roaming).join("Ruthos").join("settings.json")
+        } else if let Some(dirs) = directories::ProjectDirs::from("org", "Ruthos", "Ruthos") {
             dirs.config_dir().join("settings.json")
         } else {
             PathBuf::from("ruthos-settings.json")
