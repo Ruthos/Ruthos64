@@ -14,7 +14,7 @@ Ruthos is a community project to bring the Horos / OsiriX experience to Windows:
 
 ## Why
 
-Horos is the free DICOM viewer of choice in a large number of veterinary and small clinical practices. It is also Mac-only, and its upstream has slowed. Practices on Windows have Weasis, OHIF in a browser, or paid tools, none of which feel like Horos. Ruthos exists to fill that gap: a free, open viewer that a Horos user can sit down at and already know how to use.
+Horos is the free DICOM viewer of choice in a large number of veterinary practices. It is also Mac-only, and its upstream has slowed. Practices on Windows have Weasis, OHIF in a browser, or paid tools, none of which feel like Horos. Ruthos exists to fill that gap: a free, open viewer that a Horos user can sit down at and already know how to use.
 
 Three things justify a new codebase rather than another wrapper:
 
@@ -95,7 +95,7 @@ Ruthos is a Cargo workspace. Each crate has a single job and a clear boundary.
 ### Technology choices
 
 - **Language:** Rust, stable toolchain, MSVC target on Windows.
-- **DICOM:** dicom-rs. Pure-Rust codecs for JPEG, RLE, deflate, JPEG-LS and JPEG 2000 (via the `openjp2` port rather than Grok, to stay clear of AGPL).
+- **DICOM:** dicom-rs, with its own decoders for RLE and deflate, libjpeg-turbo for JPEG, CharLS for JPEG-LS and OpenJPEG for JPEG 2000 (rather than Grok, to stay clear of AGPL).
 - **Rendering:** `wgpu` over DirectX 12, with Vulkan as a fallback.
 - **UI:** `egui` with a custom theme and a small set of purpose-built widgets (toolbar, source list, outline table, thumbnail strip) that give the Horos look.
 - **Storage:** SQLite via `rusqlite`.
@@ -120,7 +120,7 @@ Ruthos is licensed under the **GNU Lesser General Public License v3.0**, the sam
 You will need:
 
 1. The Rust toolchain via [rustup](https://rustup.rs). Stable channel, `x86_64-pc-windows-msvc` target.
-2. Microsoft Visual C++ Build Tools (the "Desktop development with C++" workload). The MSVC compiler links Rust and builds the two C/C++ codecs below.
+2. Microsoft Visual C++ Build Tools (the "Desktop development with C++" workload). The MSVC compiler links Rust and builds the three C/C++ codecs below.
 3. [CMake](https://cmake.org/download/) on the `PATH` (or in the `CMAKE` environment variable). It builds the three C/C++ codecs: OpenJPEG (JPEG 2000), CharLS (JPEG-LS) and libjpeg-turbo (JPEG, including 12-bit).
 4. [NASM](https://www.nasm.us/) on the `PATH`, optional. Without it libjpeg-turbo builds without SIMD and decodes more slowly.
 5. Git.
@@ -129,7 +129,7 @@ Then:
 
 ```powershell
 git clone https://github.com/Ruthos/Ruthos64.git
-cd ruthos
+cd Ruthos64
 cargo build --release
 cargo test --workspace
 ```
@@ -156,7 +156,7 @@ Verified by `crates/ruthos-dicom/tests/samples.rs` against real files:
 
 ## Contributing
 
-The project is at the design stage, so the most useful contributions right now are:
+The project is at alpha, so the most useful contributions right now are:
 
 - Horos users describing the workflows they rely on, as issues
 - Sample DICOM studies that can be redistributed, especially veterinary CR, DR, CT and MRI
@@ -166,4 +166,4 @@ If you know Horos well, the `ruthos-ui` crate is organised by Horos window name 
 
 ## Not for diagnostic use
 
-Ruthos is not a medical device and has not been cleared or approved by any regulatory body. It is provided for research, education and informational purposes. Do not use it as the sole basis for clinical decisions.
+Ruthos is not a medical device and has not been cleared or approved by any regulatory body. Its intended purpose is viewing, measuring and archiving veterinary images, and research and education. It is not intended for use on human patients. Do not use it as the sole basis for clinical decisions.
