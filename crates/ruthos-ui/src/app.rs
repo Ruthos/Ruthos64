@@ -16,6 +16,7 @@ use ruthos_render::ImageRenderer;
 
 use crate::browser::BrowserState;
 use crate::prefs::PrefsState;
+use crate::report::ReportState;
 use crate::shared::Shared;
 use crate::theme;
 use crate::viewer::ViewerState;
@@ -24,6 +25,7 @@ pub struct RuthosApp {
     shared: Arc<Shared>,
     browser: BrowserState,
     viewers: Vec<Arc<Mutex<ViewerState>>>,
+    reports: Vec<Arc<Mutex<ReportState>>>,
     scp: Option<StoreScp>,
     incoming_stop: Arc<AtomicBool>,
     startup_error: Option<String>,
@@ -94,6 +96,17 @@ impl RuthosApp {
             incoming_stop.clone(),
         );
 
+        // Developer option: open a study's report at startup for screenshots.
+        if let Some(v) = std::env::var("RUTHOS_OPEN_REPORT").ok().filter(|v| !v.is_empty()) {
+            let id = v.trim().parse::<i64>().ok().or_else(|| {
+                let filter = ruthos_core::StudyFilter { text: v.clone(), ..Default::default() };
+                shared.db.list_studies(&filter).ok()?.first().map(|s| s.id)
+            });
+            if let Some(id) = id {
+                shared.open_reports.lock().push(id);
+            }
+        }
+
         // Developer option: open Preferences at startup for screenshots.
         if std::env::var_os("RUTHOS_OPEN_PREFS").is_some() {
             shared.open_prefs.store(true, Ordering::Relaxed);
@@ -119,6 +132,7 @@ impl RuthosApp {
             shared,
             browser,
             viewers: Vec::new(),
+            reports: Vec::new(),
             scp,
             incoming_stop,
             startup_error,
@@ -263,6 +277,16 @@ impl RuthosApp {
         }
     }
 
+    fn open_report(&mut self, study_id: i64) {
+        if let Some(existing) = self.reports.iter().find(|r| r.lock().study.id == study_id) {
+            self.pending_focus = Some(existing.lock().viewport_id);
+            return;
+        }
+        let Ok(Some(study)) = self.shared.db.study(study_id) else { return };
+        let report = ReportState::open(&self.shared, study);
+        self.reports.push(Arc::new(Mutex::new(report)));
+    }
+
     fn pump_net(&mut self) {
         let Some(scp) = &self.scp else { return };
         let mut status = self.shared.net_status.lock();
@@ -304,6 +328,14 @@ impl eframe::App for RuthosApp {
         for (study, series) in self.browser.take_open_requests() {
             self.open_viewer(study, series);
         }
+        let viewer_requests: Vec<i64> = std::mem::take(&mut *self.shared.open_requests.lock());
+        for study in viewer_requests {
+            self.open_viewer(study, None);
+        }
+        let report_requests: Vec<i64> = std::mem::take(&mut *self.shared.open_reports.lock());
+        for study in report_requests {
+            self.open_report(study);
+        }
 
         // Viewer windows.
         self.viewers.retain(|v| !v.lock().close_requested);
@@ -336,6 +368,30 @@ impl eframe::App for RuthosApp {
             self.report_error(msg);
         }
         self.error_dialog_ui(&ctx);
+
+        // Report windows.
+        self.reports.retain(|r| !r.lock().close_requested);
+        for r in &self.reports {
+            let (id, title) = {
+                let g = r.lock();
+                (g.viewport_id, g.title())
+            };
+            let r = r.clone();
+            let shared = self.shared.clone();
+            ctx.show_viewport_deferred(
+                id,
+                ViewportBuilder::default()
+                    .with_title(title)
+                    .with_inner_size([760.0, 820.0])
+                    .with_min_inner_size([560.0, 500.0]),
+                move |ui, _class| {
+                    if let Err(msg) = crate::crash::guarded(|| r.lock().show(ui, &shared)) {
+                        r.lock().close_requested = true;
+                        shared.errors.lock().push(format!("A report window was closed after an internal error: {msg}"));
+                    }
+                },
+            );
+        }
 
         if let Some(vid) = self.pending_focus.take() {
             ctx.send_viewport_cmd_to(vid, ViewportCommand::Focus);

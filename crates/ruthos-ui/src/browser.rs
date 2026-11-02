@@ -360,7 +360,11 @@ impl BrowserState {
                     self.open_requests.push((id, self.selected_series));
                 }
             }
-            ToolbarButton::new(Bitmap::Report, "Report").enabled(false).tooltip("Reports arrive in Tier 3").show(ui);
+            if ToolbarButton::new(Bitmap::Report, "Report").enabled(has_sel).tooltip("Open the report for the selected study").show(ui).clicked() {
+                if let Some(id) = self.selected_study {
+                    shared.open_reports.lock().push(id);
+                }
+            }
             toolbar_separator(ui);
             if ToolbarButton::new(icons::SMART_ALBUM, "Preferences").tooltip("Settings (Ctrl+,)").show(ui).clicked() {
                 shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -694,6 +698,10 @@ impl BrowserState {
                                         }
                                     }
                                 });
+                                if menu_item(ui, "Report…", false).clicked() {
+                                    shared.open_reports.lock().push(s.id);
+                                    ui.close();
+                                }
                                 if menu_item(ui, "Edit comment…", false).clicked() {
                                     actions.push(Action::EditComment(s.id));
                                     ui.close();

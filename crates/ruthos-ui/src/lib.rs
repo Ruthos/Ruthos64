@@ -12,6 +12,7 @@ pub mod crash;
 pub mod icons;
 pub mod loader;
 pub mod prefs;
+pub mod report;
 pub mod roi;
 pub mod shared;
 pub mod theme;

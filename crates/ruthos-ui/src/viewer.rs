@@ -1202,6 +1202,9 @@ impl ViewerState {
             if ToolbarButton::new(Bitmap::Export, "Export").tooltip("Export the current image as PNG or JPEG").show(ui).clicked() {
                 self.export_current(shared);
             }
+            if ToolbarButton::new(Bitmap::Report, "Report").tooltip("The report for this study: measurements, findings, key images").show(ui).clicked() {
+                shared.open_reports.lock().push(self.study.id);
+            }
             toolbar_separator(ui);
 
             let can_play = self.panes[self.active].images.len() > 1 || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);

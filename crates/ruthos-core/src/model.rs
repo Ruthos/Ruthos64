@@ -267,3 +267,31 @@ pub struct RoiRecord {
     pub value: Option<f64>,
     pub unit: String,
 }
+
+/// A named measurement with where it was taken, for reports.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeasurementRow {
+    pub roi: RoiRecord,
+    pub series_id: i64,
+    pub series_label: String,
+    pub instance_number: Option<i64>,
+}
+
+impl MeasurementRow {
+    /// "CR 2, image 3" style location text.
+    pub fn location(&self) -> String {
+        match self.instance_number {
+            Some(n) => format!("{}, image {n}", self.series_label),
+            None => self.series_label.clone(),
+        }
+    }
+}
+
+/// The text of a study's report.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ReportRow {
+    pub study_id: i64,
+    pub findings: String,
+    pub conclusion: String,
+    pub date_modified: i64,
+}

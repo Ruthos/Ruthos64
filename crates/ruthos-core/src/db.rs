@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use ruthos_dicom::meta::{dicom_date_to_iso, dicom_time_to_hms, InstanceMeta};
 
-use crate::model::{AlbumRow, DateFilter, ImageRow, SeriesRow, StudyRow, RoiRecord};
+use crate::model::{AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, SeriesRow, StudyRow};
 use crate::paths::DataPaths;
 use crate::Result;
 
@@ -62,6 +62,12 @@ pub struct StudyFilter {
     #[serde(skip)]
     pub album_id: Option<i64>,
     pub sort: StudySort,
+    /// Only studies with a comment (Horos: "Cases with comments").
+    pub has_comment: bool,
+    /// Only studies added in the last so many seconds ("Just Added").
+    pub added_within_secs: Option<i64>,
+    /// Only studies opened in the last so many seconds ("Just Opened").
+    pub opened_within_secs: Option<i64>,
 }
 
 impl Database {
@@ -279,6 +285,19 @@ impl Database {
             args.push(from.into());
             args.push(to.into());
         }
+        if filter.has_comment {
+            clauses.push("s.comment <> ''".to_string());
+        }
+        if let Some(secs) = filter.added_within_secs {
+            let n = args.len() + 1;
+            clauses.push(format!("s.date_added >= ?{n}"));
+            args.push((now_unix() - secs).into());
+        }
+        if let Some(secs) = filter.opened_within_secs {
+            let n = args.len() + 1;
+            clauses.push(format!("s.date_opened >= ?{n}"));
+            args.push((now_unix() - secs).into());
+        }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&clauses.join(" AND "));
@@ -471,16 +490,79 @@ impl Database {
         Ok(())
     }
 
-    /// Every named measurement in a study, for reports: (series id, ROI).
-    pub fn named_measurements_for_study(&self, study_id: i64) -> Result<Vec<(i64, RoiRecord)>> {
+    /// Every named measurement in a study, for reports.
+    pub fn named_measurements_for_study(&self, study_id: i64) -> Result<Vec<MeasurementRow>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT r.id, r.image_id, r.frame, r.kind, r.points, r.name, r.value, r.unit, i.series_id
+            "SELECT r.id, r.image_id, r.frame, r.kind, r.points, r.name, r.value, r.unit,
+                    i.series_id, s.modality, s.series_number, s.series_description, i.instance_number
              FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
-             WHERE s.study_id = ?1 AND r.name IS NOT NULL ORDER BY r.id",
+             WHERE s.study_id = ?1 AND r.name IS NOT NULL ORDER BY s.series_number, i.instance_number, r.id",
         )?;
-        let rows = stmt.query_map(params![study_id], |row| Ok((row.get::<_, i64>(8)?, roi_from_row(row)?)))?;
+        let rows = stmt.query_map(params![study_id], |row| {
+            let modality: String = row.get(9)?;
+            let number: Option<i64> = row.get(10)?;
+            let description: String = row.get(11)?;
+            let mut label = modality;
+            if let Some(n) = number {
+                label.push_str(&format!(" {n}"));
+            }
+            if !description.is_empty() {
+                label.push_str(&format!(" {description}"));
+            }
+            Ok(MeasurementRow {
+                roi: roi_from_row(row)?,
+                series_id: row.get(8)?,
+                series_label: label,
+                instance_number: row.get(12)?,
+            })
+        })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Key images of a study in series and instance order.
+    pub fn key_images_for_study(&self, study_id: i64) -> Result<Vec<ImageRow>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT i.id, i.series_id, i.sop_instance_uid, i.sop_class_uid, i.instance_number, i.number_of_frames,
+                    i.rows, i.columns, i.path, i.stored_in_database_folder, i.file_size, i.transfer_syntax,
+                    i.is_key_image, i.slice_location, i.comment, i.date_added
+             FROM image i JOIN series s ON s.id = i.series_id
+             WHERE s.study_id = ?1 AND i.is_key_image = 1
+             ORDER BY s.series_number, i.instance_number, i.id",
+        )?;
+        let rows = stmt.query_map(params![study_id], image_from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    // ---------------------------------------------------------------- reports
+
+    pub fn report(&self, study_id: i64) -> Result<Option<ReportRow>> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                "SELECT study_id, findings, conclusion, date_modified FROM report WHERE study_id = ?1",
+                params![study_id],
+                |r| {
+                    Ok(ReportRow {
+                        study_id: r.get(0)?,
+                        findings: r.get(1)?,
+                        conclusion: r.get(2)?,
+                        date_modified: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn set_report(&self, study_id: i64, findings: &str, conclusion: &str) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT INTO report (study_id, findings, conclusion, date_modified) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(study_id) DO UPDATE SET findings = excluded.findings, conclusion = excluded.conclusion,
+             date_modified = excluded.date_modified",
+            params![study_id, findings, conclusion, now_unix()],
+        )?;
+        Ok(())
     }
 
     // ----------------------------------------------------------------- images
@@ -495,6 +577,28 @@ impl Database {
              ORDER BY instance_number, slice_location, id",
         )?;
         let rows = stmt.query_map(params![series_id], image_from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn image(&self, id: i64) -> Result<Option<ImageRow>> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                "SELECT id, series_id, sop_instance_uid, sop_class_uid, instance_number, number_of_frames,
+                        rows, columns, path, stored_in_database_folder, file_size, transfer_syntax,
+                        is_key_image, slice_location, comment, date_added
+                 FROM image WHERE id = ?1",
+                params![id],
+                image_from_row,
+            )
+            .optional()?)
+    }
+
+    /// Study ids that have a report with any text, for the Report column.
+    pub fn studies_with_reports(&self) -> Result<Vec<i64>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT study_id FROM report WHERE findings <> '' OR conclusion <> ''")?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
@@ -847,7 +951,13 @@ fn migrate(conn: &Connection) -> Result<()> {
             unit TEXT NOT NULL DEFAULT '',
             date_created INTEGER NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS roi_image ON roi(image_id, frame);",
+         CREATE INDEX IF NOT EXISTS roi_image ON roi(image_id, frame);
+         CREATE TABLE IF NOT EXISTS report (
+            study_id INTEGER PRIMARY KEY REFERENCES study(id) ON DELETE CASCADE,
+            findings TEXT NOT NULL DEFAULT '',
+            conclusion TEXT NOT NULL DEFAULT '',
+            date_modified INTEGER NOT NULL
+         );",
     )?;
     conn.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
@@ -925,6 +1035,37 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(db.counts().unwrap(), (0, 0, 0));
         assert_eq!(db.albums().unwrap()[0].number_of_studies, 0);
+    }
+
+    #[test]
+    fn report_round_trip() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let InsertOutcome::Inserted { study_id, image_id, .. } =
+            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        else {
+            panic!()
+        };
+        assert!(db.report(study_id).unwrap().is_none());
+        db.set_report(study_id, "findings", "conclusion").unwrap();
+        db.set_report(study_id, "findings 2", "conclusion").unwrap();
+        assert_eq!(db.report(study_id).unwrap().unwrap().findings, "findings 2");
+        let rec = RoiRecord {
+            id: 0,
+            image_id,
+            frame: 0,
+            kind: "length".into(),
+            points: vec![[0.0, 0.0], [3.0, 4.0]],
+            name: Some("VHS long axis".into()),
+            value: Some(50.0),
+            unit: "mm".into(),
+        };
+        db.replace_rois(image_id, 0, &[rec]).unwrap();
+        let named = db.named_measurements_for_study(study_id).unwrap();
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].roi.name.as_deref(), Some("VHS long axis"));
+        assert!(named[0].series_label.starts_with("CR"));
+        db.set_key_image(image_id, true).unwrap();
+        assert_eq!(db.key_images_for_study(study_id).unwrap().len(), 1);
     }
 
     #[test]

@@ -8,6 +8,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+printpdf = { workspace = true }
 rusqlite = { workspace = true }
 directories = { workspace = true }
 walkdir = { workspace = true }

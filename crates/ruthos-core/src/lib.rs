@@ -9,12 +9,13 @@ pub mod import;
 pub mod incoming;
 pub mod model;
 pub mod paths;
+pub mod report;
 pub mod settings;
 pub mod thumbs;
 
 pub use db::{Database, StudyFilter};
 pub use import::{ImportEvent, ImportMode, Importer};
-pub use model::{AlbumRow, DateFilter, ImageRow, RoiRecord, SeriesRow, StudyRow};
+pub use model::{AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, SeriesRow, StudyRow};
 pub use paths::DataPaths;
 pub use settings::{MeasurementSet, Settings};
 pub use thumbs::{ThumbnailService, ThumbnailUpdate};

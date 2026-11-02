@@ -54,6 +54,8 @@ pub struct Shared {
     pub renderer_note: Mutex<Option<String>>,
     /// Set by the Preferences button; the app opens the window.
     pub open_prefs: AtomicBool,
+    /// Studies whose report window should open.
+    pub open_reports: Mutex<Vec<i64>>,
 }
 
 impl Shared {
@@ -85,6 +87,7 @@ impl Shared {
             errors: Mutex::new(Vec::new()),
             renderer_note: Mutex::new(None),
             open_prefs: AtomicBool::new(false),
+            open_reports: Mutex::new(Vec::new()),
         })
     }
 
