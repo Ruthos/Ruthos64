@@ -7,7 +7,7 @@ use std::path::Path;
 
 use dicom_core::Tag;
 use dicom_dictionary_std::tags;
-use dicom_object::{InMemDicomObject, OpenFileOptions, StandardDataDictionary};
+use dicom_object::{InMemDicomObject, StandardDataDictionary};
 
 use crate::{DicomError, Result};
 
@@ -198,10 +198,7 @@ pub fn dicom_time_to_hms(tm: &str) -> Option<String> {
 
 /// Read header metadata from a file on disk.
 pub fn read_meta(path: &Path) -> Result<InstanceMeta> {
-    let obj = OpenFileOptions::new()
-        .read_until(tags::PIXEL_DATA)
-        .open_file(path)
-        .map_err(|e| classify_open_error(e.to_string()))?;
+    let obj = crate::open::open_any(path, Some(tags::PIXEL_DATA))?;
 
     let ts = obj.meta().transfer_syntax().to_string();
     let sop_class_meta = obj.meta().media_storage_sop_class_uid().to_string();
@@ -224,15 +221,6 @@ pub fn read_meta(path: &Path) -> Result<InstanceMeta> {
         return Err(DicomError::Missing("Series Instance UID"));
     }
     Ok(meta)
-}
-
-fn classify_open_error(msg: String) -> DicomError {
-    let lower = msg.to_ascii_lowercase();
-    if lower.contains("preamble") || lower.contains("dicm") || lower.contains("magic code") {
-        DicomError::NotDicom(msg)
-    } else {
-        DicomError::Read(msg)
-    }
 }
 
 fn trim_uid(s: &str) -> String {

@@ -10,6 +10,7 @@
 
 pub mod clut;
 pub mod meta;
+pub mod open;
 pub mod pixels;
 pub mod presets;
 pub mod quirks;

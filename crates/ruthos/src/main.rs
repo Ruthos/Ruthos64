@@ -6,7 +6,9 @@ use tracing_subscriber::EnvFilter;
 
 fn main() -> eframe::Result {
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn,egui_wgpu=warn,eframe=warn"));
+        .unwrap_or_else(|_| {
+            EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn,egui_wgpu=warn,eframe=warn,jpeg2k=warn")
+        });
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let options = eframe::NativeOptions {
@@ -19,10 +21,18 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
 
+    // Files or folders on the command line are imported and opened. This is
+    // what "Open with Ruthos" from Explorer hands us.
+    let startup_paths: Vec<std::path::PathBuf> = std::env::args_os()
+        .skip(1)
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())
+        .collect();
+
     eframe::run_native(
         "Ruthos",
         options,
-        Box::new(|cc| match ruthos_ui::RuthosApp::new(cc) {
+        Box::new(move |cc| match ruthos_ui::RuthosApp::new(cc, startup_paths) {
             Ok(app) => Ok(Box::new(app)),
             Err(e) => {
                 tracing::error!("startup failed: {e:#}");

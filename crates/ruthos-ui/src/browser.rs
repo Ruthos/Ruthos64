@@ -16,6 +16,7 @@ use ruthos_core::import::ImportSummary;
 use ruthos_core::{AlbumRow, DateFilter, ImportEvent, ImportMode, Importer, SeriesRow, StudyFilter, StudyRow};
 
 use crate::shared::Shared;
+use crate::icons;
 use crate::theme;
 use crate::widgets::{source_header, source_row, thumbnail_cell, toolbar_separator, truncate, ToolbarButton};
 
@@ -64,6 +65,9 @@ pub struct BrowserState {
     modal: Option<Modal>,
     open_requests: Vec<(i64, Option<i64>)>,
     counts: (i64, i64, i64),
+    /// Open the first study touched by the next finished import (used when
+    /// files are passed on the command line).
+    pub open_next_import: bool,
 }
 
 impl BrowserState {
@@ -86,7 +90,13 @@ impl BrowserState {
             modal: None,
             open_requests: Vec::new(),
             counts: (0, 0, 0),
+            open_next_import: false,
         }
+    }
+
+    /// Import files or folders (for example from the command line).
+    pub fn import_paths(&mut self, shared: &Shared, sources: Vec<PathBuf>) {
+        self.start_import(shared, sources);
     }
 
     /// Studies the user asked to open since the last call.
@@ -175,6 +185,13 @@ impl BrowserState {
                             }
                         }
                     }
+                    if self.open_next_import {
+                        if let Some(id) = summary.new_study_ids.first().or(summary.touched_study_ids.first()) {
+                            self.selected_study = Some(*id);
+                            self.open_requests.push((*id, None));
+                            self.open_next_import = false;
+                        }
+                    }
                     self.last_import = Some((summary, Instant::now()));
                     self.dirty = true;
                 }
@@ -194,11 +211,13 @@ impl BrowserState {
 
     // ---------------------------------------------------------------- show
 
-    pub fn show(&mut self, ctx: &Context, shared: &Shared) {
+    pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         self.pump_events(shared);
         if self.dirty {
             self.reload(shared);
         }
+        ui.style_mut().visuals = theme::browser_visuals();
+        let ctx = ui.ctx().clone();
 
         // Files dropped onto the window are imported.
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
@@ -206,55 +225,60 @@ impl BrowserState {
             self.start_import(shared, dropped);
         }
 
-        egui::TopBottomPanel::top("browser-toolbar")
-            .exact_height(theme::TOOLBAR_HEIGHT)
+        egui::Panel::top("browser-toolbar")
+            .exact_size(theme::TOOLBAR_HEIGHT)
             .frame(
                 egui::Frame::NONE
                     .fill(theme::toolbar_fill(false))
                     .stroke(theme::toolbar_stroke(false))
                     .inner_margin(egui::Margin::symmetric(6, 3)),
             )
-            .show(ctx, |ui| self.toolbar(ui, shared));
+            .show(ui, |ui| self.toolbar(ui, shared));
 
-        egui::TopBottomPanel::bottom("browser-status")
-            .exact_height(24.0)
+        egui::Panel::bottom("browser-status")
+            .exact_size(24.0)
             .frame(egui::Frame::NONE.fill(theme::toolbar_fill(false)).inner_margin(egui::Margin::symmetric(10, 3)))
-            .show(ctx, |ui| self.status_bar(ui, shared));
+            .show(ui, |ui| self.status_bar(ui, shared));
 
         if self.selected_study.is_some() {
-            egui::TopBottomPanel::bottom("browser-thumbs")
-                .exact_height(theme::THUMB_SIZE + 50.0)
+            egui::Panel::bottom("browser-thumbs")
+                .exact_size(theme::THUMB_SIZE + 50.0)
                 .frame(egui::Frame::NONE.fill(Color32::from_rgb(228, 228, 228)).inner_margin(egui::Margin::symmetric(8, 4)))
-                .show(ctx, |ui| self.thumbnail_strip(ui, shared));
+                .show(ui, |ui| self.thumbnail_strip(ui, shared));
         }
 
         if self.sidebar_visible {
-            egui::SidePanel::left("browser-sources")
-                .default_width(210.0)
-                .width_range(160.0..=320.0)
+            egui::Panel::left("browser-sources")
+                .default_size(210.0)
+                .size_range(160.0..=320.0)
                 .frame(egui::Frame::NONE.fill(Color32::from_rgb(230, 232, 236)).inner_margin(egui::Margin::same(8)))
-                .show(ctx, |ui| self.source_list(ui, shared));
+                .show(ui, |ui| self.source_list(ui, shared));
         }
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::WHITE))
-            .show(ctx, |ui| self.study_table(ui, shared));
+            .show(ui, |ui| self.study_table(ui, shared));
 
-        self.show_modal(ctx, shared);
+        self.show_modal(&ctx, shared);
     }
 
     fn toolbar(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.horizontal(|ui| {
-            if ToolbarButton::new("◧", "Sidebar").tooltip("Show or hide the source list").show(ui).clicked() {
+            if ToolbarButton::new(icons::SIDEBAR, "Sidebar").tooltip("Show or hide the source list").show(ui).clicked() {
                 self.sidebar_visible = !self.sidebar_visible;
             }
-            if ToolbarButton::new("📥", "Import").tooltip("Import DICOM files or folders").show(ui).clicked() {
-                if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM files or folders").pick_files_or_folders() {
+            if ToolbarButton::new(icons::IMPORT, "Import").tooltip("Import a folder of DICOM files (a CD, a USB stick, an export)").show(ui).clicked() {
+                if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM folder").pick_folders() {
+                    self.start_import(shared, paths);
+                }
+            }
+            if ToolbarButton::new(icons::IMPORT_FILES, "Import Files").tooltip("Import individual DICOM files").show(ui).clicked() {
+                if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM files").pick_files() {
                     self.start_import(shared, paths);
                 }
             }
             let has_sel = self.selected_study.is_some();
-            if ToolbarButton::new("📤", "Export")
+            if ToolbarButton::new(icons::EXPORT, "Export")
                 .enabled(has_sel)
                 .tooltip("Export the selected study as DICOM files")
                 .show(ui)
@@ -262,104 +286,115 @@ impl BrowserState {
             {
                 self.export_selected(shared);
             }
-            ToolbarButton::new("🔍", "Query").enabled(false).tooltip("PACS query/retrieve is next on the Tier 1 list").show(ui);
-            ToolbarButton::new("✉", "Send").enabled(false).tooltip("Send to PACS is next on the Tier 1 list").show(ui);
-            ToolbarButton::new("🎭", "Anonymize").enabled(false).tooltip("Anonymisation is next on the Tier 1 list").show(ui);
-            if ToolbarButton::new("🗑", "Delete").enabled(has_sel).tooltip("Delete the selected study").show(ui).clicked() {
+            ToolbarButton::new(icons::QUERY, "Query").enabled(false).tooltip("PACS query/retrieve is next on the Tier 1 list").show(ui);
+            ToolbarButton::new(icons::SEND, "Send").enabled(false).tooltip("Send to PACS is next on the Tier 1 list").show(ui);
+            ToolbarButton::new(icons::ANONYMIZE, "Anonymize").enabled(false).tooltip("Anonymisation is next on the Tier 1 list").show(ui);
+            if ToolbarButton::new(icons::TRASH, "Delete").enabled(has_sel).tooltip("Delete the selected study").show(ui).clicked() {
                 if let Some(id) = self.selected_study {
                     self.modal = Some(Modal::DeleteStudy(id));
                 }
             }
             toolbar_separator(ui);
-            if ToolbarButton::new("🖼", "2D Viewer").enabled(has_sel).tooltip("Open the selected study").show(ui).clicked() {
+            if ToolbarButton::new(icons::VIEWER, "2D Viewer").enabled(has_sel).tooltip("Open the selected study").show(ui).clicked() {
                 if let Some(id) = self.selected_study {
                     self.open_requests.push((id, self.selected_series));
                 }
             }
-            ToolbarButton::new("📄", "Report").enabled(false).tooltip("Reports arrive in Tier 3").show(ui);
+            ToolbarButton::new(icons::REPORT, "Report").enabled(false).tooltip("Reports arrive in Tier 3").show(ui);
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Search field
-                let mut changed = false;
-                ui.vertical(|ui| {
-                    ui.add_space(8.0);
-                    let r = ui.add(
-                        egui::TextEdit::singleline(&mut self.filter.text)
-                            .hint_text("Search name, ID, description…")
-                            .desired_width(200.0),
-                    );
-                    changed |= r.changed();
-                });
-                // Modality filter
-                ui.vertical(|ui| {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Modality").size(theme::TOOLBAR_LABEL_SIZE));
-                    let text = if self.filter.modality.is_empty() { "Any".to_string() } else { self.filter.modality.clone() };
-                    egui::ComboBox::from_id_salt("modality-filter").selected_text(text).width(70.0).show_ui(ui, |ui| {
-                        if ui.selectable_label(self.filter.modality.is_empty(), "Any").clicked() {
-                            self.filter.modality.clear();
+            // Right-aligned filter group: sort, date, modality, search. Each
+            // column has a fixed width so the labels never wrap.
+            const SORT_W: f32 = 118.0;
+            const DATE_W: f32 = 118.0;
+            const MOD_W: f32 = 84.0;
+            const SEARCH_W: f32 = 210.0;
+            let spacing = ui.spacing().item_spacing.x;
+            let group_w = SORT_W + DATE_W + MOD_W + SEARCH_W + spacing * 3.0;
+            let gap = ui.available_width() - group_w;
+            if gap > 0.0 {
+                ui.add_space(gap);
+            }
+            let mut changed = false;
+            ui.vertical(|ui| {
+                ui.set_width(SORT_W);
+                ui.add_space(4.0);
+                ui.label(RichText::new("Sort").size(theme::TOOLBAR_LABEL_SIZE));
+                let label = match self.filter.sort {
+                    StudySort::DateAddedDesc => "Date added",
+                    StudySort::StudyDateDesc => "Study date",
+                    StudySort::PatientName => "Patient name",
+                    StudySort::PatientId => "Patient ID",
+                    StudySort::Modality => "Modality",
+                };
+                egui::ComboBox::from_id_salt("sort-popup").selected_text(label).width(SORT_W - 4.0).show_ui(ui, |ui| {
+                    for (s, l) in [
+                        (StudySort::DateAddedDesc, "Date added"),
+                        (StudySort::StudyDateDesc, "Study date"),
+                        (StudySort::PatientName, "Patient name"),
+                        (StudySort::PatientId, "Patient ID"),
+                        (StudySort::Modality, "Modality"),
+                    ] {
+                        if ui.selectable_label(self.filter.sort == s, l).clicked() {
+                            self.filter.sort = s;
                             changed = true;
                         }
-                        for m in &self.modalities.clone() {
-                            if ui.selectable_label(&self.filter.modality == m, m).clicked() {
-                                self.filter.modality = m.clone();
-                                changed = true;
-                            }
-                        }
-                    });
+                    }
                 });
-                // Date filter
-                ui.vertical(|ui| {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Date").size(theme::TOOLBAR_LABEL_SIZE));
-                    egui::ComboBox::from_id_salt("date-filter")
-                        .selected_text(self.filter.date.label())
-                        .width(110.0)
-                        .show_ui(ui, |ui| {
-                            for d in DateFilter::ALL {
-                                if ui.selectable_label(self.filter.date == d, d.label()).clicked() {
-                                    self.filter.date = d;
-                                    changed = true;
-                                }
-                            }
-                        });
-                });
-                // Sort
-                ui.vertical(|ui| {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Sort").size(theme::TOOLBAR_LABEL_SIZE));
-                    let label = match self.filter.sort {
-                        StudySort::DateAddedDesc => "Date added",
-                        StudySort::StudyDateDesc => "Study date",
-                        StudySort::PatientName => "Patient name",
-                        StudySort::PatientId => "Patient ID",
-                        StudySort::Modality => "Modality",
-                    };
-                    egui::ComboBox::from_id_salt("sort-popup").selected_text(label).width(110.0).show_ui(ui, |ui| {
-                        for (s, l) in [
-                            (StudySort::DateAddedDesc, "Date added"),
-                            (StudySort::StudyDateDesc, "Study date"),
-                            (StudySort::PatientName, "Patient name"),
-                            (StudySort::PatientId, "Patient ID"),
-                            (StudySort::Modality, "Modality"),
-                        ] {
-                            if ui.selectable_label(self.filter.sort == s, l).clicked() {
-                                self.filter.sort = s;
-                                changed = true;
-                            }
-                        }
-                    });
-                });
-                if changed {
-                    self.dirty = true;
-                }
             });
+            ui.vertical(|ui| {
+                ui.set_width(DATE_W);
+                ui.add_space(4.0);
+                ui.label(RichText::new("Date").size(theme::TOOLBAR_LABEL_SIZE));
+                egui::ComboBox::from_id_salt("date-filter")
+                    .selected_text(self.filter.date.label())
+                    .width(DATE_W - 4.0)
+                    .show_ui(ui, |ui| {
+                        for d in DateFilter::ALL {
+                            if ui.selectable_label(self.filter.date == d, d.label()).clicked() {
+                                self.filter.date = d;
+                                changed = true;
+                            }
+                        }
+                    });
+            });
+            ui.vertical(|ui| {
+                ui.set_width(MOD_W);
+                ui.add_space(4.0);
+                ui.label(RichText::new("Modality").size(theme::TOOLBAR_LABEL_SIZE));
+                let text = if self.filter.modality.is_empty() { "Any".to_string() } else { self.filter.modality.clone() };
+                egui::ComboBox::from_id_salt("modality-filter").selected_text(text).width(MOD_W - 4.0).show_ui(ui, |ui| {
+                    if ui.selectable_label(self.filter.modality.is_empty(), "Any").clicked() {
+                        self.filter.modality.clear();
+                        changed = true;
+                    }
+                    for m in &self.modalities.clone() {
+                        if ui.selectable_label(&self.filter.modality == m, m).clicked() {
+                            self.filter.modality = m.clone();
+                            changed = true;
+                        }
+                    }
+                });
+            });
+            ui.vertical(|ui| {
+                ui.set_width(SEARCH_W);
+                ui.add_space(4.0);
+                ui.label(RichText::new("Search").size(theme::TOOLBAR_LABEL_SIZE));
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut self.filter.text)
+                        .hint_text("Name, ID, description…")
+                        .desired_width(SEARCH_W - 4.0),
+                );
+                changed |= r.changed();
+            });
+            if changed {
+                self.dirty = true;
+            }
         });
     }
 
     fn source_list(&mut self, ui: &mut Ui, shared: &Shared) {
         source_header(ui, "LOCAL");
-        if source_row(ui, "🗄", "Local Database", Some(self.counts.0), self.selected_album.is_none()).clicked() {
+        if source_row(ui, icons::DATABASE, "Local Database", Some(self.counts.0), self.selected_album.is_none()).clicked() {
             self.selected_album = None;
             self.dirty = true;
         }
@@ -367,7 +402,7 @@ impl BrowserState {
         ui.horizontal(|ui| {
             source_header(ui, "ALBUMS");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("＋").on_hover_text("New album").clicked() {
+                if ui.small_button(icons::PLUS).on_hover_text("New album").clicked() {
                     self.modal = Some(Modal::NewAlbum { name: String::new() });
                 }
             });
@@ -377,7 +412,7 @@ impl BrowserState {
             ui.label(RichText::new("No albums yet").size(11.5).color(Color32::from_gray(140)));
         }
         for album in &albums {
-            let glyph = if album.is_smart { "⚙" } else { "📁" };
+            let glyph = if album.is_smart { icons::SMART_ALBUM } else { icons::ALBUM };
             let r = source_row(ui, glyph, &album.name, Some(album.number_of_studies), self.selected_album == Some(album.id));
             if r.clicked() {
                 self.selected_album = Some(album.id);
@@ -411,9 +446,9 @@ impl BrowserState {
         source_header(ui, "SOURCES");
         let net = shared.net_status.lock().clone();
         let (glyph, text) = if net.running {
-            ("●", format!("{} : {}", net.ae_title, net.port))
+            (icons::LISTENER_ON, format!("{} : {}", net.ae_title, net.port))
         } else {
-            ("○", "Listener off".to_string())
+            (icons::LISTENER_OFF, "Listener off".to_string())
         };
         let r = source_row(ui, glyph, &text, Some(net.received as i64), false);
         let mut tip = String::new();
@@ -519,7 +554,7 @@ impl BrowserState {
                             row.set_selected(is_sel);
                             let is_exp = expanded.contains(&s.id);
                             row.col(|ui| {
-                                let glyph = if is_exp { "▾" } else { "▸" };
+                                let glyph = if is_exp { icons::CARET_DOWN } else { icons::CARET_RIGHT };
                                 if ui.add(egui::Label::new(RichText::new(glyph).color(Color32::from_gray(90))).sense(Sense::click())).clicked() {
                                     actions.push(Action::ToggleExpand(s.id));
                                 }
@@ -629,7 +664,7 @@ impl BrowserState {
                                 se.number_of_images.to_string(),
                                 unix_to_local(se.date_added),
                                 se.comment.clone(),
-                                if se.number_of_key_images > 0 { format!("★ {}", se.number_of_key_images) } else { String::new() },
+                                if se.number_of_key_images > 0 { format!("{} {}", icons::KEY_IMAGE, se.number_of_key_images) } else { String::new() },
                             ];
                             for text in cells.iter() {
                                 row.col(|ui| {
@@ -767,7 +802,7 @@ impl BrowserState {
         let Some(modal) = self.modal.clone() else { return };
         let mut close = false;
         let mut next = modal.clone();
-        egui::Modal::new(egui::Id::new("browser-modal")).show(ctx, |ui| {
+        egui::Modal::new(egui::Id::unique("browser-modal")).show(ctx, |ui| {
             ui.set_min_width(360.0);
             match &mut next {
                 Modal::DeleteStudy(id) => {

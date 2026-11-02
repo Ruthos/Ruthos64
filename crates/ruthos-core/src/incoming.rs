@@ -87,9 +87,9 @@ fn settled_files(dir: &std::path::Path, settle: Duration) -> Vec<PathBuf> {
             let name = e.file_name().to_string_lossy();
             !name.starts_with('.') && !name.ends_with(".part") && !name.ends_with(".tmp")
         })
-        .filter(|e| match e.metadata().and_then(|m| m.modified()) {
-            Ok(modified) => now.duration_since(modified).map(|d| d >= settle).unwrap_or(true),
-            Err(_) => false,
+        .filter(|e| match e.metadata().ok().and_then(|m| m.modified().ok()) {
+            Some(modified) => now.duration_since(modified).map(|d| d >= settle).unwrap_or(true),
+            None => false,
         })
         .map(|e| e.path().to_path_buf())
         .collect()

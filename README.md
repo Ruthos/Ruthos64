@@ -113,11 +113,12 @@ Ruthos is licensed under the **GNU Lesser General Public License v3.0**, the sam
 
 ## Building
 
-There is nothing to build yet. When there is, you will need:
+You will need:
 
 1. The Rust toolchain via [rustup](https://rustup.rs). Stable channel, `x86_64-pc-windows-msvc` target.
-2. Microsoft Visual C++ Build Tools (the "Desktop development with C++" workload) for the MSVC linker.
-3. Git.
+2. Microsoft Visual C++ Build Tools (the "Desktop development with C++" workload). The MSVC compiler links Rust and builds the two C/C++ codecs below.
+3. [CMake](https://cmake.org/download/) on the `PATH` (or in the `CMAKE` environment variable). It builds OpenJPEG (JPEG 2000) and CharLS (JPEG-LS), the only non-Rust code in the tree.
+4. Git.
 
 Then:
 
@@ -125,7 +126,27 @@ Then:
 git clone https://github.com/Ruthos/ruthos.git
 cd ruthos
 cargo build --release
+cargo test --workspace
 ```
+
+The binary is `target\release\ruthos.exe`. The database and imported files live in `%LOCALAPPDATA%\Ruthos\Ruthos Data`.
+
+**Windows 11 Smart App Control.** If it is on, it will block the unsigned executables that every Rust build produces (build scripts, tests, the app). Developers need it off on their build machine. Released builds will be signed so end users can keep it on.
+
+### Codec coverage
+
+Verified by `crates/ruthos-dicom/tests/samples.rs` against real files:
+
+| Transfer syntax | Status |
+|---|---|
+| Implicit and Explicit VR Little Endian, Big Endian, Deflated | Decodes |
+| RLE Lossless | Decodes |
+| JPEG Baseline (8-bit lossy), JPEG Lossless | Decodes |
+| JPEG-LS Lossless and Near-lossless | Decodes (CharLS) |
+| JPEG 2000 Lossless and Lossy | Decodes (OpenJPEG) |
+| JPEG Extended 12-bit lossy (Process 2 & 4) | Not yet. The Rust JPEG decoder is 8-bit only. |
+| 32-bit pixel data (RT Dose) | Not yet |
+| Files with no DICOM meta header | Accepted (Explicit, then Implicit VR LE) |
 
 ## Contributing
 

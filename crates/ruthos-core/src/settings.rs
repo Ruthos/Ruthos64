@@ -72,7 +72,12 @@ impl Settings {
         std::fs::write(path, text)
     }
 
+    /// The data root: `RUTHOS_DATA_ROOT` if set (handy for testing against a
+    /// scratch archive), else the configured folder, else the platform default.
     pub fn data_root(&self) -> PathBuf {
+        if let Some(env) = std::env::var_os("RUTHOS_DATA_ROOT").filter(|s| !s.is_empty()) {
+            return PathBuf::from(env);
+        }
         self.data_root
             .clone()
             .unwrap_or_else(crate::paths::DataPaths::default_root)

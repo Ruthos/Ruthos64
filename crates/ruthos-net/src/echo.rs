@@ -6,7 +6,6 @@ use dicom_core::{dicom_value, DataElement, VR};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_ul::association::client::ClientAssociationOptions;
-use dicom_ul::association::Association;
 use dicom_ul::pdu::{PDataValue, PDataValueType};
 use dicom_ul::Pdu;
 

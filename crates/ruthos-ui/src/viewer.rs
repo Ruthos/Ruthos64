@@ -19,6 +19,7 @@ use crate::annotations::{self, AnnotationContext, AnnotationLevel};
 use crate::loader::FrameKey;
 use crate::roi::{roi_color, Roi, RoiKind};
 use crate::shared::Shared;
+use crate::icons;
 use crate::theme;
 use crate::widgets::{shadow_text, thumbnail_cell, toolbar_separator, ToolbarButton};
 
@@ -68,16 +69,16 @@ impl Tool {
 
     pub fn glyph(self) -> &'static str {
         match self {
-            Tool::WindowLevel => "◐",
-            Tool::Move => "✥",
-            Tool::Zoom => "🔍",
-            Tool::Rotate => "⟳",
-            Tool::Length => "📏",
-            Tool::Angle => "∠",
-            Tool::Rectangle => "▭",
-            Tool::Oval => "⬭",
-            Tool::Arrow => "➚",
-            Tool::Point => "✛",
+            Tool::WindowLevel => icons::TOOL_WL,
+            Tool::Move => icons::TOOL_MOVE,
+            Tool::Zoom => icons::TOOL_ZOOM,
+            Tool::Rotate => icons::TOOL_ROTATE,
+            Tool::Length => icons::TOOL_LENGTH,
+            Tool::Angle => icons::TOOL_ANGLE,
+            Tool::Rectangle => icons::TOOL_RECT,
+            Tool::Oval => icons::TOOL_OVAL,
+            Tool::Arrow => icons::TOOL_ARROW,
+            Tool::Point => icons::TOOL_POINT,
         }
     }
 
@@ -342,32 +343,32 @@ impl ViewerState {
         self.keyboard(ui, shared);
 
         let dark = true;
-        egui::TopBottomPanel::top(("viewer-toolbar", self.id))
-            .exact_height(theme::TOOLBAR_HEIGHT)
+        egui::Panel::top(("viewer-toolbar", self.id))
+            .exact_size(theme::TOOLBAR_HEIGHT)
             .frame(
                 egui::Frame::NONE
                     .fill(theme::toolbar_fill(dark))
                     .stroke(theme::toolbar_stroke(dark))
                     .inner_margin(egui::Margin::symmetric(6, 3)),
             )
-            .show_inside(ui, |ui| self.toolbar(ui, shared));
+            .show(ui, |ui| self.toolbar(ui, shared));
 
-        egui::SidePanel::left(("viewer-drawer", self.id))
-            .exact_width(theme::THUMB_SIZE + 36.0)
+        egui::Panel::left(("viewer-drawer", self.id))
+            .exact_size(theme::THUMB_SIZE + 36.0)
             .resizable(false)
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(30, 30, 32)).inner_margin(egui::Margin::same(6)))
-            .show_inside(ui, |ui| self.drawer(ui, shared));
+            .show(ui, |ui| self.drawer(ui, shared));
 
         if self.images.len() > 1 || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false) {
-            egui::TopBottomPanel::bottom(("viewer-slider", self.id))
-                .exact_height(26.0)
+            egui::Panel::bottom(("viewer-slider", self.id))
+                .exact_size(26.0)
                 .frame(egui::Frame::NONE.fill(Color32::from_rgb(30, 30, 32)).inner_margin(egui::Margin::symmetric(10, 4)))
-                .show_inside(ui, |ui| self.slider(ui));
+                .show(ui, |ui| self.slider(ui));
         }
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::BLACK))
-            .show_inside(ui, |ui| self.image_area(ui, shared));
+            .show(ui, |ui| self.image_area(ui, shared));
 
         if shared.loader.has_pending() || self.playing {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
@@ -376,7 +377,7 @@ impl ViewerState {
 
     fn toolbar(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.horizontal(|ui| {
-            if ToolbarButton::new("🗄", "Database").tooltip("Show the database window").show(ui).clicked() {
+            if ToolbarButton::new(icons::DATABASE, "Database").tooltip("Show the database window").show(ui).clicked() {
                 shared.focus_browser.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             toolbar_separator(ui);
@@ -402,7 +403,7 @@ impl ViewerState {
             });
             toolbar_separator(ui);
 
-            if ToolbarButton::new("🅰", "Annotations")
+            if ToolbarButton::new(icons::ANNOTATIONS, "Annotations")
                 .tooltip("Cycle annotations: Full, Partial, None")
                 .show(ui)
                 .clicked()
@@ -415,7 +416,7 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 let glyph = self.tool.glyph();
-                ui.menu_button(egui::RichText::new(format!("{glyph}  {} ▾", self.tool.label())).size(13.0), |ui| {
+                ui.menu_button(egui::RichText::new(format!("{glyph}  {} {}", self.tool.label(), icons::CARET_DOWN)).size(13.0), |ui| {
                     for t in Tool::ALL {
                         let text = format!("{}  {}", t.glyph(), t.label());
                         if ui.selectable_label(self.tool == t, text).clicked() {
@@ -432,7 +433,7 @@ impl ViewerState {
             // WL/WW menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button(egui::RichText::new("◐  WL/WW ▾").size(13.0), |ui| {
+                ui.menu_button(egui::RichText::new(format!("{}  WL/WW {}", icons::WLWW, icons::CARET_DOWN)).size(13.0), |ui| {
                     if ui.button("Default WL & WW").clicked() {
                         self.apply_default_window(shared, false);
                         ui.close();
@@ -464,7 +465,7 @@ impl ViewerState {
             // CLUT menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button(egui::RichText::new(format!("🎨  {} ▾", crate::widgets::truncate(&self.clut, 12))).size(13.0), |ui| {
+                ui.menu_button(egui::RichText::new(format!("{}  {} {}", icons::CLUT, crate::widgets::truncate(&self.clut, 12), icons::CARET_DOWN)).size(13.0), |ui| {
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                         for name in shared.cluts.names() {
                             if ui.selectable_label(self.clut == name, name).clicked() {
@@ -477,7 +478,7 @@ impl ViewerState {
                 ui.label(egui::RichText::new("CLUT").size(theme::TOOLBAR_LABEL_SIZE).color(Color32::from_gray(200)));
             });
 
-            ToolbarButton::new("🧊", "3D")
+            ToolbarButton::new(icons::THREE_D, "3D")
                 .enabled(false)
                 .tooltip("MPR and volume rendering arrive in Tier 2")
                 .show(ui);
@@ -485,7 +486,7 @@ impl ViewerState {
             // Orientation menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button(egui::RichText::new("🔄  Orientation ▾").size(13.0), |ui| {
+                ui.menu_button(egui::RichText::new(format!("{}  Orientation {}", icons::ORIENTATION, icons::CARET_DOWN)).size(13.0), |ui| {
                     if ui.button("Rotate 90° clockwise").clicked() {
                         self.view.rotation_deg = (self.view.rotation_deg + 90.0).rem_euclid(360.0);
                         self.fit_pending = true;
@@ -521,24 +522,24 @@ impl ViewerState {
             });
             toolbar_separator(ui);
 
-            if ToolbarButton::new("↺", "Reset").tooltip("Fit image and restore default window").show(ui).clicked() {
+            if ToolbarButton::new(icons::RESET, "Reset").tooltip("Fit image and restore default window").show(ui).clicked() {
                 self.fit_pending = true;
                 self.apply_default_window(shared, false);
             }
-            let key_glyph = if self.current_image().map(|i| i.is_key_image).unwrap_or(false) { "★" } else { "☆" };
-            if ToolbarButton::new(key_glyph, "Key Image").tooltip("Mark this image as a key image").show(ui).clicked() {
+            let is_key = self.current_image().map(|i| i.is_key_image).unwrap_or(false);
+            if ToolbarButton::new(icons::KEY_IMAGE, "Key Image").selected(is_key).tooltip("Mark this image as a key image").show(ui).clicked() {
                 if let Some(img) = self.images.get_mut(self.image_idx) {
                     img.is_key_image = !img.is_key_image;
                     let _ = shared.db.set_key_image(img.id, img.is_key_image);
                 }
             }
-            if ToolbarButton::new("📤", "Export").tooltip("Export the current image as PNG or JPEG").show(ui).clicked() {
+            if ToolbarButton::new(icons::EXPORT, "Export").tooltip("Export the current image as PNG or JPEG").show(ui).clicked() {
                 self.export_current(shared);
             }
             toolbar_separator(ui);
 
             let can_play = self.images.len() > 1 || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);
-            let (glyph, label) = if self.playing { ("⏸", "Pause") } else { ("▶", "Play") };
+            let (glyph, label) = if self.playing { (icons::PAUSE, "Pause") } else { (icons::PLAY, "Play") };
             if ToolbarButton::new(glyph, label).enabled(can_play).show(ui).clicked() {
                 self.playing = !self.playing;
                 self.last_tick = None;
@@ -635,7 +636,7 @@ impl ViewerState {
             )
         });
         // Don't steal keys from text fields.
-        if ui.ctx().wants_keyboard_input() {
+        if ui.ctx().memory(|m| m.focused().is_some()) {
             return;
         }
         if down {
@@ -783,7 +784,7 @@ impl ViewerState {
         // the header, and fit to the viewport.
         let series_id = self.current_series().id;
         if self.window_initialised_for != Some(series_id) {
-            let s = self.current_series();
+            let s = self.current_series().clone();
             match (s.window_center, s.window_width) {
                 (Some(c), Some(w)) if w > 0.0 => {
                     self.view.window_center = c as f32;
@@ -873,7 +874,7 @@ impl ViewerState {
                 &painter,
                 Pos2::new(rect.center().x, rect.top() + 6.0),
                 Align2::CENTER_TOP,
-                "▶",
+                icons::PLAY,
                 FontId::proportional(14.0),
                 Color32::from_gray(200),
             );
@@ -891,7 +892,7 @@ impl ViewerState {
                 self.zoom_about(t, hover, zoom_delta);
             } else if !ctrl && scroll.abs() > 0.0 {
                 // Accumulate small deltas into discrete steps.
-                let id = egui::Id::new(("wheel-acc", self.id));
+                let id = egui::Id::unique(("wheel-acc", self.id));
                 let acc = ui.ctx().data_mut(|d| {
                     let v: &mut f32 = d.get_temp_mut_or_default(id);
                     *v += scroll;

@@ -7,7 +7,6 @@
 
 use std::path::Path;
 
-use dicom_object::open_file;
 use dicom_pixeldata::{ConvertOptions, PixelDecoder, VoiLutOption};
 
 use crate::meta::{meta_from_object, InstanceMeta};
@@ -79,7 +78,7 @@ impl Frame {
 
 /// Decode one frame of the file at `path`.
 pub fn decode_frame(path: &Path, frame_index: u32) -> Result<Frame> {
-    let obj = open_file(path).map_err(|e| DicomError::Read(e.to_string()))?;
+    let obj = crate::open::open_any(path, None)?;
     let meta = {
         let mut m = meta_from_object(&obj);
         m.transfer_syntax = obj.meta().transfer_syntax().trim_end_matches('\0').to_string();
@@ -88,7 +87,7 @@ pub fn decode_frame(path: &Path, frame_index: u32) -> Result<Frame> {
 
     let decoded = obj
         .decode_pixel_data_frame(frame_index)
-        .map_err(|e| DicomError::Pixels(e.to_string()))?;
+        .map_err(|e| DicomError::Pixels(error_chain(&e)))?;
 
     let width = decoded.columns();
     let height = decoded.rows();
@@ -145,6 +144,21 @@ pub fn decode_frame(path: &Path, frame_index: u32) -> Result<Frame> {
         inverted,
         meta,
     })
+}
+
+/// Join an error and all of its sources into one line, so a codec failure
+/// deep inside dicom-rs is reported with its actual cause.
+pub fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut parts = vec![e.to_string()];
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        let text = s.to_string();
+        if parts.last() != Some(&text) {
+            parts.push(text);
+        }
+        cur = s.source();
+    }
+    parts.join(": ")
 }
 
 /// Min and max of the frame. Non-finite values are skipped.

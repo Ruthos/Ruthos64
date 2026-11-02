@@ -31,11 +31,15 @@ pub struct RuthosApp {
 }
 
 impl RuthosApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> anyhow::Result<Self> {
+    /// `startup_paths` are files or folders given on the command line; they
+    /// are imported and the first resulting study is opened in a viewer.
+    pub fn new(cc: &eframe::CreationContext<'_>, startup_paths: Vec<std::path::PathBuf>) -> anyhow::Result<Self> {
         let render_state = cc
             .wgpu_render_state
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Ruthos needs the wgpu renderer"))?;
+
+        crate::icons::install(&cc.egui_ctx);
 
         let settings = Settings::load();
         let paths = DataPaths::new(settings.data_root());
@@ -90,9 +94,15 @@ impl RuthosApp {
             incoming_stop.clone(),
         );
 
+        let mut browser = BrowserState::new();
+        if !startup_paths.is_empty() {
+            browser.open_next_import = true;
+            browser.import_paths(&shared, startup_paths);
+        }
+
         Ok(Self {
             shared,
-            browser: BrowserState::new(),
+            browser,
             viewers: Vec::new(),
             scp,
             incoming_stop,
@@ -102,6 +112,7 @@ impl RuthosApp {
     }
 
     fn open_viewer(&mut self, study_id: i64, series_id: Option<i64>) {
+        tracing::info!("open viewer: study {study_id}, series {series_id:?}, {} open", self.viewers.len());
         // Reuse an existing window for this study: switch series and focus it.
         if let Some(existing) = self.viewers.iter().find(|v| v.lock().study.id == study_id) {
             let mut v = existing.lock();
@@ -144,9 +155,10 @@ impl RuthosApp {
 }
 
 impl eframe::App for RuthosApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         ctx.set_visuals(theme::browser_visuals());
-        self.shared.pump_thumbnails(ctx);
+        self.shared.pump_thumbnails(&ctx);
         self.pump_net();
 
         if let Some(err) = self.startup_error.take() {
@@ -154,7 +166,7 @@ impl eframe::App for RuthosApp {
             tracing::warn!("{err}");
         }
 
-        self.browser.show(ctx, &self.shared);
+        self.browser.show(ui, &self.shared);
 
         for (study, series) in self.browser.take_open_requests() {
             self.open_viewer(study, series);
