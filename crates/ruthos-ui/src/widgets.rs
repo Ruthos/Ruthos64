@@ -23,7 +23,7 @@ impl<'a> ToolbarButton<'a> {
             enabled: true,
             selected: false,
             tooltip: None,
-            width: 56.0,
+            width: 62.0,
         }
     }
 
@@ -48,52 +48,62 @@ impl<'a> ToolbarButton<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
-        let size = Vec2::new(self.width, theme::TOOLBAR_HEIGHT - 8.0);
+        let label_width = ui
+            .painter()
+            .layout_no_wrap(self.label.to_string(), FontId::proportional(theme::TOOLBAR_LABEL_SIZE), Color32::BLACK)
+            .size()
+            .x;
+        let width = self.width.max(label_width + 14.0);
+        let size = Vec2::new(width, theme::TOOLBAR_HEIGHT - 10.0);
         let sense = if self.enabled { Sense::click() } else { Sense::hover() };
         let (rect, response) = ui.allocate_exact_size(size, sense);
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
             let dark = ui.visuals().dark_mode;
             let hovered = self.enabled && response.hovered();
-            if self.selected || hovered || response.is_pointer_button_down_on() {
-                let fill = if self.selected {
+            let pressed = response.is_pointer_button_down_on();
+            if self.selected || hovered || pressed {
+                let fill = if pressed || self.selected {
                     if dark {
-                        Color32::from_rgb(85, 85, 92)
+                        Color32::from_white_alpha(28)
                     } else {
-                        Color32::from_rgb(195, 195, 195)
+                        Color32::from_black_alpha(34)
                     }
                 } else if dark {
-                    Color32::from_rgb(72, 72, 78)
+                    Color32::from_white_alpha(16)
                 } else {
-                    Color32::from_rgb(208, 208, 208)
+                    Color32::from_black_alpha(16)
                 };
-                painter.rect_filled(rect.shrink(2.0), 5.0, fill);
+                painter.rect_filled(rect.shrink(2.0), 6.0, fill);
+                if self.selected {
+                    let stroke = if dark { Color32::from_white_alpha(40) } else { Color32::from_black_alpha(40) };
+                    painter.rect_stroke(rect.shrink(2.0), 6.0, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+                }
             }
-            let text_color = if !self.enabled {
+            let (icon_color, label_color) = if !self.enabled {
                 if dark {
-                    Color32::from_gray(110)
+                    (Color32::from_gray(105), Color32::from_gray(105))
                 } else {
-                    Color32::from_gray(160)
+                    (Color32::from_gray(165), Color32::from_gray(150))
                 }
             } else if dark {
-                Color32::from_gray(230)
+                (Color32::from_gray(232), Color32::from_gray(215))
             } else {
-                Color32::from_gray(40)
+                (Color32::from_gray(55), Color32::from_gray(40))
             };
-            let glyph_pos = Pos2::new(rect.center().x, rect.top() + 4.0);
             painter.text(
-                glyph_pos,
+                Pos2::new(rect.center().x, rect.top() + 6.0),
                 Align2::CENTER_TOP,
                 self.glyph,
                 FontId::proportional(theme::TOOLBAR_ICON_SIZE),
-                text_color,
+                icon_color,
             );
             painter.text(
-                Pos2::new(rect.center().x, rect.bottom() - 3.0),
+                Pos2::new(rect.center().x, rect.bottom() - 5.0),
                 Align2::CENTER_BOTTOM,
                 self.label,
                 FontId::proportional(theme::TOOLBAR_LABEL_SIZE),
-                text_color,
+                label_color,
             );
         }
         let response = if let Some(tip) = self.tooltip {
@@ -111,41 +121,50 @@ impl<'a> ToolbarButton<'a> {
 
 /// Thin vertical separator between toolbar groups.
 pub fn toolbar_separator(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, theme::TOOLBAR_HEIGHT - 8.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(11.0, theme::TOOLBAR_HEIGHT - 10.0), Sense::hover());
     let x = rect.center().x;
     let color = if ui.visuals().dark_mode {
-        Color32::from_gray(90)
+        Color32::from_white_alpha(40)
     } else {
-        Color32::from_gray(170)
+        Color32::from_black_alpha(50)
     };
     ui.painter().line_segment(
-        [Pos2::new(x, rect.top() + 8.0), Pos2::new(x, rect.bottom() - 8.0)],
+        [Pos2::new(x, rect.top() + 10.0), Pos2::new(x, rect.bottom() - 10.0)],
         Stroke::new(1.0, color),
+    );
+}
+
+/// A label under a toolbar control (combo box, menu), matching button labels.
+pub fn toolbar_caption(ui: &mut Ui, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(theme::TOOLBAR_LABEL_SIZE)
+            .color(if ui.visuals().dark_mode { Color32::from_gray(215) } else { Color32::from_gray(40) }),
     );
 }
 
 /// A source-list header such as "ALBUMS".
 pub fn source_header(ui: &mut Ui, text: &str) {
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     ui.label(
         egui::RichText::new(text)
-            .size(10.5)
+            .size(11.0)
             .strong()
-            .color(Color32::from_gray(110)),
+            .color(Color32::from_gray(120)),
     );
     ui.add_space(2.0);
 }
 
 /// A selectable source-list row with an optional count badge.
 pub fn source_row(ui: &mut Ui, glyph: &str, text: &str, count: Option<i64>, selected: bool) -> Response {
-    let desired = Vec2::new(ui.available_width(), 22.0);
+    let desired = Vec2::new(ui.available_width(), 26.0);
     let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         if selected {
-            painter.rect_filled(rect, 4.0, ui.visuals().selection.bg_fill);
+            painter.rect_filled(rect, 5.0, ui.visuals().selection.bg_fill);
         } else if response.hovered() {
-            painter.rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+            painter.rect_filled(rect, 5.0, Color32::from_black_alpha(14));
         }
         let color = if selected {
             Color32::WHITE
@@ -153,25 +172,25 @@ pub fn source_row(ui: &mut Ui, glyph: &str, text: &str, count: Option<i64>, sele
             ui.visuals().text_color()
         };
         painter.text(
-            Pos2::new(rect.left() + 8.0, rect.center().y),
+            Pos2::new(rect.left() + 9.0, rect.center().y),
             Align2::LEFT_CENTER,
             glyph,
-            FontId::proportional(13.0),
-            color,
+            FontId::proportional(15.0),
+            if selected { Color32::WHITE } else { Color32::from_gray(90) },
         );
         painter.text(
-            Pos2::new(rect.left() + 28.0, rect.center().y),
+            Pos2::new(rect.left() + 32.0, rect.center().y),
             Align2::LEFT_CENTER,
             text,
-            FontId::proportional(13.0),
+            FontId::proportional(14.0),
             color,
         );
         if let Some(n) = count {
             painter.text(
-                Pos2::new(rect.right() - 8.0, rect.center().y),
+                Pos2::new(rect.right() - 9.0, rect.center().y),
                 Align2::RIGHT_CENTER,
                 n.to_string(),
-                FontId::proportional(11.5),
+                FontId::proportional(12.5),
                 if selected { Color32::WHITE } else { Color32::from_gray(130) },
             );
         }
@@ -189,19 +208,19 @@ pub fn thumbnail_cell(
     selected: bool,
     size: f32,
 ) -> Response {
-    let cell = Vec2::new(size + 12.0, size + 34.0);
+    let cell = Vec2::new(size + 14.0, size + 38.0);
     let (rect, response) = ui.allocate_exact_size(cell, Sense::click());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         let dark = ui.visuals().dark_mode;
         if selected {
-            painter.rect_filled(rect, 5.0, ui.visuals().selection.bg_fill.gamma_multiply(0.35));
-            painter.rect_stroke(rect, 5.0, Stroke::new(1.5, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
+            painter.rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.30));
+            painter.rect_stroke(rect, 6.0, Stroke::new(1.5, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
         } else if response.hovered() {
-            painter.rect_filled(rect, 5.0, ui.visuals().widgets.hovered.weak_bg_fill);
+            painter.rect_filled(rect, 6.0, if dark { Color32::from_white_alpha(14) } else { Color32::from_black_alpha(12) });
         }
-        let img_rect = Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 6.0 + size / 2.0), Vec2::splat(size));
-        painter.rect_filled(img_rect, 2.0, Color32::BLACK);
+        let img_rect = Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 7.0 + size / 2.0), Vec2::splat(size));
+        painter.rect_filled(img_rect, 3.0, Color32::BLACK);
         match texture {
             Some(tex) => {
                 let tex_size = tex.size_vec2();
@@ -225,21 +244,21 @@ pub fn thumbnail_cell(
                 );
             }
         }
-        let text_color = if dark { Color32::from_gray(220) } else { Color32::from_gray(40) };
-        let caption = truncate(caption, 18);
+        let text_color = if dark { Color32::from_gray(225) } else { Color32::from_gray(35) };
+        let caption = truncate(caption, 17);
         painter.text(
-            Pos2::new(rect.center().x, img_rect.bottom() + 3.0),
+            Pos2::new(rect.center().x, img_rect.bottom() + 4.0),
             Align2::CENTER_TOP,
             caption,
-            FontId::proportional(11.0),
+            FontId::proportional(12.0),
             text_color,
         );
         painter.text(
-            Pos2::new(rect.center().x, img_rect.bottom() + 16.0),
+            Pos2::new(rect.center().x, img_rect.bottom() + 19.0),
             Align2::CENTER_TOP,
             subcaption,
-            FontId::proportional(10.0),
-            Color32::from_gray(if dark { 160 } else { 110 }),
+            FontId::proportional(11.0),
+            Color32::from_gray(if dark { 165 } else { 115 }),
         );
     }
     response

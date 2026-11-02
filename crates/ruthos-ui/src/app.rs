@@ -40,9 +40,7 @@ impl RuthosApp {
             .ok_or_else(|| anyhow::anyhow!("Ruthos needs the wgpu renderer"))?;
 
         crate::icons::install(&cc.egui_ctx);
-        // Plain labels must not capture clicks for text selection, or table
-        // rows and list items become unreliable click targets.
-        cc.egui_ctx.all_styles_mut(|s| s.interaction.selectable_labels = false);
+        theme::apply_global_style(&cc.egui_ctx);
 
         let settings = Settings::load();
         let paths = DataPaths::new(settings.data_root());

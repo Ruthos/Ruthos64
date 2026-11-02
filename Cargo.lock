@@ -3981,11 +3981,13 @@ dependencies = [
  "dicom-pixeldata",
  "dicom-transfer-syntax-registry",
  "image",
+ "libc",
  "plist",
  "rayon",
  "serde",
  "thiserror 2.0.21",
  "tracing",
+ "turbojpeg-sys",
  "uuid",
 ]
 
@@ -4563,6 +4565,17 @@ dependencies = [
  "memchr",
  "nom",
  "petgraph",
+]
+
+[[package]]
+name = "turbojpeg-sys"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49b5a974bc59382d35927e3a07eef2ba9a24fe7227cefe52ec44b508e1b90f86"
+dependencies = [
+ "anyhow",
+ "cmake",
+ "libc",
 ]
 
 [[package]]

@@ -11,7 +11,7 @@ use std::time::Instant;
 use egui::{Align2, Color32, FontId, Key, PointerButton, Pos2, Rect, Sense, Ui, Vec2, ViewportId};
 
 use ruthos_core::{ImageRow, SeriesRow, StudyRow};
-use ruthos_dicom::pixels::frame_to_gray8;
+
 use ruthos_dicom::Frame;
 use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTransform};
 
@@ -21,7 +21,7 @@ use crate::roi::{roi_color, Roi, RoiKind};
 use crate::shared::Shared;
 use crate::icons;
 use crate::theme;
-use crate::widgets::{shadow_text, thumbnail_cell, toolbar_separator, ToolbarButton};
+use crate::widgets::{shadow_text, thumbnail_cell, toolbar_caption, toolbar_separator, ToolbarButton};
 
 /// Mouse tools, in the order Horos lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,7 +109,10 @@ pub struct ViewerState {
     pub frame_idx: u32,
 
     pub view: ViewState,
+    /// Tools assigned to the left, right and middle mouse buttons.
     pub tool: Tool,
+    pub right_tool: Tool,
+    pub middle_tool: Tool,
     pub clut: String,
     pub annotations: AnnotationLevel,
     pub bilinear: bool,
@@ -135,6 +138,16 @@ pub struct ViewerState {
     load_error: Option<String>,
     status: Option<(String, Instant)>,
     wl_drag_anchor: Option<(f32, f32)>,
+    calibrate: Option<CalibrateDraft>,
+    pending_clear_calibration: Option<i64>,
+}
+
+/// The "Calibrate from this length" dialog.
+struct CalibrateDraft {
+    image_id: i64,
+    pixel_length: f32,
+    known_mm: String,
+    apply_to_series: bool,
 }
 
 const FRAME_CACHE: usize = 24;
@@ -171,6 +184,8 @@ impl ViewerState {
             frame_idx: 0,
             view: ViewState::default(),
             tool: Tool::WindowLevel,
+            right_tool: Tool::Zoom,
+            middle_tool: Tool::Move,
             clut,
             annotations,
             bilinear: true,
@@ -192,6 +207,8 @@ impl ViewerState {
             load_error: None,
             status: None,
             wl_drag_anchor: None,
+            calibrate: None,
+            pending_clear_calibration: None,
         })
     }
 
@@ -288,6 +305,16 @@ impl ViewerState {
         for loaded in shared.loader.poll() {
             match loaded.result {
                 Ok(frame) => {
+                    // A user calibration overrides whatever the header says.
+                    let frame = match shared.db.calibration(loaded.key.image_id) {
+                        Ok(Some(spacing)) => {
+                            let mut f = Arc::try_unwrap(frame).unwrap_or_else(|a| (*a).clone());
+                            f.meta.pixel_spacing = Some(spacing);
+                            f.meta.pixel_spacing_is_calibrated = true;
+                            Arc::new(f)
+                        }
+                        _ => frame,
+                    };
                     self.frames.insert(loaded.key, frame);
                     self.frame_order.push_back(loaded.key);
                     while self.frame_order.len() > FRAME_CACHE {
@@ -347,11 +374,11 @@ impl ViewerState {
             .exact_size(theme::TOOLBAR_HEIGHT)
             .frame(
                 egui::Frame::NONE
-                    .fill(theme::toolbar_fill(dark))
+                    .fill(Color32::TRANSPARENT)
                     .stroke(theme::toolbar_stroke(dark))
                     .inner_margin(egui::Margin::symmetric(6, 3)),
             )
-            .show(ui, |ui| self.toolbar(ui, shared));
+            .show(ui, |ui| { theme::paint_toolbar_background(ui, true, egui::vec2(6.0, 3.0)); self.toolbar(ui, shared) });
 
         egui::Panel::left(("viewer-drawer", self.id))
             .exact_size(theme::THUMB_SIZE + 36.0)
@@ -370,8 +397,95 @@ impl ViewerState {
             .frame(egui::Frame::NONE.fill(Color32::BLACK))
             .show(ui, |ui| self.image_area(ui, shared));
 
+        self.calibrate_modal(ui, shared);
+        if let Some(id) = self.pending_clear_calibration.take() {
+            match shared.db.clear_calibration(id) {
+                Ok(()) => {
+                    self.frames.clear();
+                    self.frame_order.clear();
+                    self.set_status("User calibration removed");
+                }
+                Err(e) => self.set_status(format!("Could not remove calibration: {e}")),
+            }
+        }
+
         if shared.loader.has_pending() || self.playing {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
+    /// Pixel length of the selected Length ROI on the current frame, if any.
+    fn selected_length_px(&self) -> Option<f32> {
+        let key = self.current_key()?;
+        let roi = self.rois.get(&key)?.get(self.selected_roi?)?;
+        match &roi.kind {
+            RoiKind::Length { a, b } => Some((*b - *a).length()),
+            _ => None,
+        }
+    }
+
+    fn calibrate_modal(&mut self, ui: &mut Ui, shared: &Shared) {
+        let Some(draft) = self.calibrate.as_mut() else { return };
+        let mut close = false;
+        let mut apply: Option<(f64, bool)> = None;
+        let pixel_length = draft.pixel_length;
+        let ctx = ui.ctx().clone();
+        egui::Modal::new(egui::Id::unique(("calibrate", self.id))).show(&ctx, |ui| {
+            ui.set_min_width(380.0);
+            ui.heading("Calibrate measurements");
+            ui.label(format!(
+                "The selected length is {pixel_length:.1} pixels. Enter its real length and every \
+                 measurement on this image will be reported in millimetres."
+            ));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label("Real length");
+                let r = ui.add(egui::TextEdit::singleline(&mut draft.known_mm).desired_width(90.0).hint_text("e.g. 100"));
+                r.request_focus();
+                ui.label("mm");
+            });
+            ui.checkbox(&mut draft.apply_to_series, "Apply to every image in this series");
+            ui.add_space(8.0);
+            let mm: Option<f64> = draft.known_mm.trim().replace(',', ".").parse::<f64>().ok().filter(|v| *v > 0.0);
+            if let Some(mm) = mm {
+                let spacing = mm / pixel_length as f64;
+                ui.label(
+                    egui::RichText::new(format!("Pixel size: {spacing:.4} mm/px"))
+                        .size(12.0)
+                        .color(Color32::from_gray(170)),
+                );
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+                if ui.add_enabled(mm.is_some(), egui::Button::new("Calibrate")).clicked() {
+                    apply = Some((mm.unwrap_or(1.0), draft.apply_to_series));
+                    close = true;
+                }
+            });
+        });
+        if let Some((mm, to_series)) = apply {
+            let spacing = mm / pixel_length as f64;
+            let image_id = draft.image_id;
+            let series_id = self.current_series().id;
+            let result = if to_series {
+                shared.db.set_series_calibration(series_id, spacing, spacing, "user length").map(|_| ())
+            } else {
+                shared.db.set_calibration(image_id, spacing, spacing, "user length")
+            };
+            match result {
+                Ok(()) => {
+                    // Reload cached frames so the new spacing takes effect.
+                    self.frames.clear();
+                    self.frame_order.clear();
+                    self.set_status(format!("Calibrated: {spacing:.4} mm per pixel"));
+                }
+                Err(e) => self.set_status(format!("Calibration failed: {e}")),
+            }
+        }
+        if close {
+            self.calibrate = None;
         }
     }
 
@@ -385,7 +499,7 @@ impl ViewerState {
             // Series popup
             ui.vertical(|ui| {
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new("Series").size(theme::TOOLBAR_LABEL_SIZE).color(Color32::from_gray(200)));
+                toolbar_caption(ui, "Series");
                 let current = self.series.get(self.series_idx).map(|s| s.display_name()).unwrap_or_default();
                 let mut chosen = self.series_idx;
                 egui::ComboBox::from_id_salt(("series-popup", self.id))
@@ -417,17 +531,45 @@ impl ViewerState {
                 ui.add_space(2.0);
                 let glyph = self.tool.glyph();
                 ui.menu_button(egui::RichText::new(format!("{glyph}  {} {}", self.tool.label(), icons::CARET_DOWN)).size(13.0), |ui| {
-                    for t in Tool::ALL {
-                        let text = format!("{}  {}", t.glyph(), t.label());
-                        if ui.selectable_label(self.tool == t, text).clicked() {
-                            self.tool = t;
-                            self.drag_draft = None;
-                            self.angle_draft = None;
-                            ui.close();
+                    // One row per tool; the three columns assign it to the
+                    // left, right or middle mouse button.
+                    ui.horizontal(|ui| {
+                        ui.add_space(4.0);
+                        for (w, h) in [(26.0, "L"), (26.0, "R"), (26.0, "M")] {
+                            ui.add_sized([w, 18.0], egui::Label::new(egui::RichText::new(h).size(11.0).strong().color(Color32::from_gray(170))));
                         }
+                        ui.label(egui::RichText::new("Tool  (mouse button)").size(11.0).color(Color32::from_gray(170)));
+                    });
+                    ui.separator();
+                    let mut changed = false;
+                    for t in Tool::ALL {
+                        ui.horizontal(|ui| {
+                            ui.add_space(4.0);
+                            if ui.add_sized([26.0, 20.0], egui::Button::selectable(self.tool == t, "L")).clicked() {
+                                self.tool = t;
+                                changed = true;
+                            }
+                            if ui.add_sized([26.0, 20.0], egui::Button::selectable(self.right_tool == t, "R")).clicked() {
+                                self.right_tool = t;
+                                changed = true;
+                            }
+                            if ui.add_sized([26.0, 20.0], egui::Button::selectable(self.middle_tool == t, "M")).clicked() {
+                                self.middle_tool = t;
+                                changed = true;
+                            }
+                            if ui.selectable_label(self.tool == t, format!("{}  {}", t.glyph(), t.label())).clicked() {
+                                self.tool = t;
+                                changed = true;
+                                ui.close();
+                            }
+                        });
+                    }
+                    if changed {
+                        self.drag_draft = None;
+                        self.angle_draft = None;
                     }
                 });
-                ui.label(egui::RichText::new("Tools").size(theme::TOOLBAR_LABEL_SIZE).color(Color32::from_gray(200)));
+                toolbar_caption(ui, "Tools");
             });
 
             // WL/WW menu
@@ -459,7 +601,7 @@ impl ViewerState {
                         ui.add(egui::DragValue::new(&mut self.view.window_width).speed(1.0).range(1.0..=f32::MAX));
                     });
                 });
-                ui.label(egui::RichText::new("WL/WW").size(theme::TOOLBAR_LABEL_SIZE).color(Color32::from_gray(200)));
+                toolbar_caption(ui, "WL/WW");
             });
 
             // CLUT menu
@@ -475,7 +617,7 @@ impl ViewerState {
                         }
                     });
                 });
-                ui.label(egui::RichText::new("CLUT").size(theme::TOOLBAR_LABEL_SIZE).color(Color32::from_gray(200)));
+                toolbar_caption(ui, "CLUT");
             });
 
             ToolbarButton::new(icons::THREE_D, "3D")
@@ -518,7 +660,7 @@ impl ViewerState {
                         ui.close();
                     }
                 });
-                ui.label(egui::RichText::new("Orientation").size(theme::TOOLBAR_LABEL_SIZE).color(Color32::from_gray(200)));
+                toolbar_caption(ui, "Orientation");
             });
             toolbar_separator(ui);
 
@@ -531,6 +673,22 @@ impl ViewerState {
                 if let Some(img) = self.images.get_mut(self.image_idx) {
                     img.is_key_image = !img.is_key_image;
                     let _ = shared.db.set_key_image(img.id, img.is_key_image);
+                }
+            }
+            let selected_length = self.selected_length_px();
+            if ToolbarButton::new(icons::TOOL_LENGTH, "Calibrate")
+                .enabled(selected_length.is_some())
+                .tooltip("Draw a Length over something of known size, select it, then set its real length to calibrate this image")
+                .show(ui)
+                .clicked()
+            {
+                if let (Some(px), Some(img)) = (selected_length, self.current_image()) {
+                    self.calibrate = Some(CalibrateDraft {
+                        image_id: img.id,
+                        pixel_length: px,
+                        known_mm: String::new(),
+                        apply_to_series: self.images.len() > 1,
+                    });
                 }
             }
             if ToolbarButton::new(icons::EXPORT, "Export").tooltip("Export the current image as PNG or JPEG").show(ui).clicked() {
@@ -547,7 +705,7 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(6.0);
                 ui.add_enabled(can_play, egui::Slider::new(&mut self.fps, 1.0..=60.0).show_value(false));
-                ui.label(egui::RichText::new(format!("Speed {} fps", self.fps.round() as i32)).size(theme::TOOLBAR_LABEL_SIZE).color(Color32::from_gray(200)));
+                toolbar_caption(ui, &format!("Speed {} fps", self.fps.round() as i32));
             });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -725,16 +883,8 @@ impl ViewerState {
         else {
             return;
         };
-        let rgb = if frame.is_color() {
-            match &frame.pixels {
-                ruthos_dicom::FramePixels::Rgba(rgba) => rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>(),
-                _ => unreachable!(),
-            }
-        } else {
-            let gray = frame_to_gray8(&frame, self.view.window_center, self.view.window_width);
-            let clut = shared.cluts.get(&self.clut).cloned().unwrap_or_else(ruthos_dicom::Clut::grayscale);
-            gray.iter().flat_map(|&g| clut.table[g as usize]).collect::<Vec<u8>>()
-        };
+        let clut = shared.cluts.get(&self.clut).cloned().unwrap_or_else(ruthos_dicom::Clut::grayscale);
+        let rgb = ruthos_dicom::pixels::frame_to_rgb8(&frame, self.view.window_center, self.view.window_width, &clut);
         match image::RgbImage::from_raw(frame.width, frame.height, rgb) {
             Some(img) => match img.save(&path) {
                 Ok(()) => self.set_status(format!("Exported {}", path.display())),
@@ -906,47 +1056,113 @@ impl ViewerState {
             }
         }
 
-        // Right drag zooms, middle drag pans (Horos defaults).
-        if response.dragged_by(PointerButton::Secondary) {
-            let dy = response.drag_delta().y;
-            let factor = (-dy * 0.01).exp();
-            self.zoom_about(t, Some(t.rect.center() + t.state.pan), factor);
-        }
-        if response.dragged_by(PointerButton::Middle) {
-            t.state.pan += response.drag_delta();
-        }
-
         let pos = response.interact_pointer_pos();
 
-        // Left button by tool.
-        match self.tool {
+        // Each mouse button drives the tool assigned to it (Tools menu).
+        for (button, tool) in [
+            (PointerButton::Primary, self.tool),
+            (PointerButton::Secondary, self.right_tool),
+            (PointerButton::Middle, self.middle_tool),
+        ] {
+            self.apply_tool(ui, response, t, frame, key, tool, button, hover, pos);
+        }
+
+        // Double-click: fit (Horos resets on double click with some tools).
+        if response.double_clicked_by(PointerButton::Primary) && !self.tool.is_roi() {
+            self.fit_pending = true;
+        }
+
+        // Right-click menu: calibration and ROI housekeeping.
+        let selected_length = self.selected_length_px();
+        let current_image_id = self.current_image().map(|i| i.id);
+        let has_calibration = current_image_id
+            .and_then(|id| ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique(("has-cal", id)))))
+            .unwrap_or(false);
+        let mut open_calibrate = false;
+        let mut clear_calibration = false;
+        let mut delete_all = false;
+        response.context_menu(|ui| {
+            if ui.add_enabled(selected_length.is_some(), egui::Button::new("Calibrate from selected length…")).clicked() {
+                open_calibrate = true;
+                ui.close();
+            }
+            if ui.add_enabled(has_calibration || frame.meta.pixel_spacing_is_calibrated, egui::Button::new("Remove user calibration")).clicked() {
+                clear_calibration = true;
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Delete all measurements on this image").clicked() {
+                delete_all = true;
+                ui.close();
+            }
+            if ui.button("Fit image to window").clicked() {
+                self.fit_pending = true;
+                ui.close();
+            }
+        });
+        if open_calibrate {
+            if let (Some(px), Some(id)) = (selected_length, current_image_id) {
+                self.calibrate = Some(CalibrateDraft {
+                    image_id: id,
+                    pixel_length: px,
+                    known_mm: String::new(),
+                    apply_to_series: self.images.len() > 1,
+                });
+            }
+        }
+        if clear_calibration {
+            if let Some(id) = current_image_id {
+                self.pending_clear_calibration = Some(id);
+            }
+        }
+        if delete_all {
+            self.rois.remove(key);
+            self.selected_roi = None;
+        }
+    }
+
+    /// Run one tool for one mouse button.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_tool(
+        &mut self,
+        ui: &mut Ui,
+        response: &egui::Response,
+        t: &mut ViewTransform,
+        frame: &Frame,
+        key: &FrameKey,
+        tool: Tool,
+        button: PointerButton,
+        hover: Option<Pos2>,
+        pos: Option<Pos2>,
+    ) {
+        match tool {
             Tool::WindowLevel => {
-                if response.drag_started_by(PointerButton::Primary) {
+                if response.drag_started_by(button) {
                     self.wl_drag_anchor = Some((t.state.window_center, t.state.window_width));
                 }
-                if response.dragged_by(PointerButton::Primary) {
+                if response.dragged_by(button) {
                     let d = response.drag_delta();
                     let scale = (t.state.window_width.abs() / 256.0).max(0.5);
                     t.state.window_width = (t.state.window_width + d.x * scale).max(1.0);
                     t.state.window_center += d.y * scale;
                 }
-                if response.drag_stopped_by(PointerButton::Primary) {
+                if response.drag_stopped_by(button) {
                     self.wl_drag_anchor = None;
                 }
             }
             Tool::Move => {
-                if response.dragged_by(PointerButton::Primary) {
+                if response.dragged_by(button) {
                     t.state.pan += response.drag_delta();
                 }
             }
             Tool::Zoom => {
-                if response.dragged_by(PointerButton::Primary) {
+                if response.dragged_by(button) {
                     let dy = response.drag_delta().y;
                     self.zoom_about(t, Some(t.rect.center() + t.state.pan), (-dy * 0.01).exp());
                 }
             }
             Tool::Rotate => {
-                if response.dragged_by(PointerButton::Primary) {
+                if response.dragged_by(button) {
                     t.state.rotation_deg = (t.state.rotation_deg + response.drag_delta().x * 0.5).rem_euclid(360.0);
                 }
             }
@@ -957,7 +1173,7 @@ impl ViewerState {
                         if let Some(hp) = hover {
                             d.c = t.screen_to_image(hp);
                         }
-                        if response.clicked_by(PointerButton::Primary) {
+                        if response.clicked_by(button) {
                             let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c });
                             if !roi.is_degenerate() {
                                 self.rois.entry(*key).or_default().push(roi);
@@ -969,7 +1185,7 @@ impl ViewerState {
                             d.b = p;
                             d.c = p;
                         }
-                        if response.drag_stopped_by(PointerButton::Primary) {
+                        if response.drag_stopped_by(button) {
                             if (d.b - d.a).length() < 1.0 {
                                 self.angle_draft = None;
                             } else {
@@ -977,39 +1193,37 @@ impl ViewerState {
                             }
                         }
                     }
-                } else if response.drag_started_by(PointerButton::Primary) {
+                } else if response.drag_started_by(button) {
                     if let Some(p) = img_pos {
                         if !self.try_select_roi(t, key, pos) {
                             self.angle_draft = Some(AngleDraft { a: p, b: p, b_fixed: false, c: p });
                         }
                     }
-                } else if response.clicked_by(PointerButton::Primary) {
+                } else if response.clicked_by(button) {
                     self.try_select_roi(t, key, pos);
                 }
             }
             Tool::Point => {
-                if response.clicked_by(PointerButton::Primary) {
-                    if !self.try_select_roi(t, key, pos) {
-                        if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
-                            if frame.value_at(p.x.floor() as i64, p.y.floor() as i64).is_some() {
-                                self.rois.entry(*key).or_default().push(Roi::new(RoiKind::Point { p }));
-                            }
+                if response.clicked_by(button) && !self.try_select_roi(t, key, pos) {
+                    if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
+                        if frame.value_at(p.x.floor() as i64, p.y.floor() as i64).is_some() {
+                            self.rois.entry(*key).or_default().push(Roi::new(RoiKind::Point { p }));
                         }
                     }
                 }
             }
             Tool::Length | Tool::Rectangle | Tool::Oval | Tool::Arrow => {
-                if response.drag_started_by(PointerButton::Primary) {
+                if response.drag_started_by(button) {
                     if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
                         if !self.try_select_roi(t, key, pos) {
                             self.drag_draft = Some((p, p));
                         }
                     }
                 }
-                if response.dragged_by(PointerButton::Primary) {
+                if response.dragged_by(button) {
                     if let (Some((a, _)), Some(p)) = (self.drag_draft, pos) {
                         let mut b = t.screen_to_image(p);
-                        if ui.input(|i| i.modifiers.shift) && matches!(self.tool, Tool::Rectangle | Tool::Oval) {
+                        if ui.input(|i| i.modifiers.shift) && matches!(tool, Tool::Rectangle | Tool::Oval) {
                             // Shift constrains to a square / circle.
                             let d = b - a;
                             let m = d.x.abs().max(d.y.abs());
@@ -1018,9 +1232,9 @@ impl ViewerState {
                         self.drag_draft = Some((a, b));
                     }
                 }
-                if response.drag_stopped_by(PointerButton::Primary) {
+                if response.drag_stopped_by(button) {
                     if let Some((a, b)) = self.drag_draft.take() {
-                        if let Some(kind) = draft_kind(self.tool, a, b) {
+                        if let Some(kind) = draft_kind(tool, a, b) {
                             let roi = Roi::new(kind);
                             if !roi.is_degenerate() {
                                 let list = self.rois.entry(*key).or_default();
@@ -1029,19 +1243,10 @@ impl ViewerState {
                             }
                         }
                     }
-                } else if response.clicked_by(PointerButton::Primary) {
+                } else if response.clicked_by(button) {
                     self.try_select_roi(t, key, pos);
                 }
             }
-        }
-
-        // Double-click: fit (Horos resets on double click with some tools).
-        if response.double_clicked_by(PointerButton::Primary) && !self.tool.is_roi() {
-            self.fit_pending = true;
-        }
-
-        if response.secondary_clicked() {
-            // Nothing yet; context menu lands with the ROI manager.
         }
     }
 

@@ -18,7 +18,7 @@ use ruthos_core::{AlbumRow, DateFilter, ImportEvent, ImportMode, Importer, Serie
 use crate::shared::Shared;
 use crate::icons;
 use crate::theme;
-use crate::widgets::{source_header, source_row, thumbnail_cell, toolbar_separator, truncate, ToolbarButton};
+use crate::widgets::{source_header, source_row, thumbnail_cell, toolbar_caption, toolbar_separator, truncate, ToolbarButton};
 
 #[derive(Debug, Clone)]
 enum RowKind {
@@ -256,20 +256,20 @@ impl BrowserState {
             .exact_size(theme::TOOLBAR_HEIGHT)
             .frame(
                 egui::Frame::NONE
-                    .fill(theme::toolbar_fill(false))
+                    .fill(Color32::TRANSPARENT)
                     .stroke(theme::toolbar_stroke(false))
                     .inner_margin(egui::Margin::symmetric(6, 3)),
             )
-            .show(ui, |ui| self.toolbar(ui, shared));
+            .show(ui, |ui| { theme::paint_toolbar_background(ui, false, egui::vec2(6.0, 3.0)); self.toolbar(ui, shared) });
 
         egui::Panel::bottom("browser-status")
             .exact_size(24.0)
-            .frame(egui::Frame::NONE.fill(theme::toolbar_fill(false)).inner_margin(egui::Margin::symmetric(10, 3)))
+            .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT).inner_margin(egui::Margin::symmetric(10, 3)))
             .show(ui, |ui| self.status_bar(ui, shared));
 
         if self.selected_study.is_some() {
             egui::Panel::bottom("browser-thumbs")
-                .exact_size(theme::THUMB_SIZE + 50.0)
+                .exact_size(theme::THUMB_SIZE + 54.0)
                 .frame(egui::Frame::NONE.fill(Color32::from_rgb(228, 228, 228)).inner_margin(egui::Margin::symmetric(8, 4)))
                 .show(ui, |ui| self.thumbnail_strip(ui, shared));
         }
@@ -373,7 +373,7 @@ impl BrowserState {
             ui.vertical(|ui| {
                 ui.set_width(SORT_W);
                 ui.add_space(4.0);
-                ui.label(RichText::new("Sort").size(theme::TOOLBAR_LABEL_SIZE));
+                toolbar_caption(ui, "Sort");
                 let label = match self.filter.sort {
                     StudySort::DateAddedDesc => "Date added",
                     StudySort::StudyDateDesc => "Study date",
@@ -399,7 +399,7 @@ impl BrowserState {
             ui.vertical(|ui| {
                 ui.set_width(DATE_W);
                 ui.add_space(4.0);
-                ui.label(RichText::new("Date").size(theme::TOOLBAR_LABEL_SIZE));
+                toolbar_caption(ui, "Date");
                 egui::ComboBox::from_id_salt("date-filter")
                     .selected_text(self.filter.date.label())
                     .width(DATE_W - 4.0)
@@ -415,7 +415,7 @@ impl BrowserState {
             ui.vertical(|ui| {
                 ui.set_width(MOD_W);
                 ui.add_space(4.0);
-                ui.label(RichText::new("Modality").size(theme::TOOLBAR_LABEL_SIZE));
+                toolbar_caption(ui, "Modality");
                 let text = if self.filter.modality.is_empty() { "Any".to_string() } else { self.filter.modality.clone() };
                 egui::ComboBox::from_id_salt("modality-filter").selected_text(text).width(MOD_W - 4.0).show_ui(ui, |ui| {
                     if ui.selectable_label(self.filter.modality.is_empty(), "Any").clicked() {
@@ -433,7 +433,7 @@ impl BrowserState {
             ui.vertical(|ui| {
                 ui.set_width(SEARCH_W);
                 ui.add_space(4.0);
-                ui.label(RichText::new("Search").size(theme::TOOLBAR_LABEL_SIZE));
+                toolbar_caption(ui, "Search");
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut self.filter.text)
                         .hint_text("Name, ID, description…")
@@ -576,7 +576,7 @@ impl BrowserState {
         let selected_album = self.selected_album;
 
         let text_color = Color32::from_gray(30);
-        let row_h = 22.0;
+        let row_h = theme::TABLE_ROW_HEIGHT;
         TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
@@ -592,10 +592,10 @@ impl BrowserState {
             .column(Column::initial(130.0).at_least(80.0).clip(true))
             .column(Column::initial(160.0).at_least(60.0).clip(true))
             .column(Column::remainder().at_least(70.0).clip(true))
-            .header(24.0, |mut header| {
+            .header(theme::TABLE_HEADER_HEIGHT, |mut header| {
                 for title in ["", "Patient Name", "Patient ID", "Study Date", "Modality", "Description", "Images", "Date Added", "Comments", "Status"] {
                     header.col(|ui| {
-                        ui.label(RichText::new(title).strong().size(12.0));
+                        ui.label(RichText::new(title).strong().color(Color32::from_gray(80)));
                     });
                 }
             })
@@ -631,7 +631,7 @@ impl BrowserState {
                             ];
                             for (ci, text) in cells.iter().enumerate() {
                                 row.col(|ui| {
-                                    let mut rt = RichText::new(text).size(12.5).color(if is_sel { Color32::WHITE } else { text_color });
+                                    let mut rt = RichText::new(text).color(if is_sel { Color32::WHITE } else { text_color });
                                     if ci == 0 {
                                         rt = rt.strong();
                                     }
@@ -723,7 +723,7 @@ impl BrowserState {
                             ];
                             for text in cells.iter() {
                                 row.col(|ui| {
-                                    ui.label(RichText::new(text).size(12.0).color(if is_sel { Color32::WHITE } else { Color32::from_gray(70) }));
+                                    ui.label(RichText::new(text).color(if is_sel { Color32::WHITE } else { Color32::from_gray(75) }));
                                 });
                             }
                             let r = row.response();

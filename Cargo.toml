@@ -40,6 +40,8 @@ dicom-encoding = "0.10"
 dicom-pixeldata = { version = "0.10", default-features = false, features = ["native", "rayon", "openjpeg-sys", "charls", "image"] }
 dicom-ul = "0.10"
 dicom-transfer-syntax-registry = "0.10"
+turbojpeg-sys = { version = "1.2", default-features = false, features = ["cmake"] }
+libc = "0.2"
 
 # Storage and files
 rusqlite = { version = "0.41", features = ["bundled"] }

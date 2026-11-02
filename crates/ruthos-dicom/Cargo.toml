@@ -14,6 +14,8 @@ dicom-dictionary-std = { workspace = true }
 dicom-encoding = { workspace = true }
 dicom-pixeldata = { workspace = true }
 dicom-transfer-syntax-registry = { workspace = true }
+turbojpeg-sys = { workspace = true }
+libc = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

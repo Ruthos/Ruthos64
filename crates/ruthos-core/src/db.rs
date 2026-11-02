@@ -471,6 +471,45 @@ impl Database {
         Ok(n > 0)
     }
 
+    // ------------------------------------------------------------ calibration
+
+    /// User calibration (row mm, column mm) for an image, overriding the header.
+    pub fn calibration(&self, image_id: i64) -> Result<Option<[f64; 2]>> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                "SELECT row_mm, col_mm FROM calibration WHERE image_id = ?1",
+                params![image_id],
+                |r| Ok([r.get::<_, f64>(0)?, r.get::<_, f64>(1)?]),
+            )
+            .optional()?)
+    }
+
+    pub fn set_calibration(&self, image_id: i64, row_mm: f64, col_mm: f64, description: &str) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT OR REPLACE INTO calibration (image_id, row_mm, col_mm, description, date_set)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![image_id, row_mm, col_mm, description, now_unix()],
+        )?;
+        Ok(())
+    }
+
+    /// Apply one calibration to every image of a series.
+    pub fn set_series_calibration(&self, series_id: i64, row_mm: f64, col_mm: f64, description: &str) -> Result<usize> {
+        let images = self.images_for_series(series_id)?;
+        for img in &images {
+            self.set_calibration(img.id, row_mm, col_mm, description)?;
+        }
+        Ok(images.len())
+    }
+
+    pub fn clear_calibration(&self, image_id: i64) -> Result<()> {
+        self.conn
+            .lock()
+            .execute("DELETE FROM calibration WHERE image_id = ?1", params![image_id])?;
+        Ok(())
+    }
+
     // ----------------------------------------------------------------- albums
 
     pub fn albums(&self) -> Result<Vec<AlbumRow>> {
@@ -724,6 +763,14 @@ fn migrate(conn: &Connection) -> Result<()> {
             album_id INTEGER NOT NULL REFERENCES album(id) ON DELETE CASCADE,
             study_id INTEGER NOT NULL REFERENCES study(id) ON DELETE CASCADE,
             PRIMARY KEY (album_id, study_id)
+         );
+
+         CREATE TABLE IF NOT EXISTS calibration (
+            image_id INTEGER PRIMARY KEY REFERENCES image(id) ON DELETE CASCADE,
+            row_mm REAL NOT NULL,
+            col_mm REAL NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            date_set INTEGER NOT NULL
          );",
     )?;
     conn.execute(
@@ -802,5 +849,22 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(db.counts().unwrap(), (0, 0, 0));
         assert_eq!(db.albums().unwrap()[0].number_of_studies, 0);
+    }
+
+    #[test]
+    fn calibration_round_trip() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let InsertOutcome::Inserted { series_id, image_id, .. } =
+            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(db.calibration(image_id).unwrap(), None);
+        db.set_calibration(image_id, 0.1, 0.1, "ruler").unwrap();
+        assert_eq!(db.calibration(image_id).unwrap(), Some([0.1, 0.1]));
+        assert_eq!(db.set_series_calibration(series_id, 0.2, 0.2, "ruler").unwrap(), 1);
+        assert_eq!(db.calibration(image_id).unwrap(), Some([0.2, 0.2]));
+        db.clear_calibration(image_id).unwrap();
+        assert_eq!(db.calibration(image_id).unwrap(), None);
     }
 }

@@ -52,14 +52,28 @@ pub const TOOL_OVAL: &str = "\u{E18A}"; // circle
 pub const TOOL_ARROW: &str = "\u{E092}"; // arrow up right
 pub const TOOL_POINT: &str = "\u{E1D6}"; // crosshair
 
-/// Register the icon font with egui so the glyph constants render.
+/// Inter (SIL Open Font Licence), the UI typeface.
+pub const INTER_BYTES: &[u8] = include_bytes!("../../../assets/fonts/Inter.ttf");
+
+/// Register Inter as the text face and Phosphor as the icon fallback, keeping
+/// egui's bundled fonts behind them for anything they lack.
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts
         .font_data
+        .insert("inter".to_string(), std::sync::Arc::new(egui::FontData::from_static(INTER_BYTES)));
+    fonts
+        .font_data
         .insert("phosphor".to_string(), std::sync::Arc::new(egui::FontData::from_static(FONT_BYTES)));
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().push("phosphor".to_string());
-    }
+    // Phosphor first: it only covers the Private Use Area, so text falls
+    // through to Inter, while Inter's own PUA glyphs never shadow the icons.
+    let proportional = fonts.families.entry(egui::FontFamily::Proportional).or_default();
+    proportional.insert(0, "phosphor".to_string());
+    proportional.insert(1, "inter".to_string());
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .push("phosphor".to_string());
     ctx.set_fonts(fonts);
 }

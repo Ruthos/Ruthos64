@@ -117,8 +117,9 @@ You will need:
 
 1. The Rust toolchain via [rustup](https://rustup.rs). Stable channel, `x86_64-pc-windows-msvc` target.
 2. Microsoft Visual C++ Build Tools (the "Desktop development with C++" workload). The MSVC compiler links Rust and builds the two C/C++ codecs below.
-3. [CMake](https://cmake.org/download/) on the `PATH` (or in the `CMAKE` environment variable). It builds OpenJPEG (JPEG 2000) and CharLS (JPEG-LS), the only non-Rust code in the tree.
-4. Git.
+3. [CMake](https://cmake.org/download/) on the `PATH` (or in the `CMAKE` environment variable). It builds the three C/C++ codecs: OpenJPEG (JPEG 2000), CharLS (JPEG-LS) and libjpeg-turbo (JPEG, including 12-bit).
+4. [NASM](https://www.nasm.us/) on the `PATH`, optional. Without it libjpeg-turbo builds without SIMD and decodes more slowly.
+5. Git.
 
 Then:
 
@@ -141,10 +142,9 @@ Verified by `crates/ruthos-dicom/tests/samples.rs` against real files:
 |---|---|
 | Implicit and Explicit VR Little Endian, Big Endian, Deflated | Decodes |
 | RLE Lossless | Decodes |
-| JPEG Baseline (8-bit lossy), JPEG Lossless | Decodes |
+| JPEG Baseline, JPEG Extended 12-bit (Process 2 & 4), JPEG Lossless 8/12/16-bit | Decodes (libjpeg-turbo 3; non-standard scan headers from some modalities are repaired) |
 | JPEG-LS Lossless and Near-lossless | Decodes (CharLS) |
 | JPEG 2000 Lossless and Lossy | Decodes (OpenJPEG) |
-| JPEG Extended 12-bit lossy (Process 2 & 4) | Not yet. The Rust JPEG decoder is 8-bit only. |
 | 32-bit pixel data (RT Dose) | Not yet |
 | Files with no DICOM meta header | Accepted (Explicit, then Implicit VR LE) |
 

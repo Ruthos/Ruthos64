@@ -16,9 +16,9 @@ const NOT_IMAGES: &[&str] = &["ExplVR_LitEndNoMeta.dcm"];
 
 /// Files whose transfer syntax we knowingly do not decode yet.
 // rtdose: 32-bit pixel data (RT Dose, not an image for the viewer).
-// JPEG-lossy: 12-bit JPEG Extended (Process 2 & 4); the Rust JPEG decoder
-// only handles 8-bit lossy. Tracked as a known gap.
-const KNOWN_UNSUPPORTED: &[&str] = &["rtdose.dcm", "JPEG-lossy.dcm"];
+// JPEG-lossy (12-bit JPEG Extended) now decodes through libjpeg-turbo.
+
+const KNOWN_UNSUPPORTED: &[&str] = &["rtdose.dcm"];
 
 #[test]
 fn every_sample_reads_metadata() {

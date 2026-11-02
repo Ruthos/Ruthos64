@@ -58,12 +58,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         s = load(vec2<i32>(round(p)));
     }
 
-    if (u.wl.w > 0.5) {
-        return vec4<f32>(s.rgb, 1.0);
-    }
-
     let center = u.wl.x;
     let width = max(u.wl.y, 1.0);
+
+    if (u.wl.w > 0.5) {
+        // Colour: the window applies to each channel over 0..255, as Horos does.
+        let v = s.rgb * 255.0;
+        let t = clamp((v - vec3<f32>(center - 0.5)) / (width - 1.0) + vec3<f32>(0.5), vec3<f32>(0.0), vec3<f32>(1.0));
+        return vec4<f32>(t, 1.0);
+    }
     var t = (s.r - (center - 0.5)) / (width - 1.0) + 0.5;
     t = clamp(t, 0.0, 1.0);
     if (u.wl.z > 0.5) {

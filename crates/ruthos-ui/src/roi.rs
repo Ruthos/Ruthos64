@@ -118,7 +118,7 @@ impl Roi {
                 match ViewTransform::length_mm(*a, *b, spacing) {
                     Some(mm) if mm >= 10.0 => format!("{:.2} cm", mm / 10.0),
                     Some(mm) => format!("{mm:.2} mm"),
-                    None => format!("{:.1} px", (*b - *a).length()),
+                    None => format!("{:.1} px  (not calibrated)", (*b - *a).length()),
                 }
             }
             RoiKind::Angle { a, b, c } => {
@@ -132,7 +132,7 @@ impl Roi {
                     match s.area_mm2 {
                         Some(a) if a >= 100.0 => lines.push(format!("Area: {:.2} cm²", a / 100.0)),
                         Some(a) => lines.push(format!("Area: {a:.1} mm²")),
-                        None => lines.push(format!("Pixels: {}", s.count)),
+                        None => lines.push(format!("Area: {} px  (not calibrated)", s.count)),
                     }
                     lines.join("\n")
                 }

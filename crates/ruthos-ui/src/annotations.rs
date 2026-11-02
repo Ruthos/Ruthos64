@@ -67,9 +67,7 @@ pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
         tl.push(format!("Image size: {} x {}", ctx.frame.width, ctx.frame.height));
         tl.push(format!("View size: {} x {}", rect.width().round() as i64, rect.height().round() as i64));
     }
-    if !ctx.frame.is_color() {
-        tl.push(format!("WL: {}  WW: {}", s.window_center.round() as i64, s.window_width.round() as i64));
-    }
+    tl.push(format!("WL: {}  WW: {}", s.window_center.round() as i64, s.window_width.round() as i64));
     if full {
         if let Some((x, y)) = ctx.mouse_pixel {
             match ctx.frame.value_at(x, y) {

@@ -65,7 +65,8 @@ pub fn convert_pictures(pictures: &[PathBuf], info: &PictureInfo, out_dir: &Path
     for (i, path) in pictures.iter().enumerate() {
         let rgb = load_rgb(path, info.max_edge)?;
         let sop_uid = new_uid();
-        let obj = build_object(&rgb, info, &study_uid, &series_uid, &sop_uid, &study_date, &time, i as u32 + 1);
+        let picture = if is_grayscale(&rgb) { Picture::Gray(to_gray(&rgb)) } else { Picture::Rgb(rgb) };
+        let obj = build_object(&picture, info, &study_uid, &series_uid, &sop_uid, &study_date, &time, i as u32 + 1);
         let meta = FileMetaTableBuilder::new()
             .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
             .media_storage_sop_class_uid(uids::SECONDARY_CAPTURE_IMAGE_STORAGE)
@@ -109,9 +110,47 @@ pub fn load_rgb(path: &Path, max_edge: Option<u32>) -> Result<image::RgbImage> {
     Ok(img.to_rgb8())
 }
 
+/// Pixel payload chosen for a picture.
+enum Picture {
+    Rgb(image::RgbImage),
+    /// Exported radiographs and scanned films are grayscale JPEGs; storing
+    /// them as MONOCHROME2 makes window/level and CLUTs work and keeps the
+    /// file a third of the size.
+    Gray(image::GrayImage),
+}
+
+/// True when practically every pixel has equal R, G and B.
+pub fn is_grayscale(img: &image::RgbImage) -> bool {
+    let n = (img.width() as usize) * (img.height() as usize);
+    if n == 0 {
+        return false;
+    }
+    let allowed_off = n / 1000; // 0.1% of pixels may carry JPEG chroma noise
+    let mut off = 0usize;
+    for p in img.pixels() {
+        let [r, g, b] = p.0;
+        if r.abs_diff(g) > 6 || g.abs_diff(b) > 6 || r.abs_diff(b) > 6 {
+            off += 1;
+            if off > allowed_off {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn to_gray(img: &image::RgbImage) -> image::GrayImage {
+    let mut out = image::GrayImage::new(img.width(), img.height());
+    for (src, dst) in img.pixels().zip(out.pixels_mut()) {
+        let [r, g, b] = src.0;
+        dst.0[0] = ((r as u16 + g as u16 + b as u16) / 3) as u8;
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_object(
-    rgb: &image::RgbImage,
+    picture: &Picture,
     info: &PictureInfo,
     study_uid: &str,
     series_uid: &str,
@@ -120,8 +159,16 @@ fn build_object(
     time: &str,
     instance_number: u32,
 ) -> InMemDicomObject {
-    let (w, h) = rgb.dimensions();
-    let mut pixels = rgb.as_raw().clone();
+    let (w, h, samples, photometric, mut pixels) = match picture {
+        Picture::Rgb(rgb) => {
+            let (w, h) = rgb.dimensions();
+            (w, h, 3u16, "RGB", rgb.as_raw().clone())
+        }
+        Picture::Gray(gray) => {
+            let (w, h) = gray.dimensions();
+            (w, h, 1u16, "MONOCHROME2", gray.as_raw().clone())
+        }
+    };
     if pixels.len() % 2 == 1 {
         pixels.push(0);
     }
@@ -166,12 +213,18 @@ fn build_object(
     put_str(tags::STUDY_ID, VR::SH, "1");
     put_str(tags::SERIES_NUMBER, VR::IS, "1");
     put_str(tags::INSTANCE_NUMBER, VR::IS, &instance_number.to_string());
-    put_str(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "RGB");
+    put_str(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, photometric);
     put_str(tags::BURNED_IN_ANNOTATION, VR::CS, "NO");
+    if samples == 1 {
+        put_str(tags::WINDOW_CENTER, VR::DS, "128");
+        put_str(tags::WINDOW_WIDTH, VR::DS, "256");
+    }
 
     obj.put(DataElement::new(tags::IMAGE_TYPE, VR::CS, dicom_value!(Strs, ["DERIVED", "SECONDARY"])));
-    obj.put(DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, dicom_value!(U16, [3])));
-    obj.put(DataElement::new(tags::PLANAR_CONFIGURATION, VR::US, dicom_value!(U16, [0])));
+    obj.put(DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, dicom_value!(U16, [samples])));
+    if samples == 3 {
+        obj.put(DataElement::new(tags::PLANAR_CONFIGURATION, VR::US, dicom_value!(U16, [0])));
+    }
     obj.put(DataElement::new(tags::ROWS, VR::US, dicom_value!(U16, [h as u16])));
     obj.put(DataElement::new(tags::COLUMNS, VR::US, dicom_value!(U16, [w as u16])));
     obj.put(DataElement::new(tags::BITS_ALLOCATED, VR::US, dicom_value!(U16, [8])));
@@ -267,6 +320,37 @@ mod tests {
         let frame = crate::decode_frame(&files[0], 0).unwrap();
         assert!(frame.is_color());
         assert_eq!((frame.width, frame.height), (64, 48));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grayscale_picture_becomes_monochrome() {
+        let dir = std::env::temp_dir().join(format!("ruthos-sc-gray-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut img = image::RgbImage::new(40, 30);
+        for (x, _y, p) in img.enumerate_pixels_mut() {
+            let v = (x * 6) as u8;
+            *p = image::Rgb([v, v, v]);
+        }
+        assert!(is_grayscale(&img));
+        let jpg = dir.join("xray.jpg");
+        img.save(&jpg).unwrap();
+
+        let info = PictureInfo {
+            patient_name: "Rex".into(),
+            modality: "OT".into(),
+            ..Default::default()
+        };
+        let files = convert_pictures(&[jpg], &info, &dir.join("out")).unwrap();
+        let meta = crate::read_meta(&files[0]).unwrap();
+        assert_eq!(meta.photometric_interpretation, "MONOCHROME2");
+        assert_eq!(meta.samples_per_pixel, 1);
+        assert_eq!(meta.window_center, Some(128.0));
+
+        let frame = crate::decode_frame(&files[0], 0).unwrap();
+        assert!(!frame.is_color());
+        assert!(frame.max > frame.min);
+        assert!(frame.value_at(39, 0).unwrap() > frame.value_at(0, 0).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
