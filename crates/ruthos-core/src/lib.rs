@@ -14,9 +14,9 @@ pub mod thumbs;
 
 pub use db::{Database, StudyFilter};
 pub use import::{ImportEvent, ImportMode, Importer};
-pub use model::{AlbumRow, DateFilter, ImageRow, SeriesRow, StudyRow};
+pub use model::{AlbumRow, DateFilter, ImageRow, RoiRecord, SeriesRow, StudyRow};
 pub use paths::DataPaths;
-pub use settings::Settings;
+pub use settings::{MeasurementSet, Settings};
 pub use thumbs::{ThumbnailService, ThumbnailUpdate};
 
 #[derive(Debug, thiserror::Error)]

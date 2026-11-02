@@ -364,3 +364,49 @@ pub fn tool_menu_row(ui: &mut Ui, glyph: &str, label: &str, on_left: bool, on_ri
     }
     response
 }
+
+/// A grid pictogram button for the Tiling menu: `rows` by `cols` cells.
+pub fn tiling_button(ui: &mut Ui, rows: usize, cols: usize, selected: bool, enabled: bool) -> Response {
+    let size = Vec2::new(52.0, 44.0);
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let dark = ui.visuals().dark_mode;
+        if selected {
+            painter.rect_filled(rect, 5.0, ui.visuals().selection.bg_fill);
+        } else if enabled && response.hovered() {
+            painter.rect_filled(rect, 5.0, if dark { Color32::from_white_alpha(20) } else { Color32::from_black_alpha(14) });
+        }
+        let cell_color = if !enabled {
+            if dark { Color32::from_gray(80) } else { Color32::from_gray(190) }
+        } else if selected {
+            Color32::WHITE
+        } else if dark {
+            Color32::from_gray(210)
+        } else {
+            Color32::from_gray(70)
+        };
+        let grid = Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 17.0), Vec2::new(26.0, 20.0));
+        let gap = 2.0;
+        let cw = (grid.width() - gap * (cols as f32 - 1.0)) / cols as f32;
+        let ch = (grid.height() - gap * (rows as f32 - 1.0)) / rows as f32;
+        for r in 0..rows {
+            for c in 0..cols {
+                let cell = Rect::from_min_size(
+                    Pos2::new(grid.left() + c as f32 * (cw + gap), grid.top() + r as f32 * (ch + gap)),
+                    Vec2::new(cw, ch),
+                );
+                painter.rect_filled(cell, 1.0, cell_color);
+            }
+        }
+        painter.text(
+            Pos2::new(rect.center().x, rect.bottom() - 3.0),
+            Align2::CENTER_BOTTOM,
+            format!("{rows}\u{00d7}{cols}"),
+            FontId::proportional(10.5),
+            cell_color,
+        );
+    }
+    response
+}

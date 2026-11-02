@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use ruthos_dicom::meta::{dicom_date_to_iso, dicom_time_to_hms, InstanceMeta};
 
-use crate::model::{AlbumRow, DateFilter, ImageRow, SeriesRow, StudyRow};
+use crate::model::{AlbumRow, DateFilter, ImageRow, SeriesRow, StudyRow, RoiRecord};
 use crate::paths::DataPaths;
 use crate::Result;
 
@@ -433,6 +433,56 @@ impl Database {
         Ok(())
     }
 
+    // ------------------------------------------------------------------- rois
+
+    /// ROIs stored for one frame, oldest first.
+    pub fn rois(&self, image_id: i64, frame: i64) -> Result<Vec<RoiRecord>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, image_id, frame, kind, points, name, value, unit FROM roi
+             WHERE image_id = ?1 AND frame = ?2 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![image_id, frame], roi_from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Replace every ROI of one frame with `rois`.
+    pub fn replace_rois(&self, image_id: i64, frame: i64, rois: &[RoiRecord]) -> Result<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM roi WHERE image_id = ?1 AND frame = ?2", params![image_id, frame])?;
+        for r in rois {
+            tx.execute(
+                "INSERT INTO roi (image_id, frame, kind, points, name, value, unit, date_created)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    image_id,
+                    frame,
+                    r.kind,
+                    serde_json::to_string(&r.points).unwrap_or_else(|_| "[]".into()),
+                    r.name,
+                    r.value,
+                    r.unit,
+                    now_unix()
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every named measurement in a study, for reports: (series id, ROI).
+    pub fn named_measurements_for_study(&self, study_id: i64) -> Result<Vec<(i64, RoiRecord)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.image_id, r.frame, r.kind, r.points, r.name, r.value, r.unit, i.series_id
+             FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
+             WHERE s.study_id = ?1 AND r.name IS NOT NULL ORDER BY r.id",
+        )?;
+        let rows = stmt.query_map(params![study_id], |row| Ok((row.get::<_, i64>(8)?, roi_from_row(row)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     // ----------------------------------------------------------------- images
 
     pub fn images_for_series(&self, series_id: i64) -> Result<Vec<ImageRow>> {
@@ -678,6 +728,20 @@ fn image_from_row(r: &Row<'_>) -> rusqlite::Result<ImageRow> {
     })
 }
 
+fn roi_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoiRecord> {
+    let points: String = row.get(4)?;
+    Ok(RoiRecord {
+        id: row.get(0)?,
+        image_id: row.get(1)?,
+        frame: row.get(2)?,
+        kind: row.get(3)?,
+        points: serde_json::from_str(&points).unwrap_or_default(),
+        name: row.get(5)?,
+        value: row.get(6)?,
+        unit: row.get(7)?,
+    })
+}
+
 fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -771,7 +835,19 @@ fn migrate(conn: &Connection) -> Result<()> {
             col_mm REAL NOT NULL,
             description TEXT NOT NULL DEFAULT '',
             date_set INTEGER NOT NULL
-         );",
+         );
+         CREATE TABLE IF NOT EXISTS roi (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            image_id INTEGER NOT NULL REFERENCES image(id) ON DELETE CASCADE,
+            frame INTEGER NOT NULL DEFAULT 0,
+            kind TEXT NOT NULL,
+            points TEXT NOT NULL,
+            name TEXT,
+            value REAL,
+            unit TEXT NOT NULL DEFAULT '',
+            date_created INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS roi_image ON roi(image_id, frame);",
     )?;
     conn.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
@@ -849,6 +925,34 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(db.counts().unwrap(), (0, 0, 0));
         assert_eq!(db.albums().unwrap()[0].number_of_studies, 0);
+    }
+
+    #[test]
+    fn rois_round_trip() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let InsertOutcome::Inserted { image_id, .. } =
+            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        else {
+            panic!()
+        };
+        assert!(db.rois(image_id, 0).unwrap().is_empty());
+        let rec = RoiRecord {
+            id: 0,
+            image_id,
+            frame: 0,
+            kind: "length".into(),
+            points: vec![[1.0, 2.0], [3.5, 4.0]],
+            name: Some("LVIDd".into()),
+            value: Some(42.0),
+            unit: "mm".into(),
+        };
+        db.replace_rois(image_id, 0, &[rec.clone()]).unwrap();
+        let got = db.rois(image_id, 0).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].points, rec.points);
+        assert_eq!(got[0].name.as_deref(), Some("LVIDd"));
+        db.replace_rois(image_id, 0, &[]).unwrap();
+        assert!(db.rois(image_id, 0).unwrap().is_empty());
     }
 
     #[test]

@@ -24,6 +24,33 @@ pub struct Settings {
     pub thumbnail_size: u32,
     /// Window geometry remembered between runs.
     pub browser_window_size: Option<[f32; 2]>,
+    /// Named measurements a ROI can be assigned to, grouped by study type.
+    /// They are what later goes into a report.
+    pub measurement_sets: Vec<MeasurementSet>,
+}
+
+/// A named group of measurements, e.g. the M-mode left-ventricle set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementSet {
+    pub name: String,
+    pub items: Vec<String>,
+}
+
+/// The sets shipped by default; the user can edit them in settings.json.
+pub fn default_measurement_sets() -> Vec<MeasurementSet> {
+    let set = |name: &str, items: &[&str]| MeasurementSet {
+        name: name.to_string(),
+        items: items.iter().map(|s| s.to_string()).collect(),
+    };
+    vec![
+        set("Echo: LV M-mode", &["IVSd", "LVIDd", "LVPWd", "IVSs", "LVIDs", "LVPWs"]),
+        set("Echo: 2D", &["Ao", "LA", "RVIDd", "EPSS", "PA"]),
+        set(
+            "Radiography",
+            &["VHS long axis", "VHS short axis", "T4 vertebral length", "Kidney length (L)", "Kidney length (R)"],
+        ),
+        set("Orthopaedic", &["Norberg angle", "Tibial plateau angle", "Patellar ligament length", "Patella length"]),
+    ]
 }
 
 impl Default for Settings {
@@ -39,6 +66,7 @@ impl Default for Settings {
             default_clut: "No CLUT".to_string(),
             thumbnail_size: 100,
             browser_window_size: None,
+            measurement_sets: default_measurement_sets(),
         }
     }
 }

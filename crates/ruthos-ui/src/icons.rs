@@ -31,6 +31,7 @@ pub const CARET_RIGHT: &str = "\u{E13A}";
 // Viewer window
 pub const ANNOTATIONS: &str = "\u{E6EE}"; // text Aa
 pub const SERIES: &str = "\u{E466}"; // stack
+pub const TILING: &str = "\u{E464}"; // squares four
 pub const WLWW: &str = "\u{E18C}"; // circle half
 pub const CLUT: &str = "\u{E6C8}"; // palette
 pub const THREE_D: &str = "\u{E1DA}"; // cube

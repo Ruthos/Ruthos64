@@ -251,3 +251,19 @@ mod tests {
         assert_eq!(DateFilter::Any.bounds(today), None);
     }
 }
+
+/// A stored ROI or measurement on one frame. `points` are image pixels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoiRecord {
+    pub id: i64,
+    pub image_id: i64,
+    pub frame: i64,
+    /// `length`, `angle`, `rect`, `oval`, `arrow` or `point`.
+    pub kind: String,
+    pub points: Vec<[f32; 2]>,
+    /// The named measurement this ROI was assigned to, e.g. `LVIDd`.
+    pub name: Option<String>,
+    /// The measured value at the time it was stored, in `unit`.
+    pub value: Option<f64>,
+    pub unit: String,
+}

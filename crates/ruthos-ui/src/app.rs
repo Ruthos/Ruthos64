@@ -28,6 +28,8 @@ pub struct RuthosApp {
     startup_error: Option<String>,
     /// Viewer window to bring to the front on the next frame.
     pending_focus: Option<ViewportId>,
+    /// Study to open on the first frame (developer option `RUTHOS_OPEN_STUDY`).
+    startup_open: Option<i64>,
 }
 
 impl RuthosApp {
@@ -101,6 +103,16 @@ impl RuthosApp {
             browser.import_paths(&shared, startup_paths);
         }
 
+        // Developer option: open a study at startup by id or by name/ID text,
+        // so a viewer can be screenshotted without clicking.
+        let startup_open = std::env::var("RUTHOS_OPEN_STUDY").ok().and_then(|v| {
+            if let Ok(id) = v.trim().parse::<i64>() {
+                return Some(id);
+            }
+            let filter = ruthos_core::StudyFilter { text: v, ..Default::default() };
+            shared.db.list_studies(&filter).ok()?.first().map(|s| s.id)
+        });
+
         Ok(Self {
             shared,
             browser,
@@ -109,6 +121,7 @@ impl RuthosApp {
             incoming_stop,
             startup_error,
             pending_focus: None,
+            startup_open,
         })
     }
 
@@ -169,6 +182,9 @@ impl eframe::App for RuthosApp {
 
         self.browser.show(ui, &self.shared);
 
+        if let Some(id) = self.startup_open.take() {
+            self.open_viewer(id, None);
+        }
         for (study, series) in self.browser.take_open_requests() {
             self.open_viewer(study, series);
         }

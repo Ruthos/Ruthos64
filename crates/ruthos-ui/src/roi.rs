@@ -3,8 +3,9 @@
 //! Points are in image pixel coordinates so ROIs survive zoom, pan, rotation
 //! and flips. Statistics are computed from the frame's modality values.
 
-use egui::{Align2, Color32, FontId, Painter, Pos2, Stroke, Vec2};
+use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
+use ruthos_core::RoiRecord;
 use ruthos_dicom::Frame;
 use ruthos_render::ViewTransform;
 
@@ -25,6 +26,8 @@ pub enum RoiKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Roi {
     pub kind: RoiKind,
+    /// The named measurement this ROI stands for, e.g. `LVIDd`.
+    pub name: Option<String>,
 }
 
 /// Pixel statistics inside a closed ROI.
@@ -40,7 +43,65 @@ pub struct RoiStats {
 
 impl Roi {
     pub fn new(kind: RoiKind) -> Self {
-        Self { kind }
+        Self { kind, name: None }
+    }
+
+    /// The storage form, with the value as measured on `frame`.
+    pub fn to_record(&self, image_id: i64, frame_index: u32, frame: Option<&Frame>) -> RoiRecord {
+        let kind = match &self.kind {
+            RoiKind::Length { .. } => "length",
+            RoiKind::Angle { .. } => "angle",
+            RoiKind::Rect { .. } => "rect",
+            RoiKind::Oval { .. } => "oval",
+            RoiKind::Arrow { .. } => "arrow",
+            RoiKind::Point { .. } => "point",
+        };
+        let (value, unit) = frame.map(|f| self.measurement(f)).unwrap_or((None, ""));
+        RoiRecord {
+            id: 0,
+            image_id,
+            frame: frame_index as i64,
+            kind: kind.to_string(),
+            points: self.points().iter().map(|p| [p.x, p.y]).collect(),
+            name: self.name.clone(),
+            value,
+            unit: unit.to_string(),
+        }
+    }
+
+    pub fn from_record(r: &RoiRecord) -> Option<Self> {
+        let p = |i: usize| r.points.get(i).map(|q| Vec2::new(q[0], q[1]));
+        let kind = match r.kind.as_str() {
+            "length" => RoiKind::Length { a: p(0)?, b: p(1)? },
+            "angle" => RoiKind::Angle { a: p(0)?, b: p(1)?, c: p(2)? },
+            "rect" => RoiKind::Rect { a: p(0)?, b: p(1)? },
+            "oval" => RoiKind::Oval { a: p(0)?, b: p(1)? },
+            "arrow" => RoiKind::Arrow { a: p(0)?, b: p(1)? },
+            "point" => RoiKind::Point { p: p(0)? },
+            _ => return None,
+        };
+        Some(Self { kind, name: r.name.clone() })
+    }
+
+    /// The headline number and its unit, for storage and reports.
+    pub fn measurement(&self, frame: &Frame) -> (Option<f64>, &'static str) {
+        let spacing = frame.meta.pixel_spacing;
+        match &self.kind {
+            RoiKind::Length { a, b } => match ViewTransform::length_mm(*a, *b, spacing) {
+                Some(mm) => (Some(mm as f64), "mm"),
+                None => (Some((*b - *a).length() as f64), "px"),
+            },
+            RoiKind::Angle { a, b, c } => (Some(angle_deg(*a, *b, *c, spacing) as f64), "deg"),
+            RoiKind::Rect { .. } | RoiKind::Oval { .. } => match self.stats(frame) {
+                Some(s) => match s.area_mm2 {
+                    Some(a) => (Some(a), "mm2"),
+                    None => (Some(s.count as f64), "px"),
+                },
+                None => (None, ""),
+            },
+            RoiKind::Point { p } => (frame.value_at(p.x.floor() as i64, p.y.floor() as i64).map(|v| v as f64), ""),
+            RoiKind::Arrow { .. } => (None, ""),
+        }
     }
 
     pub fn points(&self) -> Vec<Vec2> {
@@ -107,8 +168,18 @@ impl Roi {
         }
     }
 
-    /// The measurement text shown next to the ROI.
+    /// The text shown next to the ROI: the assigned name, then the value.
     pub fn label(&self, frame: &Frame) -> String {
+        let value = self.value_text(frame);
+        match &self.name {
+            Some(n) if value.is_empty() => n.clone(),
+            Some(n) => format!("{n}: {value}"),
+            None => value,
+        }
+    }
+
+    /// The measured value as text.
+    pub fn value_text(&self, frame: &Frame) -> String {
         let spacing = frame.meta.pixel_spacing;
         match &self.kind {
             RoiKind::Length { a, b } | RoiKind::Arrow { a, b } => {
@@ -206,19 +277,31 @@ impl Roi {
         })
     }
 
-    /// Draw the ROI and its label.
-    pub fn draw(&self, painter: &Painter, t: &ViewTransform, frame: &Frame, color: Color32) {
+    /// Draw the ROI and its label. Returns the label's screen rectangle, the
+    /// click target for assigning the measurement a name.
+    pub fn draw(&self, painter: &Painter, t: &ViewTransform, frame: &Frame, color: Color32, selected: bool) -> Option<Rect> {
         let stroke = Stroke::new(1.5, color);
         let pts: Vec<Pos2> = self.points().into_iter().map(|p| t.image_to_screen(p)).collect();
         let font = FontId::proportional(12.0);
+        let label_font = if self.name.is_some() { FontId::proportional(12.5) } else { font.clone() };
         match &self.kind {
             RoiKind::Length { .. } => {
                 painter.line_segment([pts[0], pts[1]], stroke);
+                // Origin and end are marked with short perpendicular ticks so
+                // both are visible while the length is being drawn.
+                let d = pts[1] - pts[0];
+                let n = if d.length() > 1e-3 { Vec2::new(-d.y, d.x) / d.length() } else { Vec2::new(0.0, 1.0) };
                 for p in &pts {
-                    painter.circle_filled(*p, 2.5, color);
+                    painter.line_segment([*p - n * 6.0, *p + n * 6.0], stroke);
+                }
+                if selected {
+                    for p in &pts {
+                        painter.rect_stroke(Rect::from_center_size(*p, Vec2::splat(7.0)), 0.0, Stroke::new(1.0, color), egui::StrokeKind::Middle);
+                    }
                 }
                 let mid = Pos2::new((pts[0].x + pts[1].x) / 2.0, (pts[0].y + pts[1].y) / 2.0);
-                shadow_text(painter, mid + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, &self.label(frame), font, color);
+                let r = shadow_text(painter, mid + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, &self.label(frame), label_font, color);
+                return Some(r);
             }
             RoiKind::Arrow { .. } => {
                 painter.arrow(pts[0], pts[1] - pts[0], Stroke::new(2.0, color));
@@ -229,7 +312,13 @@ impl Roi {
                 for p in &pts {
                     painter.circle_filled(*p, 2.5, color);
                 }
-                shadow_text(painter, pts[1] + Vec2::new(10.0, 10.0), Align2::LEFT_TOP, &self.label(frame), font, color);
+                if selected {
+                    for p in &pts {
+                        painter.rect_stroke(Rect::from_center_size(*p, Vec2::splat(7.0)), 0.0, Stroke::new(1.0, color), egui::StrokeKind::Middle);
+                    }
+                }
+                let r = shadow_text(painter, pts[1] + Vec2::new(10.0, 10.0), Align2::LEFT_TOP, &self.label(frame), label_font, color);
+                return Some(r);
             }
             RoiKind::Rect { .. } => {
                 let corners = rect_corners(t, self);
@@ -239,7 +328,8 @@ impl Roi {
                 let anchor = corners.iter().fold(Pos2::new(f32::NEG_INFINITY, f32::NEG_INFINITY), |m, p| {
                     Pos2::new(m.x.max(p.x), m.y.max(p.y))
                 });
-                shadow_text(painter, anchor + Vec2::new(6.0, 0.0), Align2::LEFT_BOTTOM, &self.label(frame), font, color);
+                let r = shadow_text(painter, anchor + Vec2::new(6.0, 0.0), Align2::LEFT_BOTTOM, &self.label(frame), label_font, color);
+                return Some(r);
             }
             RoiKind::Oval { .. } => {
                 let poly = oval_polygon(t, self, 64);
@@ -249,15 +339,18 @@ impl Roi {
                 let anchor = poly.iter().fold(Pos2::new(f32::NEG_INFINITY, f32::NEG_INFINITY), |m, p| {
                     Pos2::new(m.x.max(p.x), m.y.max(p.y))
                 });
-                shadow_text(painter, anchor + Vec2::new(6.0, 0.0), Align2::LEFT_BOTTOM, &self.label(frame), font, color);
+                let r = shadow_text(painter, anchor + Vec2::new(6.0, 0.0), Align2::LEFT_BOTTOM, &self.label(frame), label_font, color);
+                return Some(r);
             }
             RoiKind::Point { .. } => {
                 let p = pts[0];
                 painter.line_segment([p + Vec2::new(-6.0, 0.0), p + Vec2::new(6.0, 0.0)], stroke);
                 painter.line_segment([p + Vec2::new(0.0, -6.0), p + Vec2::new(0.0, 6.0)], stroke);
-                shadow_text(painter, p + Vec2::new(8.0, -4.0), Align2::LEFT_BOTTOM, &self.label(frame), font, color);
+                let r = shadow_text(painter, p + Vec2::new(8.0, -4.0), Align2::LEFT_BOTTOM, &self.label(frame), label_font, color);
+                return Some(r);
             }
         }
+        None
     }
 }
 
@@ -365,7 +458,13 @@ mod tests {
     #[test]
     fn length_label() {
         let f = frame();
-        let roi = Roi::new(RoiKind::Length { a: Vec2::ZERO, b: Vec2::new(0.0, 4.0) });
+        let mut roi = Roi::new(RoiKind::Length { a: Vec2::ZERO, b: Vec2::new(0.0, 4.0) });
         assert_eq!(roi.label(&f), "2.00 mm");
+        roi.name = Some("LVIDd".into());
+        assert_eq!(roi.label(&f), "LVIDd: 2.00 mm");
+        let rec = roi.to_record(7, 0, Some(&f));
+        assert_eq!((rec.kind.as_str(), rec.unit.as_str()), ("length", "mm"));
+        assert!((rec.value.unwrap() - 2.0).abs() < 1e-6);
+        assert_eq!(Roi::from_record(&rec).unwrap(), roi);
     }
 }

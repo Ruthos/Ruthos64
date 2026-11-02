@@ -4,7 +4,7 @@
 //! series list, the current image, decoded-frame and GPU caches, the view
 //! state, the active tool and the ROIs.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -98,17 +98,115 @@ struct AngleDraft {
     c: Vec2,
 }
 
+/// How the image area is divided (Horos: image tiling, and the series
+/// layout of a study).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TilingMode {
+    /// Every cell shows the same series, consecutive images from the first cell.
+    Series,
+    /// One series of the study per cell.
+    Study,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tiling {
+    pub mode: TilingMode,
+    pub rows: usize,
+    pub cols: usize,
+}
+
+impl Tiling {
+    /// Grids offered in the menu, as (rows, columns).
+    pub const GRIDS: [(usize, usize); 8] = [(1, 1), (1, 2), (2, 1), (2, 2), (2, 3), (3, 2), (3, 3), (4, 4)];
+
+    pub fn cells(self) -> usize {
+        self.rows * self.cols
+    }
+
+    pub fn label(self) -> String {
+        format!("{}\u{00d7}{}", self.rows, self.cols)
+    }
+}
+
+/// One cell of the viewer grid: a series, a position in it and a view.
+#[derive(Clone)]
+pub struct Pane {
+    pub series_idx: usize,
+    pub images: Vec<ImageRow>,
+    /// May run past `images` in a tiled series: that cell is blank.
+    pub image_idx: usize,
+    pub frame_idx: u32,
+    pub view: ViewState,
+    fit_pending: bool,
+    window_initialised_for: Option<i64>,
+    load_error: Option<String>,
+}
+
+impl Pane {
+    fn new(shared: &Shared, series: &SeriesRow, series_idx: usize) -> Self {
+        Self {
+            series_idx,
+            images: shared.db.images_for_series(series.id).unwrap_or_default(),
+            image_idx: 0,
+            frame_idx: 0,
+            view: ViewState::default(),
+            fit_pending: true,
+            window_initialised_for: None,
+            load_error: None,
+        }
+    }
+
+    fn image(&self) -> Option<&ImageRow> {
+        self.images.get(self.image_idx)
+    }
+
+    fn key(&self) -> Option<FrameKey> {
+        let img = self.image()?;
+        if self.frame_idx >= img.number_of_frames.max(1) as u32 {
+            return None;
+        }
+        Some(FrameKey { image_id: img.id, frame: self.frame_idx })
+    }
+
+    /// Scroll positions: the images, or the frames of a single multiframe image.
+    fn positions(&self) -> usize {
+        if self.images.len() == 1 {
+            self.images[0].number_of_frames.max(1) as usize
+        } else {
+            self.images.len()
+        }
+    }
+
+    fn position(&self) -> usize {
+        if self.images.len() == 1 {
+            self.frame_idx as usize
+        } else {
+            self.image_idx
+        }
+    }
+
+    fn set_position(&mut self, pos: usize) {
+        if self.images.len() == 1 {
+            self.image_idx = 0;
+            self.frame_idx = pos as u32;
+        } else {
+            self.image_idx = pos;
+            self.frame_idx = 0;
+        }
+    }
+}
+
 pub struct ViewerState {
     pub id: u64,
     pub viewport_id: ViewportId,
     pub study: StudyRow,
     pub series: Vec<SeriesRow>,
-    pub series_idx: usize,
-    pub images: Vec<ImageRow>,
-    pub image_idx: usize,
-    pub frame_idx: u32,
+    /// The cells of the grid; `active` is the one tools, keys and the
+    /// toolbar act on.
+    pub panes: Vec<Pane>,
+    pub active: usize,
+    pub tiling: Tiling,
 
-    pub view: ViewState,
     /// Tools assigned to the left and right mouse buttons. The middle button
     /// always pans, as in Horos.
     pub tool: Tool,
@@ -118,6 +216,14 @@ pub struct ViewerState {
     pub bilinear: bool,
 
     pub rois: HashMap<FrameKey, Vec<Roi>>,
+    /// Frames whose stored ROIs have been read from the archive.
+    rois_loaded: HashSet<FrameKey>,
+    /// Frames whose ROIs changed and must be written back.
+    dirty_rois: HashSet<FrameKey>,
+    /// Label rectangles painted last frame, for click-to-name.
+    label_hits: Vec<(FrameKey, usize, Rect)>,
+    /// The "assign measurement" popup, when open.
+    assign: Option<AssignPopup>,
     drag_draft: Option<(Vec2, Vec2)>,
     angle_draft: Option<AngleDraft>,
     pub selected_roi: Option<usize>,
@@ -132,14 +238,19 @@ pub struct ViewerState {
     gpu_order: VecDeque<FrameKey>,
 
     pub close_requested: bool,
-    fit_pending: bool,
-    window_initialised_for: Option<i64>,
     mouse_pixel: Option<(i64, i64)>,
-    load_error: Option<String>,
     status: Option<(String, Instant)>,
     wl_drag_anchor: Option<(f32, f32)>,
     calibrate: Option<CalibrateDraft>,
     pending_clear_calibration: Option<i64>,
+}
+
+/// The popup that assigns a ROI to a named measurement.
+struct AssignPopup {
+    key: FrameKey,
+    index: usize,
+    pos: Pos2,
+    custom: String,
 }
 
 /// The "Calibrate from this length" dialog.
@@ -162,7 +273,7 @@ impl ViewerState {
         let series_idx = series_id
             .and_then(|id| series.iter().position(|s| s.id == id))
             .unwrap_or(0);
-        let images = shared.db.images_for_series(series[series_idx].id)?;
+        let pane = Pane::new(shared, &series[series_idx], series_idx);
         let _ = shared.db.mark_study_opened(study.id);
         let id = shared.next_id();
         let settings = shared.settings.lock();
@@ -173,22 +284,24 @@ impl ViewerState {
             _ => AnnotationLevel::Full,
         };
         drop(settings);
-        Ok(Self {
+        let mut viewer = Self {
             id,
             viewport_id: ViewportId::from_hash_of(("ruthos-viewer", id)),
             study,
             series,
-            series_idx,
-            images,
-            image_idx: 0,
-            frame_idx: 0,
-            view: ViewState::default(),
+            panes: vec![pane],
+            active: 0,
+            tiling: Tiling { mode: TilingMode::Series, rows: 1, cols: 1 },
             tool: Tool::WindowLevel,
             right_tool: Tool::Zoom,
             clut,
             annotations,
             bilinear: true,
             rois: HashMap::new(),
+            rois_loaded: HashSet::new(),
+            dirty_rois: HashSet::new(),
+            label_hits: Vec::new(),
+            assign: None,
             drag_draft: None,
             angle_draft: None,
             selected_roi: None,
@@ -200,15 +313,17 @@ impl ViewerState {
             gpu: HashMap::new(),
             gpu_order: VecDeque::new(),
             close_requested: false,
-            fit_pending: true,
-            window_initialised_for: None,
             mouse_pixel: None,
-            load_error: None,
             status: None,
             wl_drag_anchor: None,
             calibrate: None,
             pending_clear_calibration: None,
-        })
+        };
+        // Developer option: `RUTHOS_TILING=series:2x2` or `study:1x2`.
+        if let Some(t) = std::env::var("RUTHOS_TILING").ok().and_then(|v| parse_tiling(&v)) {
+            viewer.set_tiling(shared, t);
+        }
+        Ok(viewer)
     }
 
     pub fn title(&self) -> String {
@@ -224,70 +339,201 @@ impl ViewerState {
     }
 
     fn current_image(&self) -> Option<&ImageRow> {
-        self.images.get(self.image_idx)
+        self.panes[self.active].image()
     }
 
     fn current_series(&self) -> &SeriesRow {
-        &self.series[self.series_idx]
+        &self.series[self.panes[self.active].series_idx]
     }
 
     fn current_key(&self) -> Option<FrameKey> {
-        self.current_image().map(|img| FrameKey {
-            image_id: img.id,
-            frame: self.frame_idx,
-        })
+        self.panes[self.active].key()
     }
 
-    /// Switch to another series of the same study.
+    /// Series shown in cell `k`.
+    fn series_of(&self, k: usize) -> &SeriesRow {
+        &self.series[self.panes[k].series_idx]
+    }
+
+    /// Show another series of the study in the active cell. In a tiled
+    /// series every cell follows.
     pub fn select_series(&mut self, shared: &Shared, idx: usize) {
-        if idx >= self.series.len() || idx == self.series_idx {
+        let a = self.active;
+        if idx >= self.series.len() || idx == self.panes[a].series_idx {
             return;
         }
-        self.persist_series_display(shared);
-        self.series_idx = idx;
-        self.images = shared.db.images_for_series(self.series[idx].id).unwrap_or_default();
-        self.image_idx = 0;
-        self.frame_idx = 0;
-        self.fit_pending = true;
-        self.window_initialised_for = None;
+        self.persist_pane(shared, a);
+        let p = &mut self.panes[a];
+        p.series_idx = idx;
+        p.images = shared.db.images_for_series(self.series[idx].id).unwrap_or_default();
+        p.image_idx = 0;
+        p.frame_idx = 0;
+        p.fit_pending = true;
+        p.window_initialised_for = None;
+        p.load_error = None;
         self.selected_roi = None;
         self.drag_draft = None;
         self.angle_draft = None;
-        self.load_error = None;
+        self.sync_series_cells();
     }
 
-    /// Store WL, rotation and flips for the series, as Horos does.
+    /// Change the grid. A tiled series spreads the active cell's series over
+    /// the cells; a tiled study gives each cell its own series.
+    pub fn set_tiling(&mut self, shared: &Shared, tiling: Tiling) {
+        if tiling == self.tiling {
+            return;
+        }
+        for k in 0..self.panes.len() {
+            self.persist_pane(shared, k);
+        }
+        let cells = tiling.cells().max(1);
+        let current = self.panes[self.active].clone();
+        let mut panes = Vec::with_capacity(cells);
+        match tiling.mode {
+            TilingMode::Series => {
+                let base = current.position();
+                for k in 0..cells {
+                    let mut p = current.clone();
+                    p.set_position(base + k);
+                    p.fit_pending = true;
+                    panes.push(p);
+                }
+                self.active = 0;
+            }
+            TilingMode::Study => {
+                let n = self.series.len();
+                let first = current.series_idx.min(n.saturating_sub(cells));
+                for k in 0..cells.min(n) {
+                    let idx = first + k;
+                    if idx == current.series_idx {
+                        let mut p = current.clone();
+                        p.image_idx = p.image_idx.min(p.images.len().saturating_sub(1));
+                        p.fit_pending = true;
+                        panes.push(p);
+                    } else {
+                        panes.push(Pane::new(shared, &self.series[idx], idx));
+                    }
+                }
+                self.active = (current.series_idx - first).min(panes.len().saturating_sub(1));
+            }
+        }
+        self.panes = panes;
+        self.tiling = tiling;
+        self.selected_roi = None;
+        self.drag_draft = None;
+        self.angle_draft = None;
+        self.set_status(match tiling.mode {
+            TilingMode::Series => format!("Tiling {}: images of this series", tiling.label()),
+            TilingMode::Study => format!("Tiling {}: series of this study", tiling.label()),
+        });
+    }
+
+    fn tiled_series(&self) -> bool {
+        self.tiling.mode == TilingMode::Series && self.panes.len() > 1
+    }
+
+    /// In a tiled series, keep every cell on the active cell's series and
+    /// view, showing consecutive positions from the first cell.
+    fn sync_series_cells(&mut self) {
+        if !self.tiled_series() {
+            return;
+        }
+        let a = self.active;
+        let base = self.panes[a].position().saturating_sub(a);
+        let src = self.panes[a].clone();
+        for (k, p) in self.panes.iter_mut().enumerate() {
+            if p.series_idx != src.series_idx {
+                p.series_idx = src.series_idx;
+                p.images = src.images.clone();
+                p.load_error = None;
+            }
+            p.view = src.view;
+            p.window_initialised_for = src.window_initialised_for;
+            if k != a {
+                p.fit_pending = src.fit_pending;
+            }
+            p.set_position(base + k);
+        }
+    }
+
+    /// Make cell `k` the one tools and keys act on.
+    fn activate(&mut self, k: usize) {
+        if k < self.panes.len() && k != self.active {
+            self.active = k;
+            self.selected_roi = None;
+            self.drag_draft = None;
+            self.angle_draft = None;
+        }
+    }
+
+    /// Scroll the active cell (or the whole tiled series) to a position.
+    fn set_active_position(&mut self, pos: usize) {
+        if self.tiled_series() {
+            let base = pos.saturating_sub(self.active);
+            for (k, p) in self.panes.iter_mut().enumerate() {
+                p.set_position(base + k);
+            }
+        } else {
+            self.panes[self.active].set_position(pos);
+        }
+        self.selected_roi = None;
+    }
+
+    /// Store WL, rotation and flips for every shown series, as Horos does.
     pub fn persist_series_display(&self, shared: &Shared) {
-        let s = self.current_series();
+        for k in 0..self.panes.len() {
+            self.persist_pane(shared, k);
+        }
+    }
+
+    fn persist_pane(&self, shared: &Shared, k: usize) {
+        let p = &self.panes[k];
+        if p.window_initialised_for.is_none() {
+            return;
+        }
+        let s = self.series_of(k);
         let _ = shared.db.set_series_display(
             s.id,
-            Some(self.view.window_center as f64),
-            Some(self.view.window_width as f64),
-            self.view.rotation_deg as f64,
-            self.view.flip_horizontal,
-            self.view.flip_vertical,
+            Some(p.view.window_center as f64),
+            Some(p.view.window_width as f64),
+            p.view.rotation_deg as f64,
+            p.view.flip_horizontal,
+            p.view.flip_vertical,
         );
     }
 
     fn step_image(&mut self, delta: i64) {
-        if self.images.is_empty() {
+        if self.tiled_series() {
+            let n = self.panes[0].positions() as i64;
+            if n == 0 {
+                return;
+            }
+            let base = (self.panes[0].position() as i64 + delta).rem_euclid(n) as usize;
+            for (k, p) in self.panes.iter_mut().enumerate() {
+                p.set_position(base + k);
+            }
+            self.selected_roi = None;
             return;
         }
-        let img = &self.images[self.image_idx];
-        let frames = img.number_of_frames.max(1) as i64;
+        let p = &mut self.panes[self.active];
+        if p.images.is_empty() {
+            return;
+        }
+        let idx = p.image_idx.min(p.images.len() - 1);
+        let frames = p.images[idx].number_of_frames.max(1) as i64;
         if frames > 1 {
             // Multiframe: step frames first, wrapping into neighbouring images.
-            let f = self.frame_idx as i64 + delta;
+            let f = p.frame_idx as i64 + delta;
             if f >= 0 && f < frames {
-                self.frame_idx = f as u32;
+                p.frame_idx = f as u32;
                 return;
             }
         }
-        let n = self.images.len() as i64;
-        let next = (self.image_idx as i64 + delta).rem_euclid(n);
-        self.image_idx = next as usize;
-        self.frame_idx = if delta < 0 {
-            (self.images[self.image_idx].number_of_frames.max(1) - 1) as u32
+        let n = p.images.len() as i64;
+        let next = (idx as i64 + delta).rem_euclid(n);
+        p.image_idx = next as usize;
+        p.frame_idx = if delta < 0 {
+            (p.images[p.image_idx].number_of_frames.max(1) - 1) as u32
         } else {
             0
         };
@@ -296,6 +542,99 @@ impl ViewerState {
 
     fn set_status(&mut self, text: impl Into<String>) {
         self.status = Some((text.into(), Instant::now()));
+    }
+
+    // ------------------------------------------------------------- rois
+
+    /// Read stored ROIs for a frame the first time it is shown.
+    fn ensure_rois_loaded(&mut self, shared: &Shared, key: FrameKey) {
+        if !self.rois_loaded.insert(key) {
+            return;
+        }
+        if let Ok(records) = shared.db.rois(key.image_id, key.frame as i64) {
+            let list: Vec<Roi> = records.iter().filter_map(Roi::from_record).collect();
+            if !list.is_empty() {
+                self.rois.entry(key).or_default().extend(list);
+            }
+        }
+    }
+
+    /// Write back every frame whose ROIs changed this frame.
+    fn flush_rois(&mut self, shared: &Shared) {
+        for key in std::mem::take(&mut self.dirty_rois) {
+            let frame = self.frames.get(&key).cloned();
+            let records: Vec<ruthos_core::RoiRecord> = self
+                .rois
+                .get(&key)
+                .map(|list| list.iter().map(|r| r.to_record(key.image_id, key.frame, frame.as_deref())).collect())
+                .unwrap_or_default();
+            if let Err(e) = shared.db.replace_rois(key.image_id, key.frame as i64, &records) {
+                tracing::warn!("could not store ROIs: {e}");
+            }
+        }
+    }
+
+    /// The popup under a clicked measurement label.
+    fn assign_popup(&mut self, ui: &mut Ui, shared: &Shared) {
+        let Some(popup) = &self.assign else { return };
+        let (key, index, pos) = (popup.key, popup.index, popup.pos);
+        let mut custom = popup.custom.clone();
+        let current = self.rois.get(&key).and_then(|l| l.get(index)).and_then(|r| r.name.clone());
+        let sets = shared.settings.lock().measurement_sets.clone();
+        let ctx = ui.ctx().clone();
+        let mut choice: Option<Option<String>> = None;
+        let mut close = ui.input(|i| i.key_pressed(Key::Escape));
+        let area = egui::Area::new(egui::Id::unique(("assign-roi", self.id)))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(&ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(210.0);
+                    ui.label(egui::RichText::new("Assign measurement").strong());
+                    for set in &sets {
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new(&set.name).size(11.0).color(Color32::from_gray(150)));
+                        for item in &set.items {
+                            if ui.selectable_label(current.as_deref() == Some(item.as_str()), item).clicked() {
+                                choice = Some(Some(item.clone()));
+                            }
+                        }
+                    }
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        let r = ui.add(egui::TextEdit::singleline(&mut custom).hint_text("Custom name").desired_width(150.0));
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        if (enter || ui.button("Set").clicked()) && !custom.trim().is_empty() {
+                            choice = Some(Some(custom.trim().to_string()));
+                        }
+                    });
+                    if ui.add_enabled(current.is_some(), egui::Button::new("Remove name")).clicked() {
+                        choice = Some(None);
+                    }
+                });
+            });
+        if let Some(p) = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None }) {
+            if !area.response.rect.contains(p) {
+                close = true;
+            }
+        }
+        if let Some(name) = choice {
+            if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(index)) {
+                roi.name = name.clone();
+                self.dirty_rois.insert(key);
+                self.set_status(match name {
+                    Some(n) => format!("Measurement assigned to {n}"),
+                    None => "Measurement name removed".to_string(),
+                });
+            }
+            close = true;
+        }
+        if close {
+            self.assign = None;
+        } else if let Some(popup) = &mut self.assign {
+            popup.custom = custom;
+        }
     }
 
     // ------------------------------------------------------------ caches
@@ -316,28 +655,40 @@ impl ViewerState {
                     };
                     self.frames.insert(loaded.key, frame);
                     self.frame_order.push_back(loaded.key);
-                    while self.frame_order.len() > FRAME_CACHE {
+                    let (frame_cache, _) = self.cache_limits();
+                    while self.frame_order.len() > frame_cache {
                         if let Some(old) = self.frame_order.pop_front() {
                             self.frames.remove(&old);
                         }
                     }
                 }
                 Err(e) => {
-                    if Some(loaded.key) == self.current_key() {
-                        self.load_error = Some(e);
+                    for p in &mut self.panes {
+                        if p.key() == Some(loaded.key) {
+                            p.load_error = Some(e.clone());
+                        }
                     }
                 }
             }
         }
     }
 
-    fn ensure_requested(&self, shared: &Shared, idx: usize, frame: u32) {
-        if let Some(img) = self.images.get(idx) {
+    fn ensure_requested(&self, shared: &Shared, images: &[ImageRow], idx: usize, frame: u32) {
+        if let Some(img) = images.get(idx) {
+            if frame >= img.number_of_frames.max(1) as u32 {
+                return;
+            }
             let key = FrameKey { image_id: img.id, frame };
             if !self.frames.contains_key(&key) {
                 shared.loader.request(key, shared.resolve(&img.path));
             }
         }
+    }
+
+    /// Cache sizes grow with the number of cells on screen.
+    fn cache_limits(&self) -> (usize, usize) {
+        let cells = self.panes.len();
+        (FRAME_CACHE.max(cells * 3 + 6), GPU_CACHE.max(cells * 2))
     }
 
     fn gpu_for(&mut self, shared: &Shared, key: FrameKey) -> Option<Arc<GpuImage>> {
@@ -348,7 +699,8 @@ impl ViewerState {
         let g = Arc::new(GpuImage::upload(&shared.render_state.device, &shared.render_state.queue, &frame));
         self.gpu.insert(key, g.clone());
         self.gpu_order.push_back(key);
-        while self.gpu_order.len() > GPU_CACHE {
+        let (_, gpu_cache) = self.cache_limits();
+        while self.gpu_order.len() > gpu_cache {
             if let Some(old) = self.gpu_order.pop_front() {
                 self.gpu.remove(&old);
             }
@@ -385,7 +737,7 @@ impl ViewerState {
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(30, 30, 32)).inner_margin(egui::Margin::same(6)))
             .show(ui, |ui| self.drawer(ui, shared));
 
-        if self.images.len() > 1 || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false) {
+        if self.panes[self.active].positions() > 1 {
             egui::Panel::bottom(("viewer-slider", self.id))
                 .exact_size(26.0)
                 .frame(egui::Frame::NONE.fill(Color32::from_rgb(30, 30, 32)).inner_margin(egui::Margin::symmetric(10, 4)))
@@ -396,7 +748,9 @@ impl ViewerState {
             .frame(egui::Frame::NONE.fill(Color32::BLACK))
             .show(ui, |ui| self.image_area(ui, shared));
 
+        self.assign_popup(ui, shared);
         self.calibrate_modal(ui, shared);
+        self.flush_rois(shared);
         if let Some(id) = self.pending_clear_calibration.take() {
             match shared.db.clear_calibration(id) {
                 Ok(()) => {
@@ -499,8 +853,8 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(4.0);
                 toolbar_caption(ui, "Series");
-                let current = self.series.get(self.series_idx).map(|s| s.display_name()).unwrap_or_default();
-                let mut chosen = self.series_idx;
+                let current = self.series.get(self.panes[self.active].series_idx).map(|s| s.display_name()).unwrap_or_default();
+                let mut chosen = self.panes[self.active].series_idx;
                 egui::ComboBox::from_id_salt(("series-popup", self.id))
                     .selected_text(crate::widgets::truncate(&current, 24))
                     .width(190.0)
@@ -510,8 +864,47 @@ impl ViewerState {
                             ui.selectable_value(&mut chosen, i, label);
                         }
                     });
-                if chosen != self.series_idx {
+                if chosen != self.panes[self.active].series_idx {
                     self.select_series(shared, chosen);
+                }
+            });
+            toolbar_separator(ui);
+
+            // Tiling menu (Horos: image tiling and series layout)
+            ui.vertical(|ui| {
+                ui.add_space(2.0);
+                let label = match self.tiling.mode {
+                    TilingMode::Series => format!("  {}  ", self.tiling.label()),
+                    TilingMode::Study => format!("  {} series  ", self.tiling.label()),
+                };
+                let mut chosen: Option<Tiling> = None;
+                ui.menu_button((icons::rich(icons::TILING, 16.0), egui::RichText::new(label).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
+                    for (mode, title) in [
+                        (TilingMode::Series, "Images of this series"),
+                        (TilingMode::Study, "Series of this study"),
+                    ] {
+                        ui.label(egui::RichText::new(title).size(11.0).strong().color(Color32::from_gray(150)));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.set_max_width(236.0);
+                            for (rows, cols) in Tiling::GRIDS {
+                                let t = Tiling { mode, rows, cols };
+                                let enabled = mode == TilingMode::Series || rows * cols <= self.series.len().max(1) || rows * cols == 1;
+                                let r = crate::widgets::tiling_button(ui, rows, cols, self.tiling == t, enabled);
+                                if r.clicked() {
+                                    chosen = Some(t);
+                                    ui.close();
+                                }
+                            }
+                        });
+                        if mode == TilingMode::Series {
+                            ui.add_space(4.0);
+                            ui.separator();
+                        }
+                    }
+                });
+                toolbar_caption(ui, "Tiling");
+                if let Some(t) = chosen {
+                    self.set_tiling(shared, t);
                 }
             });
             toolbar_separator(ui);
@@ -575,8 +968,8 @@ impl ViewerState {
                     ui.separator();
                     for p in &shared.presets.presets {
                         if ui.button(format!("{}  ({} / {})", p.name, p.center, p.width)).clicked() {
-                            self.view.window_center = p.center;
-                            self.view.window_width = p.width;
+                            self.panes[self.active].view.window_center = p.center;
+                            self.panes[self.active].view.window_width = p.width;
                             ui.close();
                         }
                     }
@@ -584,9 +977,9 @@ impl ViewerState {
                     ui.label("Custom");
                     ui.horizontal(|ui| {
                         ui.label("WL");
-                        ui.add(egui::DragValue::new(&mut self.view.window_center).speed(1.0));
+                        ui.add(egui::DragValue::new(&mut self.panes[self.active].view.window_center).speed(1.0));
                         ui.label("WW");
-                        ui.add(egui::DragValue::new(&mut self.view.window_width).speed(1.0).range(1.0..=f32::MAX));
+                        ui.add(egui::DragValue::new(&mut self.panes[self.active].view.window_width).speed(1.0).range(1.0..=f32::MAX));
                     });
                 });
                 toolbar_caption(ui, "WL/WW");
@@ -618,29 +1011,29 @@ impl ViewerState {
                 ui.add_space(2.0);
                 ui.menu_button((icons::rich(icons::ORIENTATION, 16.0), egui::RichText::new("  Orientation  ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     if ui.button("Rotate 90° clockwise").clicked() {
-                        self.view.rotation_deg = (self.view.rotation_deg + 90.0).rem_euclid(360.0);
-                        self.fit_pending = true;
+                        self.panes[self.active].view.rotation_deg = (self.panes[self.active].view.rotation_deg + 90.0).rem_euclid(360.0);
+                        self.panes[self.active].fit_pending = true;
                         ui.close();
                     }
                     if ui.button("Rotate 90° counter-clockwise").clicked() {
-                        self.view.rotation_deg = (self.view.rotation_deg - 90.0).rem_euclid(360.0);
-                        self.fit_pending = true;
+                        self.panes[self.active].view.rotation_deg = (self.panes[self.active].view.rotation_deg - 90.0).rem_euclid(360.0);
+                        self.panes[self.active].fit_pending = true;
                         ui.close();
                     }
                     if ui.button("Flip horizontal").clicked() {
-                        self.view.flip_horizontal = !self.view.flip_horizontal;
+                        self.panes[self.active].view.flip_horizontal = !self.panes[self.active].view.flip_horizontal;
                         ui.close();
                     }
                     if ui.button("Flip vertical").clicked() {
-                        self.view.flip_vertical = !self.view.flip_vertical;
+                        self.panes[self.active].view.flip_vertical = !self.panes[self.active].view.flip_vertical;
                         ui.close();
                     }
                     ui.separator();
                     if ui.button("Reset orientation").clicked() {
-                        self.view.rotation_deg = 0.0;
-                        self.view.flip_horizontal = false;
-                        self.view.flip_vertical = false;
-                        self.fit_pending = true;
+                        self.panes[self.active].view.rotation_deg = 0.0;
+                        self.panes[self.active].view.flip_horizontal = false;
+                        self.panes[self.active].view.flip_vertical = false;
+                        self.panes[self.active].fit_pending = true;
                         ui.close();
                     }
                     ui.separator();
@@ -653,14 +1046,19 @@ impl ViewerState {
             toolbar_separator(ui);
 
             if ToolbarButton::new(icons::RESET, "Reset").tooltip("Fit image and restore default window").show(ui).clicked() {
-                self.fit_pending = true;
+                self.panes[self.active].fit_pending = true;
                 self.apply_default_window(shared, false);
             }
             let is_key = self.current_image().map(|i| i.is_key_image).unwrap_or(false);
             if ToolbarButton::new(icons::KEY_IMAGE, "Key Image").selected(is_key).tooltip("Mark this image as a key image").show(ui).clicked() {
-                if let Some(img) = self.images.get_mut(self.image_idx) {
-                    img.is_key_image = !img.is_key_image;
-                    let _ = shared.db.set_key_image(img.id, img.is_key_image);
+                if let Some(img) = self.current_image() {
+                    let (id, flag) = (img.id, !img.is_key_image);
+                    let _ = shared.db.set_key_image(id, flag);
+                    for p in &mut self.panes {
+                        for im in p.images.iter_mut().filter(|im| im.id == id) {
+                            im.is_key_image = flag;
+                        }
+                    }
                 }
             }
             let selected_length = self.selected_length_px();
@@ -675,7 +1073,7 @@ impl ViewerState {
                         image_id: img.id,
                         pixel_length: px,
                         known_mm: String::new(),
-                        apply_to_series: self.images.len() > 1,
+                        apply_to_series: self.panes[self.active].images.len() > 1,
                     });
                 }
             }
@@ -684,7 +1082,7 @@ impl ViewerState {
             }
             toolbar_separator(ui);
 
-            let can_play = self.images.len() > 1 || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);
+            let can_play = self.panes[self.active].images.len() > 1 || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);
             let (glyph, label) = if self.playing { (icons::PAUSE, "Pause") } else { (icons::PLAY, "Play") };
             if ToolbarButton::new(glyph, label).enabled(can_play).show(ui).clicked() {
                 self.playing = !self.playing;
@@ -712,7 +1110,7 @@ impl ViewerState {
             for (i, s) in self.series.iter().enumerate() {
                 let tex = shared.thumbnail(s.id);
                 let sub = format!("{} {} im", s.modality, s.number_of_images);
-                let r = thumbnail_cell(ui, tex.as_ref(), &s.display_name(), &sub, i == self.series_idx, theme::THUMB_SIZE);
+                let r = thumbnail_cell(ui, tex.as_ref(), &s.display_name(), &sub, i == self.panes[self.active].series_idx, theme::THUMB_SIZE);
                 if r.clicked() {
                     clicked = Some(i);
                 }
@@ -724,24 +1122,17 @@ impl ViewerState {
     }
 
     fn slider(&mut self, ui: &mut Ui) {
-        let img_frames = self.current_image().map(|i| i.number_of_frames.max(1) as usize).unwrap_or(1);
-        if self.images.len() > 1 {
-            let n = self.images.len();
-            let mut idx = self.image_idx;
-            ui.spacing_mut().slider_width = ui.available_width() - 70.0;
-            ui.add(egui::Slider::new(&mut idx, 0..=n - 1).show_value(false));
-            ui.label(egui::RichText::new(format!("{}/{}", idx + 1, n)).size(11.5).color(Color32::from_gray(200)));
-            if idx != self.image_idx {
-                self.image_idx = idx;
-                self.frame_idx = 0;
-                self.selected_roi = None;
-            }
-        } else if img_frames > 1 {
-            let mut f = self.frame_idx as usize;
-            ui.spacing_mut().slider_width = ui.available_width() - 70.0;
-            ui.add(egui::Slider::new(&mut f, 0..=img_frames - 1).show_value(false));
-            ui.label(egui::RichText::new(format!("{}/{}", f + 1, img_frames)).size(11.5).color(Color32::from_gray(200)));
-            self.frame_idx = f as u32;
+        let n = self.panes[self.active].positions();
+        if n <= 1 {
+            return;
+        }
+        let current = self.panes[self.active].position().min(n - 1);
+        let mut v = current;
+        ui.spacing_mut().slider_width = ui.available_width() - 70.0;
+        ui.add(egui::Slider::new(&mut v, 0..=n - 1).show_value(false));
+        ui.label(egui::RichText::new(format!("{}/{}", v + 1, n)).size(11.5).color(Color32::from_gray(200)));
+        if v != current {
+            self.set_active_position(v);
         }
     }
 
@@ -798,12 +1189,13 @@ impl ViewerState {
             self.step_image(-10);
         }
         if home {
-            self.image_idx = 0;
-            self.frame_idx = 0;
+            self.set_active_position(0);
         }
-        if end && !self.images.is_empty() {
-            self.image_idx = self.images.len() - 1;
-            self.frame_idx = 0;
+        if end {
+            let n = self.panes[self.active].positions();
+            if n > 0 {
+                self.set_active_position(n - 1);
+            }
         }
         if space {
             self.playing = !self.playing;
@@ -814,6 +1206,7 @@ impl ViewerState {
                 if let Some(list) = self.rois.get_mut(&key) {
                     if sel < list.len() {
                         list.remove(sel);
+                        self.dirty_rois.insert(key);
                     }
                 }
                 self.selected_roi = None;
@@ -825,21 +1218,21 @@ impl ViewerState {
             self.selected_roi = None;
         }
         if r {
-            self.fit_pending = true;
+            self.panes[self.active].fit_pending = true;
             self.apply_default_window(shared, false);
         }
         if f {
-            self.fit_pending = true;
+            self.panes[self.active].fit_pending = true;
         }
         if h {
-            self.view.flip_horizontal = !self.view.flip_horizontal;
+            self.panes[self.active].view.flip_horizontal = !self.panes[self.active].view.flip_horizontal;
         }
         if v {
-            self.view.flip_vertical = !self.view.flip_vertical;
+            self.panes[self.active].view.flip_vertical = !self.panes[self.active].view.flip_vertical;
         }
         if i_key {
-            self.view.rotation_deg = (self.view.rotation_deg + 90.0).rem_euclid(360.0);
-            self.fit_pending = true;
+            self.panes[self.active].view.rotation_deg = (self.panes[self.active].view.rotation_deg + 90.0).rem_euclid(360.0);
+            self.panes[self.active].fit_pending = true;
         }
     }
 
@@ -847,8 +1240,8 @@ impl ViewerState {
         if let Some(key) = self.current_key() {
             if let Some(frame) = self.frames.get(&key) {
                 let (c, w) = if full_dynamic { frame.full_dynamic_window() } else { frame.default_window() };
-                self.view.window_center = c;
-                self.view.window_width = w;
+                self.panes[self.active].view.window_center = c;
+                self.panes[self.active].view.window_width = w;
             }
         }
     }
@@ -860,7 +1253,7 @@ impl ViewerState {
             "{}_{}_{}.png",
             self.study.patient_name.replace([',', ' '], "_"),
             self.current_series().display_name().replace(' ', "_"),
-            self.image_idx + 1
+            self.panes[self.active].image_idx + 1
         );
         let Some(path) = rfd::FileDialog::new()
             .set_title("Export image")
@@ -872,7 +1265,7 @@ impl ViewerState {
             return;
         };
         let clut = shared.cluts.get(&self.clut).cloned().unwrap_or_else(ruthos_dicom::Clut::grayscale);
-        let rgb = ruthos_dicom::pixels::frame_to_rgb8(&frame, self.view.window_center, self.view.window_width, &clut);
+        let rgb = ruthos_dicom::pixels::frame_to_rgb8(&frame, self.panes[self.active].view.window_center, self.panes[self.active].view.window_width, &clut);
         match image::RgbImage::from_raw(frame.width, frame.height, rgb) {
             Some(img) => match img.save(&path) {
                 Ok(()) => self.set_status(format!("Exported {}", path.display())),
@@ -885,74 +1278,140 @@ impl ViewerState {
     // --------------------------------------------------------- image area
 
     fn image_area(&mut self, ui: &mut Ui, shared: &Shared) {
-        let rect = ui.available_rect_before_wrap();
+        let area = ui.available_rect_before_wrap();
+        ui.painter().rect_filled(area, 0.0, Color32::BLACK);
+        self.sync_series_cells();
+
+        let (rows, cols) = (self.tiling.rows.max(1), self.tiling.cols.max(1));
+        let cells = rows * cols;
+        let gap = if cells > 1 { 1.0 } else { 0.0 };
+        let cw = (area.width() - gap * (cols as f32 - 1.0)) / cols as f32;
+        let ch = (area.height() - gap * (rows as f32 - 1.0)) / rows as f32;
+        let rects: Vec<Rect> = (0..cells)
+            .map(|k| {
+                let (r, c) = ((k / cols) as f32, (k % cols) as f32);
+                Rect::from_min_size(
+                    Pos2::new(area.left() + c * (cw + gap), area.top() + r * (ch + gap)),
+                    Vec2::new(cw, ch),
+                )
+            })
+            .collect();
+
+        // A press in another cell makes it the active one before any tool runs.
+        if cells > 1 {
+            if let Some(p) = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None }) {
+                if let Some(k) = rects.iter().position(|r| r.contains(p)) {
+                    if k < self.panes.len() {
+                        self.activate(k);
+                    }
+                }
+            }
+        }
+
+        for (k, rect) in rects.iter().enumerate() {
+            if k < self.panes.len() {
+                self.paint_cell(ui, shared, *rect, k, cells > 1);
+            }
+        }
+
+        if cells > 1 {
+            let painter = ui.painter().with_clip_rect(area);
+            let line = Color32::from_gray(70);
+            for c in 1..cols {
+                let x = area.left() + c as f32 * (cw + gap) - gap / 2.0;
+                painter.line_segment([Pos2::new(x, area.top()), Pos2::new(x, area.bottom())], egui::Stroke::new(1.0, line));
+            }
+            for r in 1..rows {
+                let y = area.top() + r as f32 * (ch + gap) - gap / 2.0;
+                painter.line_segment([Pos2::new(area.left(), y), Pos2::new(area.right(), y)], egui::Stroke::new(1.0, line));
+            }
+            if let Some(r) = rects.get(self.active) {
+                painter.rect_stroke(r.shrink(1.0), 0.0, egui::Stroke::new(1.5, theme::SELECTION_BLUE), egui::StrokeKind::Inside);
+            }
+        }
+    }
+
+    /// Paint one cell; only the active cell takes mouse input.
+    fn paint_cell(&mut self, ui: &mut Ui, shared: &Shared, rect: Rect, k: usize, tiled: bool) {
+        let active = k == self.active;
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter().with_clip_rect(rect);
-        painter.rect_filled(rect, 0.0, Color32::BLACK);
 
-        let Some(key) = self.current_key() else {
+        if self.panes[k].images.is_empty() {
             shadow_text(&painter, rect.center(), Align2::CENTER_CENTER, "No images in this series", FontId::proportional(16.0), Color32::from_gray(160));
             return;
-        };
+        }
+        // A cell past the end of a tiled series stays blank.
+        let Some(key) = self.panes[k].key() else { return };
 
-        // Request the current frame and its neighbours.
-        self.ensure_requested(shared, self.image_idx, self.frame_idx);
-        if self.images.len() > 1 {
-            let n = self.images.len();
-            self.ensure_requested(shared, (self.image_idx + 1) % n, 0);
-            self.ensure_requested(shared, (self.image_idx + n - 1) % n, 0);
-        } else if let Some(img) = self.current_image() {
-            if img.number_of_frames > 1 {
-                let f = img.number_of_frames as u32;
-                self.ensure_requested(shared, self.image_idx, (self.frame_idx + 1) % f);
+        // Request this frame and, for the active cell, its neighbours.
+        {
+            let p = &self.panes[k];
+            self.ensure_requested(shared, &p.images, p.image_idx, p.frame_idx);
+            if active {
+                let n = p.positions();
+                if n > 1 {
+                    let ahead = if self.tiled_series() { self.panes.len() } else { 1 };
+                    let pos = self.panes[0].position();
+                    let (next, prev) = ((pos + ahead) % n, (pos + n - 1) % n);
+                    if p.images.len() == 1 {
+                        self.ensure_requested(shared, &p.images, 0, next as u32);
+                        self.ensure_requested(shared, &p.images, 0, prev as u32);
+                    } else {
+                        self.ensure_requested(shared, &p.images, next, 0);
+                        self.ensure_requested(shared, &p.images, prev, 0);
+                    }
+                }
             }
         }
 
         let Some(frame) = self.frames.get(&key).cloned() else {
-            let msg = match &self.load_error {
+            let msg = match &self.panes[k].load_error {
                 Some(e) => format!("Could not decode image:\n{e}"),
-                None => "Loading…".to_string(),
+                None => "Loading\u{2026}".to_string(),
             };
             shadow_text(&painter, rect.center(), Align2::CENTER_CENTER, &msg, FontId::proportional(15.0), Color32::from_gray(170));
             return;
         };
-        self.load_error = None;
+        self.panes[k].load_error = None;
 
         // First display of a series: window from the stored series state or
-        // the header, and fit to the viewport.
-        let series_id = self.current_series().id;
-        if self.window_initialised_for != Some(series_id) {
-            let s = self.current_series().clone();
-            match (s.window_center, s.window_width) {
+        // the header, and fit to the cell.
+        let series = self.series_of(k).clone();
+        if self.panes[k].window_initialised_for != Some(series.id) {
+            let p = &mut self.panes[k];
+            match (series.window_center, series.window_width) {
                 (Some(c), Some(w)) if w > 0.0 => {
-                    self.view.window_center = c as f32;
-                    self.view.window_width = w as f32;
+                    p.view.window_center = c as f32;
+                    p.view.window_width = w as f32;
                 }
                 _ => {
                     let (c, w) = frame.default_window();
-                    self.view.window_center = c;
-                    self.view.window_width = w;
+                    p.view.window_center = c;
+                    p.view.window_width = w;
                 }
             }
-            self.view.rotation_deg = s.rotation_angle as f32;
-            self.view.flip_horizontal = s.x_flipped;
-            self.view.flip_vertical = s.y_flipped;
-            self.window_initialised_for = Some(series_id);
+            p.view.rotation_deg = series.rotation_angle as f32;
+            p.view.flip_horizontal = series.x_flipped;
+            p.view.flip_vertical = series.y_flipped;
+            p.window_initialised_for = Some(series.id);
         }
         let aspect = frame
             .meta
             .pixel_spacing
             .map(|[row, col]| if col > 0.0 { (row / col) as f32 } else { 1.0 })
             .unwrap_or(1.0);
-        if self.fit_pending {
-            self.view.fit(rect, frame.width, frame.height, aspect);
-            self.fit_pending = false;
+        if self.panes[k].fit_pending {
+            self.panes[k].view.fit(rect, frame.width, frame.height, aspect);
+            self.panes[k].fit_pending = false;
         }
 
-        let mut transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.view);
-        self.handle_input(ui, &response, &mut transform, &frame, &key);
-        self.view = transform.state;
-        let transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.view);
+        let mut transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.panes[k].view);
+        if active {
+            self.handle_input(ui, &response, &mut transform, &frame, &key);
+            self.panes[k].view = transform.state;
+        }
+        let transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.panes[k].view);
 
         // The image itself.
         if let Some(gpu) = self.gpu_for(shared, key) {
@@ -966,7 +1425,7 @@ impl ViewerState {
             painter.add(egui_wgpu::Callback::new_paint_callback(
                 rect,
                 ImageCallback {
-                    key: self.id,
+                    key: self.id * 64 + k as u64,
                     image: gpu,
                     clut,
                     transform,
@@ -977,37 +1436,55 @@ impl ViewerState {
         }
 
         // ROIs and drafts.
+        self.ensure_rois_loaded(shared, key);
+        if active {
+            self.label_hits.retain(|(k, _, _)| *k != key);
+        }
         if let Some(list) = self.rois.get(&key) {
             for (i, roi) in list.iter().enumerate() {
-                roi.draw(&painter, &transform, &frame, roi_color(self.selected_roi == Some(i)));
+                let sel = active && self.selected_roi == Some(i);
+                let label = roi.draw(&painter, &transform, &frame, roi_color(sel), sel);
+                if active {
+                    if let Some(r) = label {
+                        self.label_hits.push((key, i, r));
+                    }
+                }
             }
         }
-        if let Some((a, b)) = self.drag_draft {
-            if let Some(kind) = draft_kind(self.tool, a, b) {
-                Roi::new(kind).draw(&painter, &transform, &frame, theme::ROI_DRAFT);
+        if active {
+            if let Some((a, b)) = self.drag_draft {
+                if let Some(kind) = draft_kind(self.tool, a, b) {
+                    Roi::new(kind).draw(&painter, &transform, &frame, theme::ROI_DRAFT, false);
+                }
             }
-        }
-        if let Some(d) = &self.angle_draft {
-            let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c });
-            roi.draw(&painter, &transform, &frame, theme::ROI_DRAFT);
+            if let Some(d) = &self.angle_draft {
+                let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c });
+                roi.draw(&painter, &transform, &frame, theme::ROI_DRAFT, false);
+            }
         }
 
-        // Annotations.
-        let image = self.images[self.image_idx].clone();
+        // Annotations; small cells drop to the partial set.
+        let p = &self.panes[k];
+        let image = p.images[p.image_idx].clone();
+        let level = if tiled && rect.width() < 420.0 && self.annotations == AnnotationLevel::Full {
+            AnnotationLevel::Partial
+        } else {
+            self.annotations
+        };
         let ctx = AnnotationContext {
             study: &self.study,
-            series: self.current_series(),
+            series: &series,
             image: &image,
             frame: &frame,
-            image_index: self.image_idx,
-            image_count: self.images.len(),
+            image_index: p.position(),
+            image_count: p.positions(),
             transform: &transform,
-            mouse_pixel: self.mouse_pixel,
-            level: self.annotations,
+            mouse_pixel: if active { self.mouse_pixel } else { None },
+            level,
         };
         annotations::draw(&painter, rect, &ctx);
 
-        if self.playing {
+        if self.playing && active {
             shadow_text(
                 &painter,
                 Pos2::new(rect.center().x, rect.top() + 6.0),
@@ -1046,6 +1523,21 @@ impl ViewerState {
 
         let pos = response.interact_pointer_pos();
 
+        // A click on a measurement's label opens the naming popup instead of
+        // running a tool.
+        if self.assign.is_some() {
+            return;
+        }
+        if response.clicked_by(PointerButton::Primary) {
+            if let Some(p) = pos {
+                if let Some((k, i, _)) = self.label_hits.iter().find(|(k, _, r)| k == key && r.expand(3.0).contains(p)).copied() {
+                    self.assign = Some(AssignPopup { key: k, index: i, pos: p, custom: String::new() });
+                    self.selected_roi = Some(i);
+                    return;
+                }
+            }
+        }
+
         // Each mouse button drives the tool assigned to it (Tools menu).
         for (button, tool) in [
             (PointerButton::Primary, self.tool),
@@ -1057,7 +1549,7 @@ impl ViewerState {
 
         // Double-click: fit (Horos resets on double click with some tools).
         if response.double_clicked_by(PointerButton::Primary) && !self.tool.is_roi() {
-            self.fit_pending = true;
+            self.panes[self.active].fit_pending = true;
         }
 
         // Right-click menu: calibration and ROI housekeeping.
@@ -1084,7 +1576,7 @@ impl ViewerState {
                 ui.close();
             }
             if ui.button("Fit image to window").clicked() {
-                self.fit_pending = true;
+                self.panes[self.active].fit_pending = true;
                 ui.close();
             }
         });
@@ -1094,7 +1586,7 @@ impl ViewerState {
                     image_id: id,
                     pixel_length: px,
                     known_mm: String::new(),
-                    apply_to_series: self.images.len() > 1,
+                    apply_to_series: self.panes[self.active].images.len() > 1,
                 });
             }
         }
@@ -1106,6 +1598,7 @@ impl ViewerState {
         if delete_all {
             self.rois.remove(key);
             self.selected_roi = None;
+            self.dirty_rois.insert(*key);
         }
     }
 
@@ -1165,6 +1658,7 @@ impl ViewerState {
                             let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c });
                             if !roi.is_degenerate() {
                                 self.rois.entry(*key).or_default().push(roi);
+                                self.dirty_rois.insert(*key);
                             }
                             self.angle_draft = None;
                         }
@@ -1196,6 +1690,7 @@ impl ViewerState {
                     if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
                         if frame.value_at(p.x.floor() as i64, p.y.floor() as i64).is_some() {
                             self.rois.entry(*key).or_default().push(Roi::new(RoiKind::Point { p }));
+                            self.dirty_rois.insert(*key);
                         }
                     }
                 }
@@ -1228,6 +1723,7 @@ impl ViewerState {
                                 let list = self.rois.entry(*key).or_default();
                                 list.push(roi);
                                 self.selected_roi = Some(list.len() - 1);
+                                self.dirty_rois.insert(*key);
                             }
                         }
                     }
@@ -1271,6 +1767,18 @@ impl ViewerState {
         let after = t.image_to_screen(before);
         t.state.pan += anchor - after;
     }
+}
+
+/// Parse `series:2x2` / `study:1x2` (developer option).
+fn parse_tiling(v: &str) -> Option<Tiling> {
+    let (mode, grid) = v.trim().split_once(':')?;
+    let mode = match mode {
+        "series" => TilingMode::Series,
+        "study" => TilingMode::Study,
+        _ => return None,
+    };
+    let (r, c) = grid.split_once('x')?;
+    Some(Tiling { mode, rows: r.parse().ok()?, cols: c.parse().ok()? })
 }
 
 fn steps_nonzero(steps: f32) -> bool {
