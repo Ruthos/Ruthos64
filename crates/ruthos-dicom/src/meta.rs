@@ -119,6 +119,9 @@ pub struct InstanceMeta {
     pub rows: u32,
     pub columns: u32,
     pub number_of_frames: u32,
+    /// Time between frames of a multi-frame image in milliseconds, from
+    /// Frame Time, Cine Rate or Recommended Display Frame Rate.
+    pub frame_time_ms: Option<f64>,
     pub bits_allocated: u16,
     pub bits_stored: u16,
     pub pixel_representation: u16,
@@ -126,6 +129,11 @@ pub struct InstanceMeta {
     pub photometric_interpretation: String,
     /// Row spacing, column spacing in mm (Pixel Spacing, else Imager Pixel Spacing).
     pub pixel_spacing: Option<[f64; 2]>,
+    /// Ultrasound calibration regions (0018,6011): each gives its own scale,
+    /// and an M-mode region has time across and distance down.
+    pub us_regions: Vec<UsRegion>,
+    /// The user calibrated this image by hand; that overrides everything.
+    pub user_calibrated: bool,
     pub pixel_spacing_is_calibrated: bool,
     pub slice_thickness: Option<f64>,
     pub slice_location: Option<f64>,
@@ -275,12 +283,19 @@ pub fn meta_from_object(obj: &Obj) -> InstanceMeta {
         rows: g.int(tags::ROWS).unwrap_or(0) as u32,
         columns: g.int(tags::COLUMNS).unwrap_or(0) as u32,
         number_of_frames: g.int(tags::NUMBER_OF_FRAMES).unwrap_or(1).max(1) as u32,
+        frame_time_ms: g
+            .f64(tags::FRAME_TIME)
+            .filter(|t| *t > 0.0)
+            .or_else(|| g.f64(tags::CINE_RATE).filter(|r| *r > 0.0).map(|r| 1000.0 / r))
+            .or_else(|| g.f64(tags::RECOMMENDED_DISPLAY_FRAME_RATE).filter(|r| *r > 0.0).map(|r| 1000.0 / r)),
         bits_allocated: g.int(tags::BITS_ALLOCATED).unwrap_or(16) as u16,
         bits_stored: g.int(tags::BITS_STORED).unwrap_or(16) as u16,
         pixel_representation: g.int(tags::PIXEL_REPRESENTATION).unwrap_or(0) as u16,
         samples_per_pixel: g.int(tags::SAMPLES_PER_PIXEL).unwrap_or(1) as u16,
         photometric_interpretation: g.str(tags::PHOTOMETRIC_INTERPRETATION),
         pixel_spacing: None,
+        us_regions: read_us_regions(obj),
+        user_calibrated: false,
         pixel_spacing_is_calibrated: false,
         slice_thickness: g.f64(tags::SLICE_THICKNESS),
         slice_location: g.f64(tags::SLICE_LOCATION),
@@ -317,6 +332,10 @@ pub fn meta_from_object(obj: &Obj) -> InstanceMeta {
     } else if let Some(ps) = g.f64s(tags::IMAGER_PIXEL_SPACING).filter(|v| v.len() >= 2) {
         m.pixel_spacing = Some([ps[0], ps[1]]);
         m.pixel_spacing_is_calibrated = false;
+    } else if let Some(spacing) = m.us_regions.iter().find_map(|r| r.mm_per_pixel()) {
+        // Ultrasound: the first 2D region calibrated in centimetres.
+        m.pixel_spacing = Some(spacing);
+        m.pixel_spacing_is_calibrated = true;
     }
 
     if let Some(po) = g.strs(tags::PATIENT_ORIENTATION) {
@@ -341,6 +360,120 @@ impl PatientName {
         } else {
             self.display()
         }
+    }
+}
+
+/// One item of the Sequence of Ultrasound Regions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsRegion {
+    pub x0: i64,
+    pub y0: i64,
+    pub x1: i64,
+    pub y1: i64,
+    /// 1 = 2D, 2 = M-mode, 3 = spectral, 4 = waveform, 5 = graphics.
+    pub spatial_format: u16,
+    pub data_type: u16,
+    /// Physical units: 3 = cm, 4 = seconds, 7 = cm/s.
+    pub units_x: u16,
+    pub units_y: u16,
+    /// Physical size of one pixel, in the units above.
+    pub delta_x: f64,
+    pub delta_y: f64,
+}
+
+impl UsRegion {
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.x0 as f64 && x <= self.x1 as f64 + 1.0 && y >= self.y0 as f64 && y <= self.y1 as f64 + 1.0
+    }
+
+    fn mm(units: u16, delta: f64) -> Option<f64> {
+        match units {
+            3 if delta > 0.0 => Some(delta.abs() * 10.0),
+            _ => None,
+        }
+    }
+
+    /// Millimetres per pixel across, when x is a distance.
+    pub fn col_mm(&self) -> Option<f64> {
+        Self::mm(self.units_x, self.delta_x)
+    }
+
+    /// Millimetres per pixel down, when y is a distance.
+    pub fn row_mm(&self) -> Option<f64> {
+        Self::mm(self.units_y, self.delta_y)
+    }
+
+    /// `[row, column]` spacing in mm when both axes are distances (2D).
+    pub fn mm_per_pixel(&self) -> Option<[f64; 2]> {
+        Some([self.row_mm()?, self.col_mm()?])
+    }
+
+    /// M-mode and spectral strips: time across, distance (or velocity) down.
+    pub fn is_time_across(&self) -> bool {
+        self.units_x == 4
+    }
+}
+
+fn read_us_regions(obj: &Obj) -> Vec<UsRegion> {
+    let Some(seq) = obj.get(tags::SEQUENCE_OF_ULTRASOUND_REGIONS) else { return Vec::new() };
+    let Some(items) = seq.items() else { return Vec::new() };
+    items
+        .iter()
+        .filter_map(|item| {
+            let g = Getter { obj: item };
+            Some(UsRegion {
+                x0: g.int(tags::REGION_LOCATION_MIN_X0)?,
+                y0: g.int(tags::REGION_LOCATION_MIN_Y0)?,
+                x1: g.int(tags::REGION_LOCATION_MAX_X1)?,
+                y1: g.int(tags::REGION_LOCATION_MAX_Y1)?,
+                spatial_format: g.int(tags::REGION_SPATIAL_FORMAT).unwrap_or(0) as u16,
+                data_type: g.int(tags::REGION_DATA_TYPE).unwrap_or(0) as u16,
+                units_x: g.int(tags::PHYSICAL_UNITS_X_DIRECTION).unwrap_or(0) as u16,
+                units_y: g.int(tags::PHYSICAL_UNITS_Y_DIRECTION).unwrap_or(0) as u16,
+                delta_x: g.f64(tags::PHYSICAL_DELTA_X).unwrap_or(0.0),
+                delta_y: g.f64(tags::PHYSICAL_DELTA_Y).unwrap_or(0.0),
+            })
+        })
+        .collect()
+}
+
+impl InstanceMeta {
+    /// The ultrasound region under an image point, if any.
+    pub fn us_region_at(&self, x: f64, y: f64) -> Option<&UsRegion> {
+        self.us_regions.iter().find(|r| r.contains(x, y))
+    }
+
+    /// Pixel spacing (`[row, column]` mm) that applies at an image point: a
+    /// hand calibration first, then the ultrasound region under the point
+    /// when it is a 2D region, then the image's spacing.
+    pub fn spacing_at(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+        if self.user_calibrated {
+            return self.pixel_spacing;
+        }
+        if let Some(r) = self.us_region_at(x, y) {
+            if let Some(s) = r.mm_per_pixel() {
+                return Some(s);
+            }
+        }
+        self.pixel_spacing
+    }
+
+    /// Length in millimetres between two image points. Inside an M-mode or
+    /// spectral strip only the vertical distance counts, since x is time.
+    pub fn length_mm(&self, a: [f64; 2], b: [f64; 2]) -> Option<f64> {
+        let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+        if !self.user_calibrated {
+            if let Some(r) = self.us_region_at(mid[0], mid[1]) {
+                if r.is_time_across() {
+                    let row_mm = r.row_mm()?;
+                    return Some((b[1] - a[1]).abs() * row_mm);
+                }
+            }
+        }
+        let [row, col] = self.spacing_at(mid[0], mid[1])?;
+        let dx = (b[0] - a[0]) * col;
+        let dy = (b[1] - a[1]) * row;
+        Some((dx * dx + dy * dy).sqrt())
     }
 }
 

@@ -74,6 +74,7 @@ impl ReportState {
                     if let Ok(Some(spacing)) = shared.db.calibration(m.roi.image_id) {
                         frame.meta.pixel_spacing = Some(spacing);
                         frame.meta.pixel_spacing_is_calibrated = true;
+                        frame.meta.user_calibrated = true;
                     }
                     Some(std::sync::Arc::new(frame))
                 })

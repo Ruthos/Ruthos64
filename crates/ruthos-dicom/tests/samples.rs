@@ -106,3 +106,69 @@ fn rgb_sample_is_color() {
     assert!(frame.is_color());
     assert_eq!((frame.width, frame.height), (100, 100));
 }
+
+#[test]
+fn multiframe_file_decodes_whole_and_matches_per_frame() {
+    use dicom_core::value::PrimitiveValue;
+    use dicom_core::{dicom_value, DataElement, VR};
+    use dicom_dictionary_std::{tags, uids};
+    use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
+    use ruthos_dicom::{decode_all_frames, FramePixels};
+
+    // A synthetic 4-frame RGB loop, 8x6, each frame a different flat colour.
+    let (w, h, frames) = (8u16, 6u16, 4u32);
+    let mut pixels = Vec::new();
+    for k in 0..frames {
+        for _ in 0..(w as usize * h as usize) {
+            pixels.extend_from_slice(&[(k * 60) as u8, 100, 200 - (k * 40) as u8]);
+        }
+    }
+    let mut obj = InMemDicomObject::new_empty();
+    let mut put = |tag, vr, v: &str| obj.put(DataElement::new(tag, vr, dicom_value!(Str, v)));
+    put(tags::SOP_CLASS_UID, VR::UI, uids::ULTRASOUND_MULTI_FRAME_IMAGE_STORAGE);
+    put(tags::SOP_INSTANCE_UID, VR::UI, "1.2.3.4");
+    put(tags::STUDY_INSTANCE_UID, VR::UI, "1.2.3");
+    put(tags::SERIES_INSTANCE_UID, VR::UI, "1.2.3.1");
+    put(tags::MODALITY, VR::CS, "US");
+    put(tags::PATIENT_NAME, VR::PN, "LOOP^TEST");
+    put(tags::PATIENT_ID, VR::LO, "L1");
+    put(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "RGB");
+    put(tags::NUMBER_OF_FRAMES, VR::IS, "4");
+    put(tags::FRAME_TIME, VR::DS, "40");
+    obj.put(DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, dicom_value!(U16, [3])));
+    obj.put(DataElement::new(tags::PLANAR_CONFIGURATION, VR::US, dicom_value!(U16, [0])));
+    obj.put(DataElement::new(tags::ROWS, VR::US, dicom_value!(U16, [h])));
+    obj.put(DataElement::new(tags::COLUMNS, VR::US, dicom_value!(U16, [w])));
+    obj.put(DataElement::new(tags::BITS_ALLOCATED, VR::US, dicom_value!(U16, [8])));
+    obj.put(DataElement::new(tags::BITS_STORED, VR::US, dicom_value!(U16, [8])));
+    obj.put(DataElement::new(tags::HIGH_BIT, VR::US, dicom_value!(U16, [7])));
+    obj.put(DataElement::new(tags::PIXEL_REPRESENTATION, VR::US, dicom_value!(U16, [0])));
+    obj.put(DataElement::new(tags::PIXEL_DATA, VR::OB, PrimitiveValue::from(pixels)));
+    let meta = FileMetaTableBuilder::new()
+        .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+        .media_storage_sop_class_uid(uids::ULTRASOUND_MULTI_FRAME_IMAGE_STORAGE)
+        .media_storage_sop_instance_uid("1.2.3.4")
+        .implementation_class_uid("1.2.826.0.1.3680043.10.1465.1")
+        .build()
+        .unwrap();
+    let dir = std::env::temp_dir().join(format!("ruthos-loop-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("loop.dcm");
+    obj.with_exact_meta(meta).write_to_file(&path).unwrap();
+
+    let meta = read_meta(&path).unwrap();
+    assert_eq!(meta.number_of_frames, 4);
+    assert_eq!(meta.frame_time_ms, Some(40.0));
+
+    let all = decode_all_frames(&path).unwrap();
+    assert_eq!(all.len(), 4);
+    for k in 0..frames {
+        let single = decode_frame(&path, k).unwrap();
+        let (FramePixels::Rgba(a), FramePixels::Rgba(b)) = (&all[k as usize].pixels, &single.pixels) else {
+            panic!("expected colour frames");
+        };
+        assert_eq!(a, b, "frame {k} differs between the two decode paths");
+        assert_eq!(a[0], (k * 60) as u8, "frame {k} has the wrong colour");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

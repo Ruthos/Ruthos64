@@ -745,6 +745,7 @@ impl ViewerState {
                             let mut f = Arc::try_unwrap(frame).unwrap_or_else(|a| (*a).clone());
                             f.meta.pixel_spacing = Some(spacing);
                             f.meta.pixel_spacing_is_calibrated = true;
+                            f.meta.user_calibrated = true;
                             Arc::new(f)
                         }
                         _ => frame,
@@ -771,20 +772,37 @@ impl ViewerState {
 
     fn ensure_requested(&self, shared: &Shared, images: &[ImageRow], idx: usize, frame: u32) {
         if let Some(img) = images.get(idx) {
-            if frame >= img.number_of_frames.max(1) as u32 {
+            let frames = img.number_of_frames.max(1) as u32;
+            if frame >= frames {
                 return;
             }
             let key = FrameKey { image_id: img.id, frame };
-            if !self.frames.contains_key(&key) {
+            if self.frames.contains_key(&key) {
+                return;
+            }
+            if frames > 1 {
+                // A loop is decoded in one pass and kept whole.
+                shared.loader.request_all(img.id, shared.resolve(&img.path), frames);
+            } else {
                 shared.loader.request(key, shared.resolve(&img.path));
             }
         }
     }
 
-    /// Cache sizes grow with the number of cells on screen.
+    /// Cache sizes grow with the number of cells on screen, and hold every
+    /// frame of the loop being shown so cine never re-decodes.
     fn cache_limits(&self) -> (usize, usize) {
         let cells = self.panes.len();
-        (FRAME_CACHE.max(cells * 3 + 6), GPU_CACHE.max(cells * 2))
+        let loop_frames = self
+            .panes
+            .iter()
+            .filter_map(|p| p.image().map(|i| i.number_of_frames.max(1) as usize))
+            .max()
+            .unwrap_or(1);
+        (
+            FRAME_CACHE.max(cells * 3 + 6).max(loop_frames + 8),
+            GPU_CACHE.max(cells * 2).max(loop_frames + 2),
+        )
     }
 
     fn gpu_for(&mut self, shared: &Shared, key: FrameKey) -> Option<Arc<GpuImage>> {
@@ -1215,7 +1233,7 @@ impl ViewerState {
             }
             ui.vertical(|ui| {
                 ui.add_space(6.0);
-                ui.add_enabled(can_play, egui::Slider::new(&mut self.fps, 1.0..=60.0).show_value(false));
+                ui.add_enabled(can_play, egui::Slider::new(&mut self.fps, 1.0..=120.0).show_value(false));
                 toolbar_caption(ui, &format!("Speed {} fps", self.fps.round() as i32));
             });
 
@@ -1234,7 +1252,7 @@ impl ViewerState {
             let mut clicked = None;
             for (i, s) in self.series.iter().enumerate() {
                 let tex = shared.thumbnail(s.id);
-                let sub = format!("{} {} im", s.modality, s.number_of_images);
+                let sub = format!("{} {}", s.modality, s.count_label());
                 let r = thumbnail_cell(ui, tex.as_ref(), &s.display_name(), &sub, i == self.panes[self.active].series_idx, theme::THUMB_SIZE);
                 if r.clicked() {
                     clicked = Some(i);
@@ -1541,6 +1559,12 @@ impl ViewerState {
             p.view.flip_horizontal = series.x_flipped;
             p.view.flip_vertical = series.y_flipped;
             p.window_initialised_for = Some(series.id);
+            // Cine plays at the rate the file was recorded at.
+            if let Some(ms) = frame.meta.frame_time_ms.filter(|ms| *ms > 0.0) {
+                if active {
+                    self.fps = (1000.0 / ms as f32).clamp(1.0, 120.0);
+                }
+            }
         }
         let aspect = frame
             .meta

@@ -1069,7 +1069,7 @@ impl BrowserState {
             ui.horizontal(|ui| {
                 for s in &series {
                     let tex = shared.thumbnail(s.id);
-                    let sub = format!("{} · {} im", s.modality, s.number_of_images);
+                    let sub = format!("{} · {}", s.modality, s.count_label());
                     let r = thumbnail_cell(ui, tex.as_ref(), &s.display_name(), &sub, self.selected_series == Some(s.id), theme::THUMB_SIZE);
                     if r.clicked() {
                         select = Some(s.id);

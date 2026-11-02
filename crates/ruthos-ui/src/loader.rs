@@ -22,6 +22,8 @@ pub struct FrameKey {
 struct Request {
     key: FrameKey,
     path: PathBuf,
+    /// Decode every frame of the file at once (cine loops).
+    all_frames: Option<u32>,
 }
 
 pub struct LoadedFrame {
@@ -53,10 +55,45 @@ impl FrameLoader {
                 .name(format!("ruthos-decode-{i}"))
                 .spawn(move || {
                     while let Ok(req) = work_rx.recv() {
-                        let result = decode_frame(&req.path, req.key.frame)
-                            .map(Arc::new)
-                            .map_err(|e| e.to_string());
-                        let _ = done_tx.send(LoadedFrame { key: req.key, result });
+                        match req.all_frames {
+                            Some(n) => match {
+                                let started = std::time::Instant::now();
+                                let r = ruthos_dicom::decode_all_frames(&req.path);
+                                if let Ok(frames) = &r {
+                                    tracing::info!(
+                                        "decoded loop of {} frames (image {}) in {:.0} ms",
+                                        frames.len(),
+                                        req.key.image_id,
+                                        started.elapsed().as_secs_f64() * 1000.0
+                                    );
+                                }
+                                r
+                            } {
+                                Ok(frames) => {
+                                    let got = frames.len() as u32;
+                                    for frame in frames {
+                                        let key = FrameKey { image_id: req.key.image_id, frame: frame.frame_index };
+                                        let _ = done_tx.send(LoadedFrame { key, result: Ok(Arc::new(frame)) });
+                                    }
+                                    for k in got..n {
+                                        let key = FrameKey { image_id: req.key.image_id, frame: k };
+                                        let _ = done_tx.send(LoadedFrame { key, result: Err("frame missing".into()) });
+                                    }
+                                }
+                                Err(e) => {
+                                    for k in 0..n {
+                                        let key = FrameKey { image_id: req.key.image_id, frame: k };
+                                        let _ = done_tx.send(LoadedFrame { key, result: Err(e.to_string()) });
+                                    }
+                                }
+                            },
+                            None => {
+                                let result = decode_frame(&req.path, req.key.frame)
+                                    .map(Arc::new)
+                                    .map_err(|e| e.to_string());
+                                let _ = done_tx.send(LoadedFrame { key: req.key, result });
+                            }
+                        }
                     }
                 })
                 .expect("spawn decode worker");
@@ -72,11 +109,25 @@ impl FrameLoader {
     pub fn request(&self, key: FrameKey, path: PathBuf) -> bool {
         let mut pending = self.pending.lock();
         if pending.insert(key) {
-            let _ = self.tx.send(Request { key, path });
+            let _ = self.tx.send(Request { key, path, all_frames: None });
             true
         } else {
             false
         }
+    }
+
+    /// Queue a decode of every frame of a multi-frame image, unless one is
+    /// already in flight for it.
+    pub fn request_all(&self, image_id: i64, path: PathBuf, frames: u32) -> bool {
+        let mut pending = self.pending.lock();
+        if (0..frames).any(|k| pending.contains(&FrameKey { image_id, frame: k })) {
+            return false;
+        }
+        for k in 0..frames {
+            pending.insert(FrameKey { image_id, frame: k });
+        }
+        let _ = self.tx.send(Request { key: FrameKey { image_id, frame: 0 }, path, all_frames: Some(frames) });
+        true
     }
 
     pub fn is_pending(&self, key: &FrameKey) -> bool {

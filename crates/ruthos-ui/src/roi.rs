@@ -85,13 +85,12 @@ impl Roi {
 
     /// The headline number and its unit, for storage and reports.
     pub fn measurement(&self, frame: &Frame) -> (Option<f64>, &'static str) {
-        let spacing = frame.meta.pixel_spacing;
         match &self.kind {
-            RoiKind::Length { a, b } => match ViewTransform::length_mm(*a, *b, spacing) {
-                Some(mm) => (Some(mm as f64), "mm"),
+            RoiKind::Length { a, b } => match length_mm(frame, *a, *b) {
+                Some(mm) => (Some(mm), "mm"),
                 None => (Some((*b - *a).length() as f64), "px"),
             },
-            RoiKind::Angle { a, b, c } => (Some(angle_deg(*a, *b, *c, spacing) as f64), "deg"),
+            RoiKind::Angle { a, b, c } => (Some(angle_deg(*a, *b, *c, spacing_for(frame, *b)) as f64), "deg"),
             RoiKind::Rect { .. } | RoiKind::Oval { .. } => match self.stats(frame) {
                 Some(s) => match s.area_mm2 {
                     Some(a) => (Some(a), "mm2"),
@@ -180,20 +179,19 @@ impl Roi {
 
     /// The measured value as text.
     pub fn value_text(&self, frame: &Frame) -> String {
-        let spacing = frame.meta.pixel_spacing;
         match &self.kind {
             RoiKind::Length { a, b } | RoiKind::Arrow { a, b } => {
                 if matches!(self.kind, RoiKind::Arrow { .. }) {
                     return String::new();
                 }
-                match ViewTransform::length_mm(*a, *b, spacing) {
+                match length_mm(frame, *a, *b) {
                     Some(mm) if mm >= 10.0 => format!("{:.2} cm", mm / 10.0),
                     Some(mm) => format!("{mm:.2} mm"),
                     None => format!("{:.1} px  (not calibrated)", (*b - *a).length()),
                 }
             }
             RoiKind::Angle { a, b, c } => {
-                let deg = angle_deg(*a, *b, *c, spacing);
+                let deg = angle_deg(*a, *b, *c, spacing_for(frame, *b));
                 format!("{deg:.1}°")
             }
             RoiKind::Rect { .. } | RoiKind::Oval { .. } => match self.stats(frame) {
@@ -266,7 +264,8 @@ impl Roi {
         }
         let mean = sum / n as f64;
         let var = (sum_sq / n as f64 - mean * mean).max(0.0);
-        let area_mm2 = frame.meta.pixel_spacing.map(|[r, c]| n as f64 * r * c);
+        let centre = Vec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+        let area_mm2 = spacing_for(frame, centre).map(|[r, c]| n as f64 * r * c);
         Some(RoiStats {
             count: n,
             mean,
@@ -389,6 +388,17 @@ fn segment_distance(a: Pos2, b: Pos2, p: Pos2) -> f32 {
     }
     let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
     (p - (a + ab * t)).length()
+}
+
+/// Pixel spacing that applies at an image point: hand calibration, then the
+/// ultrasound region under the point, then the image's own spacing.
+pub fn spacing_for(frame: &Frame, p: Vec2) -> Option<[f64; 2]> {
+    frame.meta.spacing_at(p.x as f64, p.y as f64)
+}
+
+/// Length between two image points in mm, region-aware for ultrasound.
+pub fn length_mm(frame: &Frame, a: Vec2, b: Vec2) -> Option<f64> {
+    frame.meta.length_mm([a.x as f64, a.y as f64], [b.x as f64, b.y as f64])
 }
 
 /// Angle at vertex `b` in degrees, corrected for anisotropic pixel spacing.

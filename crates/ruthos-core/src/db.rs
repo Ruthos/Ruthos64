@@ -433,7 +433,8 @@ impl Database {
                     (SELECT COUNT(*) FROM image i WHERE i.series_id = se.id),
                     (SELECT COUNT(*) FROM image i WHERE i.series_id = se.id AND i.is_key_image = 1),
                     se.window_center, se.window_width, se.rotation_angle, se.x_flipped, se.y_flipped,
-                    se.comment, se.date_added
+                    se.comment, se.date_added,
+                    (SELECT IFNULL(SUM(i.number_of_frames), 0) FROM image i WHERE i.series_id = se.id)
              FROM series se WHERE se.study_id = ?1
              ORDER BY se.series_number, se.id",
         )?;
@@ -451,7 +452,8 @@ impl Database {
                         (SELECT COUNT(*) FROM image i WHERE i.series_id = se.id),
                         (SELECT COUNT(*) FROM image i WHERE i.series_id = se.id AND i.is_key_image = 1),
                         se.window_center, se.window_width, se.rotation_angle, se.x_flipped, se.y_flipped,
-                        se.comment, se.date_added
+                        se.comment, se.date_added,
+                        (SELECT IFNULL(SUM(i.number_of_frames), 0) FROM image i WHERE i.series_id = se.id)
                  FROM series se WHERE se.id = ?1",
                 params![id],
                 series_from_row,
@@ -832,6 +834,7 @@ fn series_from_row(r: &Row<'_>) -> rusqlite::Result<SeriesRow> {
         y_flipped: r.get(16)?,
         comment: r.get(17)?,
         date_added: r.get(18)?,
+        number_of_frames: r.get(19)?,
     })
 }
 

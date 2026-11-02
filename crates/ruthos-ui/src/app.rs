@@ -332,7 +332,9 @@ impl eframe::App for RuthosApp {
 
         if let Some(id) = self.startup_open.take() {
             self.browser.selected_study = Some(id);
-            self.open_viewer(id, None);
+            // `RUTHOS_OPEN_SERIES=<series id>` picks the series to open on.
+            let series = std::env::var("RUTHOS_OPEN_SERIES").ok().and_then(|v| v.trim().parse::<i64>().ok());
+            self.open_viewer(id, series);
         }
         for (study, series) in self.browser.take_open_requests() {
             self.open_viewer(study, series);

@@ -18,8 +18,8 @@ pub mod quirks;
 pub mod sc;
 
 pub use clut::{Clut, ClutLibrary};
-pub use meta::{read_meta, InstanceMeta, PatientName};
-pub use pixels::{decode_frame, Frame, FramePixels};
+pub use meta::{UsRegion, read_meta, InstanceMeta, PatientName};
+pub use pixels::{decode_all_frames, decode_frame, Frame, FramePixels};
 pub use presets::{WindowPreset, WindowPresets};
 
 /// Errors produced while reading or decoding DICOM data.

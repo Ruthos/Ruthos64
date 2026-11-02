@@ -81,6 +81,8 @@ pub struct SeriesRow {
     pub laterality: String,
     pub number_of_images: i64,
     pub number_of_key_images: i64,
+    /// Frames over all images: a cine loop is one image with many frames.
+    pub number_of_frames: i64,
     /// Per-series display state Horos remembers between sessions.
     pub window_center: Option<f64>,
     pub window_width: Option<f64>,
@@ -92,6 +94,15 @@ pub struct SeriesRow {
 }
 
 impl SeriesRow {
+    /// "24 im", or "53 frames" for a single multi-frame loop.
+    pub fn count_label(&self) -> String {
+        if self.number_of_images == 1 && self.number_of_frames > 1 {
+            format!("{} frames", self.number_of_frames)
+        } else {
+            format!("{} im", self.number_of_images)
+        }
+    }
+
     /// What the thumbnail strip and the viewer drawer label a series with.
     pub fn display_name(&self) -> String {
         let mut parts: Vec<String> = Vec::new();

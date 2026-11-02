@@ -142,6 +142,59 @@ pub fn decode_frame(path: &Path, frame_index: u32) -> Result<Frame> {
     gray_frame(values, width, height, frame_index, meta)
 }
 
+/// Decode every frame of a file in one pass. For a cine loop this reads and
+/// parses the file once instead of once per frame.
+pub fn decode_all_frames(path: &Path) -> Result<Vec<Frame>> {
+    let obj = crate::open::open_any(path, None)?;
+    let meta = {
+        let mut m = meta_from_object(&obj);
+        m.transfer_syntax = obj.meta().transfer_syntax().trim_end_matches('\0').to_string();
+        m
+    };
+    let frames = meta.number_of_frames.max(1);
+
+    if jpeg::is_jpeg_transfer_syntax(&meta.transfer_syntax) {
+        return (0..frames).map(|k| decode_jpeg_frame(&obj, meta.clone(), k)).collect();
+    }
+
+    let decoded = obj.decode_pixel_data().map_err(|e| DicomError::Pixels(error_chain(&e)))?;
+    let width = decoded.columns();
+    let height = decoded.rows();
+    if width == 0 || height == 0 {
+        return Err(DicomError::Unsupported("zero-sized image".into()));
+    }
+    let is_color = decoded.samples_per_pixel() > 1
+        || *decoded.photometric_interpretation() == dicom_pixeldata::PhotometricInterpretation::PaletteColor;
+    let available = decoded.number_of_frames().max(1).min(frames);
+    let mut out = Vec::with_capacity(available as usize);
+    for k in 0..available {
+        if is_color {
+            let options = ConvertOptions::new().with_voi_lut(VoiLutOption::Default);
+            let img = decoded
+                .to_dynamic_image_with_options(k, &options)
+                .map_err(|e| DicomError::Pixels(error_chain(&e)))?;
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            out.push(Frame {
+                width: w,
+                height: h,
+                frame_index: k,
+                pixels: FramePixels::Rgba(rgba.into_raw()),
+                min: 0.0,
+                max: 255.0,
+                inverted: false,
+                meta: meta.clone(),
+            });
+        } else {
+            let values: Vec<f32> = decoded
+                .to_vec_frame::<f32>(k)
+                .map_err(|e| DicomError::Pixels(error_chain(&e)))?;
+            out.push(gray_frame(values, width, height, k, meta.clone())?);
+        }
+    }
+    Ok(out)
+}
+
 fn gray_frame(values: Vec<f32>, width: u32, height: u32, frame_index: u32, meta: InstanceMeta) -> Result<Frame> {
     let expected = (width as usize) * (height as usize);
     if values.len() < expected {
