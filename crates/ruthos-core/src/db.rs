@@ -171,11 +171,35 @@ impl Database {
             }
         };
 
-        // Series
+        // Series. A multi-frame file (an echo loop, a fluoroscopy run) gets a
+        // series of its own, as Horos does, so each loop opens as a stack of
+        // frames instead of the loops stacking as images.
+        let multiframe = meta.number_of_frames > 1;
+        let series_uid = if multiframe {
+            format!("{}#{}", meta.series_instance_uid, meta.sop_instance_uid)
+        } else {
+            meta.series_instance_uid.clone()
+        };
+        let series_description = if multiframe {
+            let base = if meta.series_description.is_empty() {
+                match meta.series_number {
+                    Some(n) => format!("Series {n}"),
+                    None => "Series".to_string(),
+                }
+            } else {
+                meta.series_description.clone()
+            };
+            match meta.instance_number {
+                Some(n) => format!("{base} - loop {n}"),
+                None => format!("{base} - loop ({} frames)", meta.number_of_frames),
+            }
+        } else {
+            meta.series_description.clone()
+        };
         let existing_series: Option<i64> = tx
             .query_row(
                 "SELECT id FROM series WHERE series_instance_uid = ?1",
-                params![meta.series_instance_uid],
+                params![series_uid],
                 |r| r.get(0),
             )
             .optional()?;
@@ -189,10 +213,10 @@ impl Database {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 0, 0, '', ?12)",
                     params![
                         study_id,
-                        meta.series_instance_uid,
+                        series_uid,
                         meta.series_number,
                         meta.modality,
-                        meta.series_description,
+                        series_description,
                         meta.series_date.as_deref().and_then(dicom_date_to_iso),
                         meta.body_part_examined,
                         meta.view_position,
@@ -1035,6 +1059,31 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(db.counts().unwrap(), (0, 0, 0));
         assert_eq!(db.albums().unwrap()[0].number_of_studies, 0);
+    }
+
+    #[test]
+    fn multiframe_files_get_their_own_series() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let mut loop1 = meta("1", "1.1", "1.1.1");
+        loop1.number_of_frames = 40;
+        loop1.instance_number = Some(1);
+        loop1.modality = "US".into();
+        let mut loop2 = loop1.clone();
+        loop2.sop_instance_uid = "1.1.2".into();
+        loop2.instance_number = Some(2);
+        let mut still = loop1.clone();
+        still.sop_instance_uid = "1.1.3".into();
+        still.number_of_frames = 1;
+        still.instance_number = Some(3);
+        let InsertOutcome::Inserted { study_id, .. } = db.insert_instance(&loop1, "a.dcm", true, 10).unwrap() else { panic!() };
+        db.insert_instance(&loop2, "b.dcm", true, 10).unwrap();
+        db.insert_instance(&still, "c.dcm", true, 10).unwrap();
+        let series = db.series_for_study(study_id).unwrap();
+        assert_eq!(series.len(), 3, "two loops and the still frame are three series");
+        assert!(series.iter().any(|s| s.series_description.ends_with("loop 1")));
+        assert!(series.iter().any(|s| s.series_description.ends_with("loop 2")));
+        // The still image keeps the original series UID.
+        assert!(series.iter().any(|s| s.series_instance_uid == "1.1"));
     }
 
     #[test]
