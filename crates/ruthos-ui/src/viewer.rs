@@ -790,18 +790,24 @@ impl ViewerState {
     }
 
     /// Cache sizes grow with the number of cells on screen, and hold every
-    /// frame of the loop being shown so cine never re-decodes.
+    /// frame of every loop being shown so cine never re-decodes. Capped so a
+    /// 4x4 of long loops cannot exhaust memory; beyond the cap playback
+    /// degrades instead of failing.
     fn cache_limits(&self) -> (usize, usize) {
+        const MAX_CACHED_FRAMES: usize = 900;
         let cells = self.panes.len();
-        let loop_frames = self
+        let mut seen = std::collections::HashSet::new();
+        let loop_frames: usize = self
             .panes
             .iter()
-            .filter_map(|p| p.image().map(|i| i.number_of_frames.max(1) as usize))
-            .max()
-            .unwrap_or(1);
+            .filter_map(|p| p.image())
+            .filter(|i| seen.insert(i.id))
+            .map(|i| i.number_of_frames.max(1) as usize)
+            .sum::<usize>()
+            .min(MAX_CACHED_FRAMES);
         (
             FRAME_CACHE.max(cells * 3 + 6).max(loop_frames + 8),
-            GPU_CACHE.max(cells * 2).max(loop_frames + 2),
+            GPU_CACHE.max(cells * 2).max(loop_frames + cells * 2),
         )
     }
 
@@ -1280,7 +1286,7 @@ impl ViewerState {
     }
 
     fn tick_cine(&mut self, ui: &mut Ui) {
-        if !self.playing || self.active_locked() {
+        if !self.playing {
             return;
         }
         let now = Instant::now();
@@ -1288,7 +1294,17 @@ impl ViewerState {
         match self.last_tick {
             None => self.last_tick = Some(now),
             Some(t) if now.duration_since(t).as_secs_f32() >= period => {
-                self.step_image(1);
+                if self.tiling.mode == TilingMode::Study && self.panes.len() > 1 {
+                    // Every unlocked loop on screen plays.
+                    for p in &mut self.panes {
+                        let n = p.positions();
+                        if !p.locked && n > 1 {
+                            p.set_position((p.position() + 1) % n);
+                        }
+                    }
+                } else if !self.active_locked() {
+                    self.step_image(1);
+                }
                 self.last_tick = Some(now);
             }
             _ => {}

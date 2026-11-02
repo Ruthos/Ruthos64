@@ -172,3 +172,16 @@ fn multiframe_file_decodes_whole_and_matches_per_frame() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Developer aid: `RUTHOS_TEST_FILE=<path> cargo test -p ruthos-dicom --test samples dump -- --nocapture`
+#[test]
+fn dump_regions_of_file_from_env() {
+    let Some(path) = std::env::var_os("RUTHOS_TEST_FILE") else { return };
+    let meta = read_meta(std::path::Path::new(&path)).unwrap();
+    println!("size {}x{} frames {} spacing {:?} calibrated {}", meta.columns, meta.rows, meta.number_of_frames, meta.pixel_spacing, meta.pixel_spacing_is_calibrated);
+    for r in &meta.us_regions {
+        println!("region {r:?} mm/px {:?}", r.mm_per_pixel());
+    }
+    println!("vertical 120px at x=300 in M-mode: {:?} mm", meta.length_mm([300.0, 180.0], [300.0, 300.0]));
+    println!("diagonal (260,20)-(360,100): {:?} mm", meta.length_mm([260.0, 20.0], [360.0, 100.0]));
+}
