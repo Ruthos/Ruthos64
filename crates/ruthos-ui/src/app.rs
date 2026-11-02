@@ -30,6 +30,8 @@ pub struct RuthosApp {
     pending_focus: Option<ViewportId>,
     /// Study to open on the first frame (developer option `RUTHOS_OPEN_STUDY`).
     startup_open: Option<i64>,
+    /// Internal errors waiting to be acknowledged in a dialog.
+    error_dialog: Vec<String>,
 }
 
 impl RuthosApp {
@@ -49,6 +51,7 @@ impl RuthosApp {
         paths.ensure()?;
         let db = Database::open(&paths)?;
         tracing::info!("database at {}", paths.database_file().display());
+        crate::crash::install(paths.root.join("crash.log"));
 
         // Register the image pipeline with egui-wgpu once.
         {
@@ -122,6 +125,7 @@ impl RuthosApp {
             startup_error,
             pending_focus: None,
             startup_open,
+            error_dialog: Vec::new(),
         })
     }
 
@@ -146,6 +150,51 @@ impl RuthosApp {
         match ViewerState::open(&self.shared, study, series_id) {
             Ok(v) => self.viewers.push(Arc::new(Mutex::new(v))),
             Err(e) => tracing::warn!("could not open viewer: {e}"),
+        }
+    }
+
+    /// Queue an internal error for the dialog, without repeating the same
+    /// message every frame.
+    fn report_error(&mut self, msg: String) {
+        if self.error_dialog.last() != Some(&msg) {
+            self.error_dialog.push(msg);
+        }
+    }
+
+    /// The "something went wrong" dialog in the database window.
+    fn error_dialog_ui(&mut self, ctx: &egui::Context) {
+        if self.error_dialog.is_empty() {
+            return;
+        }
+        let mut dismiss = false;
+        egui::Modal::new(egui::Id::unique("ruthos-error-dialog")).show(ctx, |ui| {
+            ui.set_min_width(440.0);
+            ui.set_max_width(560.0);
+            ui.heading("Ruthos hit an internal error");
+            ui.add_space(6.0);
+            for msg in &self.error_dialog {
+                ui.label(msg.as_str());
+                ui.add_space(4.0);
+            }
+            if let Some(path) = crate::crash::log_path() {
+                ui.label(
+                    egui::RichText::new(format!("Details and a backtrace were written to {}", path.display()))
+                        .size(12.0)
+                        .color(egui::Color32::from_gray(120)),
+                );
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Continue").clicked() {
+                    dismiss = true;
+                }
+                if ui.button("Quit Ruthos").clicked() {
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
+            });
+        });
+        if dismiss {
+            self.error_dialog.clear();
         }
     }
 
@@ -180,7 +229,9 @@ impl eframe::App for RuthosApp {
             tracing::warn!("{err}");
         }
 
-        self.browser.show(ui, &self.shared);
+        if let Err(msg) = crate::crash::guarded(|| self.browser.show(ui, &self.shared)) {
+            self.report_error(format!("The database window hit an internal error: {msg}"));
+        }
 
         if let Some(id) = self.startup_open.take() {
             self.open_viewer(id, None);
@@ -205,10 +256,19 @@ impl eframe::App for RuthosApp {
                     .with_inner_size([1200.0, 860.0])
                     .with_min_inner_size([700.0, 500.0]),
                 move |ui, _class| {
-                    v.lock().show(ui, &shared);
+                    if let Err(msg) = crate::crash::guarded(|| v.lock().show(ui, &shared)) {
+                        v.lock().close_requested = true;
+                        shared.errors.lock().push(format!("A viewer window was closed after an internal error: {msg}"));
+                    }
                 },
             );
         }
+
+        let caught = std::mem::take(&mut *self.shared.errors.lock());
+        for msg in caught {
+            self.report_error(msg);
+        }
+        self.error_dialog_ui(&ctx);
 
         if let Some(vid) = self.pending_focus.take() {
             ctx.send_viewport_cmd_to(vid, ViewportCommand::Focus);

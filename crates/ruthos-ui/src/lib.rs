@@ -8,6 +8,7 @@
 pub mod annotations;
 pub mod app;
 pub mod browser;
+pub mod crash;
 pub mod icons;
 pub mod loader;
 pub mod roi;

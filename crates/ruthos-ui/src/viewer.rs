@@ -770,6 +770,7 @@ impl ViewerState {
     // ---------------------------------------------------------------- UI
 
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
+        crate::crash::debug_panic("viewer");
         ui.style_mut().visuals = theme::viewer_visuals();
         if ui.input(|i| i.viewport().close_requested()) {
             self.persist_series_display(shared);
@@ -1503,6 +1504,12 @@ impl ViewerState {
         if active {
             self.handle_input(ui, &response, &mut transform, &frame, &key);
             self.panes[k].view = transform.state;
+            // Input may have scrolled this cell to another image (or past the
+            // end of a tiled series); finish painting on the next frame.
+            if self.panes[k].key() != Some(key) {
+                ui.ctx().request_repaint();
+                return;
+            }
         }
         let transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.panes[k].view);
 
@@ -1558,7 +1565,7 @@ impl ViewerState {
 
         // Annotations; small cells drop to the partial set.
         let p = &self.panes[k];
-        let image = p.images[p.image_idx].clone();
+        let Some(image) = p.images.get(p.image_idx).cloned() else { return };
         let level = if tiled && rect.width() < 420.0 && self.annotations == AnnotationLevel::Full {
             AnnotationLevel::Partial
         } else {

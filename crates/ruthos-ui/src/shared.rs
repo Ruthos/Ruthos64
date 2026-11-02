@@ -46,6 +46,9 @@ pub struct Shared {
     /// Monotonic id source for viewers and paint callbacks.
     next_id: AtomicU64,
     pub viewer_keys_to_forget: Mutex<Vec<u64>>,
+    /// Internal errors caught at a window boundary, shown by the database
+    /// window in a dialog.
+    pub errors: Mutex<Vec<String>>,
 }
 
 impl Shared {
@@ -74,6 +77,7 @@ impl Shared {
             open_requests: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
             viewer_keys_to_forget: Mutex::new(Vec::new()),
+            errors: Mutex::new(Vec::new()),
         })
     }
 
