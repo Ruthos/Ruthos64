@@ -113,3 +113,215 @@ fn load_system_font(candidates: &[&str]) -> Option<Vec<u8>> {
     }
     None
 }
+
+/// Horos toolbar artwork (LGPL-3.0, see `assets/horos/icons/README.md`),
+/// rendered to 128 px PNG with alpha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Bitmap {
+    Add,
+    Album,
+    Angle,
+    Anonymize,
+    Arrow,
+    Cobb,
+    Database,
+    DatabaseWindow,
+    DynamicAngle,
+    Export,
+    FlipH,
+    FlipV,
+    Import,
+    Key,
+    Keys,
+    Length,
+    Minus,
+    Move,
+    Movie,
+    Mpr,
+    Network,
+    Next,
+    Oval,
+    Pause,
+    Pencil,
+    Play,
+    Point,
+    Presets,
+    Prev,
+    Print,
+    Propagate,
+    Query,
+    Rectangle,
+    Report,
+    Reset,
+    Revert,
+    Roi,
+    RoiManager,
+    Rois,
+    RoisAndKeys,
+    Rotate,
+    Save,
+    Send,
+    SmartAlbum,
+    Stack,
+    Studies,
+    Sync,
+    Text,
+    ThreeD,
+    Trash,
+    Viewer,
+    Volume,
+    Wlww,
+    Zoom,
+    ZoomToFit,
+}
+
+impl Bitmap {
+    fn bytes(self) -> &'static [u8] {
+        match self {
+            Bitmap::Add => include_bytes!("../../../assets/horos/icons/add.png"),
+            Bitmap::Album => include_bytes!("../../../assets/horos/icons/album.png"),
+            Bitmap::Angle => include_bytes!("../../../assets/horos/icons/angle.png"),
+            Bitmap::Anonymize => include_bytes!("../../../assets/horos/icons/anonymize.png"),
+            Bitmap::Arrow => include_bytes!("../../../assets/horos/icons/arrow.png"),
+            Bitmap::Cobb => include_bytes!("../../../assets/horos/icons/cobb.png"),
+            Bitmap::Database => include_bytes!("../../../assets/horos/icons/database.png"),
+            Bitmap::DatabaseWindow => include_bytes!("../../../assets/horos/icons/database_window.png"),
+            Bitmap::DynamicAngle => include_bytes!("../../../assets/horos/icons/dynamic_angle.png"),
+            Bitmap::Export => include_bytes!("../../../assets/horos/icons/export.png"),
+            Bitmap::FlipH => include_bytes!("../../../assets/horos/icons/flip_h.png"),
+            Bitmap::FlipV => include_bytes!("../../../assets/horos/icons/flip_v.png"),
+            Bitmap::Import => include_bytes!("../../../assets/horos/icons/import.png"),
+            Bitmap::Key => include_bytes!("../../../assets/horos/icons/key.png"),
+            Bitmap::Keys => include_bytes!("../../../assets/horos/icons/keys.png"),
+            Bitmap::Length => include_bytes!("../../../assets/horos/icons/length.png"),
+            Bitmap::Minus => include_bytes!("../../../assets/horos/icons/minus.png"),
+            Bitmap::Move => include_bytes!("../../../assets/horos/icons/move.png"),
+            Bitmap::Movie => include_bytes!("../../../assets/horos/icons/movie.png"),
+            Bitmap::Mpr => include_bytes!("../../../assets/horos/icons/mpr.png"),
+            Bitmap::Network => include_bytes!("../../../assets/horos/icons/network.png"),
+            Bitmap::Next => include_bytes!("../../../assets/horos/icons/next.png"),
+            Bitmap::Oval => include_bytes!("../../../assets/horos/icons/oval.png"),
+            Bitmap::Pause => include_bytes!("../../../assets/horos/icons/pause.png"),
+            Bitmap::Pencil => include_bytes!("../../../assets/horos/icons/pencil.png"),
+            Bitmap::Play => include_bytes!("../../../assets/horos/icons/play.png"),
+            Bitmap::Point => include_bytes!("../../../assets/horos/icons/point.png"),
+            Bitmap::Presets => include_bytes!("../../../assets/horos/icons/presets.png"),
+            Bitmap::Prev => include_bytes!("../../../assets/horos/icons/prev.png"),
+            Bitmap::Print => include_bytes!("../../../assets/horos/icons/print.png"),
+            Bitmap::Propagate => include_bytes!("../../../assets/horos/icons/propagate.png"),
+            Bitmap::Query => include_bytes!("../../../assets/horos/icons/query.png"),
+            Bitmap::Rectangle => include_bytes!("../../../assets/horos/icons/rectangle.png"),
+            Bitmap::Report => include_bytes!("../../../assets/horos/icons/report.png"),
+            Bitmap::Reset => include_bytes!("../../../assets/horos/icons/reset.png"),
+            Bitmap::Revert => include_bytes!("../../../assets/horos/icons/revert.png"),
+            Bitmap::Roi => include_bytes!("../../../assets/horos/icons/roi.png"),
+            Bitmap::RoiManager => include_bytes!("../../../assets/horos/icons/roi_manager.png"),
+            Bitmap::Rois => include_bytes!("../../../assets/horos/icons/rois.png"),
+            Bitmap::RoisAndKeys => include_bytes!("../../../assets/horos/icons/rois_and_keys.png"),
+            Bitmap::Rotate => include_bytes!("../../../assets/horos/icons/rotate.png"),
+            Bitmap::Save => include_bytes!("../../../assets/horos/icons/save.png"),
+            Bitmap::Send => include_bytes!("../../../assets/horos/icons/send.png"),
+            Bitmap::SmartAlbum => include_bytes!("../../../assets/horos/icons/smart_album.png"),
+            Bitmap::Stack => include_bytes!("../../../assets/horos/icons/stack.png"),
+            Bitmap::Studies => include_bytes!("../../../assets/horos/icons/studies.png"),
+            Bitmap::Sync => include_bytes!("../../../assets/horos/icons/sync.png"),
+            Bitmap::Text => include_bytes!("../../../assets/horos/icons/text.png"),
+            Bitmap::ThreeD => include_bytes!("../../../assets/horos/icons/three_d.png"),
+            Bitmap::Trash => include_bytes!("../../../assets/horos/icons/trash.png"),
+            Bitmap::Viewer => include_bytes!("../../../assets/horos/icons/viewer.png"),
+            Bitmap::Volume => include_bytes!("../../../assets/horos/icons/volume.png"),
+            Bitmap::Wlww => include_bytes!("../../../assets/horos/icons/wlww.png"),
+            Bitmap::Zoom => include_bytes!("../../../assets/horos/icons/zoom.png"),
+            Bitmap::ZoomToFit => include_bytes!("../../../assets/horos/icons/zoom_to_fit.png"),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Bitmap::Add => "add",
+            Bitmap::Album => "album",
+            Bitmap::Angle => "angle",
+            Bitmap::Anonymize => "anonymize",
+            Bitmap::Arrow => "arrow",
+            Bitmap::Cobb => "cobb",
+            Bitmap::Database => "database",
+            Bitmap::DatabaseWindow => "database_window",
+            Bitmap::DynamicAngle => "dynamic_angle",
+            Bitmap::Export => "export",
+            Bitmap::FlipH => "flip_h",
+            Bitmap::FlipV => "flip_v",
+            Bitmap::Import => "import",
+            Bitmap::Key => "key",
+            Bitmap::Keys => "keys",
+            Bitmap::Length => "length",
+            Bitmap::Minus => "minus",
+            Bitmap::Move => "move",
+            Bitmap::Movie => "movie",
+            Bitmap::Mpr => "mpr",
+            Bitmap::Network => "network",
+            Bitmap::Next => "next",
+            Bitmap::Oval => "oval",
+            Bitmap::Pause => "pause",
+            Bitmap::Pencil => "pencil",
+            Bitmap::Play => "play",
+            Bitmap::Point => "point",
+            Bitmap::Presets => "presets",
+            Bitmap::Prev => "prev",
+            Bitmap::Print => "print",
+            Bitmap::Propagate => "propagate",
+            Bitmap::Query => "query",
+            Bitmap::Rectangle => "rectangle",
+            Bitmap::Report => "report",
+            Bitmap::Reset => "reset",
+            Bitmap::Revert => "revert",
+            Bitmap::Roi => "roi",
+            Bitmap::RoiManager => "roi_manager",
+            Bitmap::Rois => "rois",
+            Bitmap::RoisAndKeys => "rois_and_keys",
+            Bitmap::Rotate => "rotate",
+            Bitmap::Save => "save",
+            Bitmap::Send => "send",
+            Bitmap::SmartAlbum => "smart_album",
+            Bitmap::Stack => "stack",
+            Bitmap::Studies => "studies",
+            Bitmap::Sync => "sync",
+            Bitmap::Text => "text",
+            Bitmap::ThreeD => "three_d",
+            Bitmap::Trash => "trash",
+            Bitmap::Viewer => "viewer",
+            Bitmap::Volume => "volume",
+            Bitmap::Wlww => "wlww",
+            Bitmap::Zoom => "zoom",
+            Bitmap::ZoomToFit => "zoom_to_fit",
+        }
+    }
+}
+
+/// The texture for a bitmap icon, decoded and uploaded on first use and kept
+/// in the context for the life of the application.
+pub fn texture(ctx: &egui::Context, which: Bitmap) -> egui::TextureId {
+    let id = egui::Id::unique(("horos-icon", which.name()));
+    if let Some(handle) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return handle.id();
+    }
+    let image = match image::load_from_memory(which.bytes()) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba.as_raw())
+        }
+        Err(e) => {
+            tracing::warn!("icon {} failed to decode: {e}", which.name());
+            egui::ColorImage::filled([2, 2], egui::Color32::TRANSPARENT)
+        }
+    };
+    let handle = ctx.load_texture(format!("horos-icon-{}", which.name()), image, egui::TextureOptions::LINEAR);
+    let tex = handle.id();
+    ctx.data_mut(|d| d.insert_temp(id, handle));
+    tex
+}
+
+/// A bitmap icon as an image atom for buttons and menu titles.
+pub fn image(ctx: &egui::Context, which: Bitmap, size: f32) -> egui::Image<'static> {
+    egui::Image::from_texture(egui::load::SizedTexture::new(texture(ctx, which), egui::Vec2::splat(size)))
+}

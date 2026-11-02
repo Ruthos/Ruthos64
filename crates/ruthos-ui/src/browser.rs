@@ -18,7 +18,8 @@ use ruthos_core::{AlbumRow, DateFilter, ImportEvent, ImportMode, Importer, Serie
 use crate::shared::Shared;
 use crate::icons;
 use crate::theme;
-use crate::widgets::{source_header, source_row, thumbnail_cell, toolbar_caption, toolbar_separator, truncate, ToolbarButton};
+use crate::icons::Bitmap;
+use crate::widgets::{menu_item, source_header, source_row, thumbnail_cell, toolbar_caption, toolbar_separator, truncate, ToolbarButton};
 
 #[derive(Debug, Clone)]
 enum RowKind {
@@ -294,7 +295,7 @@ impl BrowserState {
             if ToolbarButton::new(icons::SIDEBAR, "Sidebar").tooltip("Show or hide the source list").show(ui).clicked() {
                 self.sidebar_visible = !self.sidebar_visible;
             }
-            if ToolbarButton::new(icons::IMPORT, "Import").tooltip("Import a folder of DICOM files (a CD, a USB stick, an export)").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Import, "Import").tooltip("Import a folder of DICOM files (a CD, a USB stick, an export)").show(ui).clicked() {
                 if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM folder").pick_folders() {
                     self.start_import(shared, paths);
                 }
@@ -333,7 +334,7 @@ impl BrowserState {
                 }
             }
             let has_sel = self.selected_study.is_some();
-            if ToolbarButton::new(icons::EXPORT, "Export")
+            if ToolbarButton::new(Bitmap::Export, "Export")
                 .enabled(has_sel)
                 .tooltip("Export the selected study as DICOM files")
                 .show(ui)
@@ -341,21 +342,21 @@ impl BrowserState {
             {
                 self.export_selected(shared);
             }
-            ToolbarButton::new(icons::QUERY, "Query").enabled(false).tooltip("PACS query/retrieve is next on the Tier 1 list").show(ui);
-            ToolbarButton::new(icons::SEND, "Send").enabled(false).tooltip("Send to PACS is next on the Tier 1 list").show(ui);
-            ToolbarButton::new(icons::ANONYMIZE, "Anonymize").enabled(false).tooltip("Anonymisation is next on the Tier 1 list").show(ui);
-            if ToolbarButton::new(icons::TRASH, "Delete").enabled(has_sel).tooltip("Delete the selected study").show(ui).clicked() {
+            ToolbarButton::new(Bitmap::Query, "Query").enabled(false).tooltip("PACS query/retrieve is next on the Tier 1 list").show(ui);
+            ToolbarButton::new(Bitmap::Send, "Send").enabled(false).tooltip("Send to PACS is next on the Tier 1 list").show(ui);
+            ToolbarButton::new(Bitmap::Anonymize, "Anonymize").enabled(false).tooltip("Anonymisation is next on the Tier 1 list").show(ui);
+            if ToolbarButton::new(Bitmap::Trash, "Delete").enabled(has_sel).tooltip("Delete the selected study").show(ui).clicked() {
                 if let Some(id) = self.selected_study {
                     self.modal = Some(Modal::DeleteStudy(id));
                 }
             }
             toolbar_separator(ui);
-            if ToolbarButton::new(icons::VIEWER, "2D Viewer").enabled(has_sel).tooltip("Open the selected study").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Viewer, "2D Viewer").enabled(has_sel).tooltip("Open the selected study").show(ui).clicked() {
                 if let Some(id) = self.selected_study {
                     self.open_requests.push((id, self.selected_series));
                 }
             }
-            ToolbarButton::new(icons::REPORT, "Report").enabled(false).tooltip("Reports arrive in Tier 3").show(ui);
+            ToolbarButton::new(Bitmap::Report, "Report").enabled(false).tooltip("Reports arrive in Tier 3").show(ui);
 
             // Right-aligned filter group: sort, date, modality, search. Each
             // column has a fixed width so the labels never wrap.
@@ -449,7 +450,7 @@ impl BrowserState {
 
     fn source_list(&mut self, ui: &mut Ui, shared: &Shared) {
         source_header(ui, "LOCAL");
-        if source_row(ui, icons::DATABASE, "Local Database", Some(self.counts.0), self.selected_album.is_none()).clicked() {
+        if source_row(ui, Bitmap::Database, "Local Database", Some(self.counts.0), self.selected_album.is_none()).clicked() {
             self.selected_album = None;
             self.dirty = true;
         }
@@ -467,18 +468,18 @@ impl BrowserState {
             ui.label(RichText::new("No albums yet").size(11.5).color(Color32::from_gray(140)));
         }
         for album in &albums {
-            let glyph = if album.is_smart { icons::SMART_ALBUM } else { icons::ALBUM };
+            let glyph = if album.is_smart { Bitmap::SmartAlbum } else { Bitmap::Album };
             let r = source_row(ui, glyph, &album.name, Some(album.number_of_studies), self.selected_album == Some(album.id));
             if r.clicked() {
                 self.selected_album = Some(album.id);
                 self.dirty = true;
             }
             r.context_menu(|ui| {
-                if ui.button("Rename…").clicked() {
+                if menu_item(ui, "Rename…", false).clicked() {
                     self.modal = Some(Modal::RenameAlbum { id: album.id, name: album.name.clone() });
                     ui.close();
                 }
-                if ui.button("Delete album").clicked() {
+                if menu_item(ui, "Delete album", false).clicked() {
                     let _ = shared.db.delete_album(album.id);
                     if self.selected_album == Some(album.id) {
                         self.selected_album = None;
@@ -650,11 +651,11 @@ impl BrowserState {
                                 actions.push(Action::Open(s.id, None));
                             }
                             r.context_menu(|ui| {
-                                if ui.button("Open in 2D Viewer").clicked() {
+                                if menu_item(ui, "Open in 2D Viewer", false).clicked() {
                                     actions.push(Action::Open(s.id, None));
                                     ui.close();
                                 }
-                                if ui.button(if is_exp { "Collapse series" } else { "Show series" }).clicked() {
+                                if menu_item(ui, if is_exp { "Collapse series" } else { "Show series" }, false).clicked() {
                                     actions.push(Action::ToggleExpand(s.id));
                                     ui.close();
                                 }
@@ -665,32 +666,32 @@ impl BrowserState {
                                         ui.label("No albums. Create one in the sidebar.");
                                     }
                                     for a in plain {
-                                        if ui.button(&a.name).clicked() {
+                                        if menu_item(ui, a.name.as_str(), false).clicked() {
                                             actions.push(Action::AddToAlbum(a.id, s.id));
                                             ui.close();
                                         }
                                     }
                                 });
                                 if let Some(album_id) = selected_album {
-                                    if albums.iter().any(|a| a.id == album_id && !a.is_smart) && ui.button("Remove from this album").clicked() {
+                                    if albums.iter().any(|a| a.id == album_id && !a.is_smart) && menu_item(ui, "Remove from this album", false).clicked() {
                                         actions.push(Action::RemoveFromAlbum(album_id, s.id));
                                         ui.close();
                                     }
                                 }
                                 ui.menu_button("Set status", |ui| {
                                     for (v, l) in [(0, "None"), (1, "Unread"), (2, "Reviewed"), (3, "Dictated"), (4, "Validated")] {
-                                        if ui.selectable_label(s.state == v, l).clicked() {
+                                        if menu_item(ui, l, s.state == v).clicked() {
                                             actions.push(Action::SetState(s.id, v));
                                             ui.close();
                                         }
                                     }
                                 });
-                                if ui.button("Edit comment…").clicked() {
+                                if menu_item(ui, "Edit comment…", false).clicked() {
                                     actions.push(Action::EditComment(s.id));
                                     ui.close();
                                 }
                                 ui.separator();
-                                if ui.button(RichText::new("Delete study…").color(Color32::from_rgb(190, 30, 30))).clicked() {
+                                if menu_item(ui, RichText::new("Delete study…").color(Color32::from_rgb(190, 30, 30)), false).clicked() {
                                     actions.push(Action::Delete(s.id));
                                     ui.close();
                                 }

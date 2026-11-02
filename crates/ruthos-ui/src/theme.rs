@@ -40,7 +40,8 @@ pub fn apply_global_style(ctx: &egui::Context) {
         style.spacing.button_padding = egui::vec2(10.0, 4.0);
         style.spacing.interact_size.y = 24.0;
         style.spacing.combo_width = 120.0;
-        style.spacing.menu_margin = egui::Margin::same(8);
+        style.spacing.menu_margin = egui::Margin::symmetric(5, 6);
+        style.spacing.menu_width = 180.0;
         style.interaction.selectable_labels = false;
     });
 }
@@ -80,10 +81,25 @@ pub fn browser_visuals() -> Visuals {
     v.widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(140, 140, 140));
     v.widgets.open.weak_bg_fill = Color32::from_rgb(235, 235, 235);
     v.window_shadow.color = Color32::from_black_alpha(60);
-    v.popup_shadow.color = Color32::from_black_alpha(50);
+    v.window_stroke = Stroke::new(1.0, Color32::from_rgb(200, 200, 200));
+    menu_look(&mut v, Color32::from_rgb(247, 247, 247), Color32::from_rgb(196, 196, 196));
     v.striped = true;
     rounded(&mut v, 6);
     v
+}
+
+/// Menus and popups: a soft shadow, rounded corners and a plain fill, as on
+/// macOS.
+fn menu_look(v: &mut Visuals, fill: Color32, stroke: Color32) {
+    v.window_fill = fill;
+    v.window_stroke = Stroke::new(1.0, stroke);
+    v.menu_corner_radius = CornerRadius::same(8);
+    v.popup_shadow = egui::Shadow {
+        offset: [0, 5],
+        blur: 16,
+        spread: 0,
+        color: Color32::from_black_alpha(75),
+    };
 }
 
 pub fn viewer_visuals() -> Visuals {
@@ -101,6 +117,7 @@ pub fn viewer_visuals() -> Visuals {
     v.widgets.hovered.weak_bg_fill = Color32::from_rgb(82, 82, 90);
     v.widgets.hovered.bg_fill = Color32::from_rgb(82, 82, 90);
     v.widgets.active.weak_bg_fill = Color32::from_rgb(100, 100, 110);
+    menu_look(&mut v, Color32::from_rgb(46, 46, 50), Color32::from_rgb(86, 86, 92));
     rounded(&mut v, 6);
     v
 }

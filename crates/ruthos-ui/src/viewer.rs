@@ -21,7 +21,11 @@ use crate::roi::{roi_color, Roi, RoiKind};
 use crate::shared::Shared;
 use crate::icons;
 use crate::theme;
-use crate::widgets::{shadow_text, thumbnail_cell, tool_menu_row, toolbar_caption, toolbar_separator, ToolbarButton};
+use crate::icons::Bitmap;
+use crate::widgets::{
+    menu_check, menu_heading, menu_item, menu_item_enabled, shadow_text, thumbnail_cell, tool_menu_row, toolbar_caption,
+    toolbar_separator, ToolbarButton,
+};
 
 /// Mouse tools, in the order Horos lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +83,22 @@ impl Tool {
             Tool::Oval => icons::TOOL_OVAL,
             Tool::Arrow => icons::TOOL_ARROW,
             Tool::Point => icons::TOOL_POINT,
+        }
+    }
+
+    /// The Horos artwork for the tool.
+    pub fn bitmap(self) -> Bitmap {
+        match self {
+            Tool::WindowLevel => Bitmap::Wlww,
+            Tool::Move => Bitmap::Move,
+            Tool::Zoom => Bitmap::Zoom,
+            Tool::Rotate => Bitmap::Rotate,
+            Tool::Length => Bitmap::Length,
+            Tool::Angle => Bitmap::Angle,
+            Tool::Rectangle => Bitmap::Rectangle,
+            Tool::Oval => Bitmap::Oval,
+            Tool::Arrow => Bitmap::Arrow,
+            Tool::Point => Bitmap::Point,
         }
     }
 
@@ -669,10 +689,9 @@ impl ViewerState {
                     ui.set_min_width(210.0);
                     ui.label(egui::RichText::new("Assign measurement").strong());
                     for set in &sets {
-                        ui.add_space(4.0);
-                        ui.label(egui::RichText::new(&set.name).size(11.0).color(Color32::from_gray(150)));
+                        menu_heading(ui, &set.name);
                         for item in &set.items {
-                            if ui.selectable_label(current.as_deref() == Some(item.as_str()), item).clicked() {
+                            if menu_item(ui, item.as_str(), current.as_deref() == Some(item.as_str())).clicked() {
                                 choice = Some(Some(item.clone()));
                             }
                         }
@@ -686,7 +705,7 @@ impl ViewerState {
                             choice = Some(Some(custom.trim().to_string()));
                         }
                     });
-                    if ui.add_enabled(current.is_some(), egui::Button::new("Remove name")).clicked() {
+                    if menu_item_enabled(ui, "Remove name", false, current.is_some()).clicked() {
                         choice = Some(None);
                     }
                 });
@@ -945,7 +964,7 @@ impl ViewerState {
 
     fn toolbar_inner(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.horizontal(|ui| {
-            if ToolbarButton::new(icons::DATABASE, "Database").tooltip("Show the database window").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::DatabaseWindow, "Database").tooltip("Show the database window").show(ui).clicked() {
                 shared.focus_browser.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             toolbar_separator(ui);
@@ -984,7 +1003,7 @@ impl ViewerState {
                         (TilingMode::Series, "Images of this series"),
                         (TilingMode::Study, "Series of this study"),
                     ] {
-                        ui.label(egui::RichText::new(title).size(11.0).strong().color(Color32::from_gray(150)));
+                        menu_heading(ui, title);
                         ui.horizontal_wrapped(|ui| {
                             ui.set_max_width(236.0);
                             for (rows, cols) in Tiling::GRIDS {
@@ -1022,14 +1041,14 @@ impl ViewerState {
             // Tools menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                let glyph = self.tool.glyph();
-                ui.menu_button((icons::rich(glyph, 16.0), egui::RichText::new(format!("  {}  ", self.tool.label())).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
+                let title_icon = icons::image(ui.ctx(), self.tool.bitmap(), 18.0);
+                ui.menu_button((title_icon, egui::RichText::new(format!("  {}  ", self.tool.label())).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     // One row per tool. Left-click puts it on the left mouse
                     // button, right-click on the right button; a small mouse
                     // glyph beside the name shows which.
                     let mut changed = false;
                     for t in Tool::ALL {
-                        let r = tool_menu_row(ui, t.glyph(), t.label(), self.tool == t, self.right_tool == t);
+                        let r = tool_menu_row(ui, t.bitmap(), t.label(), self.tool == t, self.right_tool == t);
                         if r.clicked() {
                             self.tool = t;
                             changed = true;
@@ -1057,26 +1076,28 @@ impl ViewerState {
             // WL/WW menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button((icons::rich(icons::WLWW, 16.0), egui::RichText::new("  WL/WW  ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
-                    if ui.button("Default WL & WW").clicked() {
+                let wl_icon = icons::image(ui.ctx(), Bitmap::Wlww, 18.0);
+                ui.menu_button((wl_icon, egui::RichText::new("  WL/WW  ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
+                    if menu_item(ui, "Default WL & WW", false).clicked() {
                         self.apply_default_window(shared, false);
                         ui.close();
                     }
-                    if ui.button("Full dynamic").clicked() {
+                    if menu_item(ui, "Full dynamic", false).clicked() {
                         self.apply_default_window(shared, true);
                         ui.close();
                     }
                     ui.separator();
                     for p in &shared.presets.presets {
-                        if ui.button(format!("{}  ({} / {})", p.name, p.center, p.width)).clicked() {
+                        if menu_item(ui, format!("{}  ({} / {})", p.name, p.center, p.width), false).clicked() {
                             self.panes[self.active].view.window_center = p.center;
                             self.panes[self.active].view.window_width = p.width;
                             ui.close();
                         }
                     }
                     ui.separator();
-                    ui.label("Custom");
+                    menu_heading(ui, "Custom");
                     ui.horizontal(|ui| {
+                        ui.add_space(6.0);
                         ui.label("WL");
                         ui.add(egui::DragValue::new(&mut self.panes[self.active].view.window_center).speed(1.0));
                         ui.label("WW");
@@ -1092,7 +1113,7 @@ impl ViewerState {
                 ui.menu_button((icons::rich(icons::CLUT, 16.0), egui::RichText::new(format!("  {}  ", crate::widgets::truncate(&self.panes[self.active].clut, 12))).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                         for name in shared.cluts.names() {
-                            if ui.selectable_label(self.panes[self.active].clut == name, name).clicked() {
+                            if menu_item(ui, name, self.panes[self.active].clut == name).clicked() {
                                 self.panes[self.active].clut = name.to_string();
                                 ui.close();
                             }
@@ -1102,7 +1123,7 @@ impl ViewerState {
                 toolbar_caption(ui, "CLUT");
             });
 
-            ToolbarButton::new(icons::THREE_D, "3D")
+            ToolbarButton::new(Bitmap::ThreeD, "3D")
                 .enabled(false)
                 .tooltip("MPR and volume rendering arrive in Tier 2")
                 .show(ui);
@@ -1111,26 +1132,26 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 ui.menu_button((icons::rich(icons::ORIENTATION, 16.0), egui::RichText::new("  Orientation  ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
-                    if ui.button("Rotate 90° clockwise").clicked() {
+                    if menu_item(ui, "Rotate 90° clockwise", false).clicked() {
                         self.panes[self.active].view.rotation_deg = (self.panes[self.active].view.rotation_deg + 90.0).rem_euclid(360.0);
                         self.panes[self.active].fit_pending = true;
                         ui.close();
                     }
-                    if ui.button("Rotate 90° counter-clockwise").clicked() {
+                    if menu_item(ui, "Rotate 90° counter-clockwise", false).clicked() {
                         self.panes[self.active].view.rotation_deg = (self.panes[self.active].view.rotation_deg - 90.0).rem_euclid(360.0);
                         self.panes[self.active].fit_pending = true;
                         ui.close();
                     }
-                    if ui.button("Flip horizontal").clicked() {
+                    if menu_item(ui, "Flip horizontal", false).clicked() {
                         self.panes[self.active].view.flip_horizontal = !self.panes[self.active].view.flip_horizontal;
                         ui.close();
                     }
-                    if ui.button("Flip vertical").clicked() {
+                    if menu_item(ui, "Flip vertical", false).clicked() {
                         self.panes[self.active].view.flip_vertical = !self.panes[self.active].view.flip_vertical;
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Reset orientation").clicked() {
+                    if menu_item(ui, "Reset orientation", false).clicked() {
                         self.panes[self.active].view.rotation_deg = 0.0;
                         self.panes[self.active].view.flip_horizontal = false;
                         self.panes[self.active].view.flip_vertical = false;
@@ -1138,7 +1159,7 @@ impl ViewerState {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.checkbox(&mut self.bilinear, "Smooth interpolation").clicked() {
+                    if menu_check(ui, &mut self.bilinear, "Smooth interpolation").clicked() {
                         ui.close();
                     }
                 });
@@ -1146,12 +1167,12 @@ impl ViewerState {
             });
             toolbar_separator(ui);
 
-            if ToolbarButton::new(icons::RESET, "Reset").tooltip("Fit image and restore default window").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Reset, "Reset").tooltip("Fit image and restore default window").show(ui).clicked() {
                 self.panes[self.active].fit_pending = true;
                 self.apply_default_window(shared, false);
             }
             let is_key = self.current_image().map(|i| i.is_key_image).unwrap_or(false);
-            if ToolbarButton::new(icons::KEY_IMAGE, "Key Image").selected(is_key).tooltip("Mark this image as a key image").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Key, "Key Image").selected(is_key).tooltip("Mark this image as a key image").show(ui).clicked() {
                 if let Some(img) = self.current_image() {
                     let (id, flag) = (img.id, !img.is_key_image);
                     let _ = shared.db.set_key_image(id, flag);
@@ -1163,7 +1184,7 @@ impl ViewerState {
                 }
             }
             let selected_length = self.selected_length_px();
-            if ToolbarButton::new(icons::TOOL_LENGTH, "Calibrate")
+            if ToolbarButton::new(Bitmap::Length, "Calibrate")
                 .enabled(selected_length.is_some())
                 .tooltip("Draw a Length over something of known size, select it, then set its real length to calibrate this image")
                 .show(ui)
@@ -1178,14 +1199,14 @@ impl ViewerState {
                     });
                 }
             }
-            if ToolbarButton::new(icons::EXPORT, "Export").tooltip("Export the current image as PNG or JPEG").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Export, "Export").tooltip("Export the current image as PNG or JPEG").show(ui).clicked() {
                 self.export_current(shared);
             }
             toolbar_separator(ui);
 
             let can_play = self.panes[self.active].images.len() > 1 || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);
-            let (glyph, label) = if self.playing { (icons::PAUSE, "Pause") } else { (icons::PLAY, "Play") };
-            if ToolbarButton::new(glyph, label).enabled(can_play).show(ui).clicked() {
+            let (bitmap, label) = if self.playing { (Bitmap::Pause, "Pause") } else { (Bitmap::Play, "Play") };
+            if ToolbarButton::new(bitmap, label).enabled(can_play).show(ui).clicked() {
                 self.playing = !self.playing;
                 self.last_tick = None;
             }
@@ -1728,20 +1749,20 @@ impl ViewerState {
         let mut clear_calibration = false;
         let mut delete_all = false;
         response.context_menu(|ui| {
-            if ui.add_enabled(selected_length.is_some(), egui::Button::new("Calibrate from selected length…")).clicked() {
+            if menu_item_enabled(ui, "Calibrate from selected length…", false, selected_length.is_some()).clicked() {
                 open_calibrate = true;
                 ui.close();
             }
-            if ui.add_enabled(has_calibration || frame.meta.pixel_spacing_is_calibrated, egui::Button::new("Remove user calibration")).clicked() {
+            if menu_item_enabled(ui, "Remove user calibration", false, has_calibration || frame.meta.pixel_spacing_is_calibrated).clicked() {
                 clear_calibration = true;
                 ui.close();
             }
             ui.separator();
-            if ui.button("Delete all measurements on this image").clicked() {
+            if menu_item(ui, "Delete all measurements on this image", false).clicked() {
                 delete_all = true;
                 ui.close();
             }
-            if ui.button("Fit image to window").clicked() {
+            if menu_item(ui, "Fit image to window", false).clicked() {
                 self.panes[self.active].fit_pending = true;
                 ui.close();
             }

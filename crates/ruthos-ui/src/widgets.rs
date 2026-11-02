@@ -3,11 +3,48 @@
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
+use crate::icons::{self, Bitmap};
 use crate::theme;
+
+/// An icon: a glyph from the icon font, or a Horos bitmap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Icon {
+    Glyph(&'static str),
+    Bitmap(Bitmap),
+}
+
+impl From<&'static str> for Icon {
+    fn from(g: &'static str) -> Self {
+        Icon::Glyph(g)
+    }
+}
+
+impl From<Bitmap> for Icon {
+    fn from(b: Bitmap) -> Self {
+        Icon::Bitmap(b)
+    }
+}
+
+/// Paint an icon centred on `center`. `size` is the glyph size; bitmaps are
+/// drawn a little larger since their artwork has margins. `alpha` dims a
+/// disabled bitmap.
+pub fn paint_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32, alpha: u8) {
+    match icon {
+        Icon::Glyph(g) => {
+            ui.painter().text(center, Align2::CENTER_CENTER, g, icons::font(size), color);
+        }
+        Icon::Bitmap(b) => {
+            let tex = icons::texture(ui.ctx(), b);
+            let rect = Rect::from_center_size(center, Vec2::splat(size * 1.2));
+            let tint = Color32::from_rgba_unmultiplied(255, 255, 255, alpha);
+            ui.painter().image(tex, rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+        }
+    }
+}
 
 /// A toolbar item: glyph above a label, Horos/Aqua style.
 pub struct ToolbarButton<'a> {
-    pub glyph: &'a str,
+    pub icon: Icon,
     pub label: &'a str,
     pub enabled: bool,
     pub selected: bool,
@@ -16,9 +53,9 @@ pub struct ToolbarButton<'a> {
 }
 
 impl<'a> ToolbarButton<'a> {
-    pub fn new(glyph: &'a str, label: &'a str) -> Self {
+    pub fn new(icon: impl Into<Icon>, label: &'a str) -> Self {
         Self {
-            glyph,
+            icon: icon.into(),
             label,
             enabled: true,
             selected: false,
@@ -91,14 +128,9 @@ impl<'a> ToolbarButton<'a> {
             } else {
                 (Color32::from_gray(55), Color32::from_gray(40))
             };
-            painter.text(
-                Pos2::new(rect.center().x, rect.top() + 6.0),
-                Align2::CENTER_TOP,
-                self.glyph,
-                crate::icons::font(theme::TOOLBAR_ICON_SIZE),
-                icon_color,
-            );
-            painter.text(
+            let icon_center = Pos2::new(rect.center().x, rect.top() + 6.0 + theme::TOOLBAR_ICON_SIZE * 0.55);
+            paint_icon(ui, self.icon, icon_center, theme::TOOLBAR_ICON_SIZE, icon_color, if self.enabled { 255 } else { 80 });
+            ui.painter().text(
                 Pos2::new(rect.center().x, rect.bottom() - 5.0),
                 Align2::CENTER_BOTTOM,
                 self.label,
@@ -156,7 +188,8 @@ pub fn source_header(ui: &mut Ui, text: &str) {
 }
 
 /// A selectable source-list row with an optional count badge.
-pub fn source_row(ui: &mut Ui, glyph: &str, text: &str, count: Option<i64>, selected: bool) -> Response {
+pub fn source_row(ui: &mut Ui, icon: impl Into<Icon>, text: &str, count: Option<i64>, selected: bool) -> Response {
+    let icon = icon.into();
     let desired = Vec2::new(ui.available_width(), 26.0);
     let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
     if ui.is_rect_visible(rect) {
@@ -171,13 +204,15 @@ pub fn source_row(ui: &mut Ui, glyph: &str, text: &str, count: Option<i64>, sele
         } else {
             ui.visuals().text_color()
         };
-        painter.text(
-            Pos2::new(rect.left() + 9.0, rect.center().y),
-            Align2::LEFT_CENTER,
-            glyph,
-            crate::icons::font(15.0),
+        paint_icon(
+            ui,
+            icon,
+            Pos2::new(rect.left() + 17.0, rect.center().y),
+            15.0,
             if selected { Color32::WHITE } else { Color32::from_gray(90) },
+            255,
         );
+        let painter = ui.painter();
         painter.text(
             Pos2::new(rect.left() + 32.0, rect.center().y),
             Align2::LEFT_CENTER,
@@ -324,7 +359,8 @@ pub fn mouse_glyph(painter: &egui::Painter, rect: Rect, key: MouseKey, dark: boo
 /// A menu row for a tool: a mouse glyph on the left when the tool is on the
 /// left button, the tool's icon and name, and a mouse glyph on the right when
 /// it is on the right button. Left-click and right-click are both reported.
-pub fn tool_menu_row(ui: &mut Ui, glyph: &str, label: &str, on_left: bool, on_right: bool) -> Response {
+pub fn tool_menu_row(ui: &mut Ui, icon: impl Into<Icon>, label: &str, on_left: bool, on_right: bool) -> Response {
+    let icon = icon.into();
     let desired = Vec2::new(200.0, 24.0);
     let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
     if ui.is_rect_visible(rect) {
@@ -347,13 +383,8 @@ pub fn tool_menu_row(ui: &mut Ui, glyph: &str, label: &str, on_left: bool, on_ri
             let r = Rect::from_min_size(Pos2::new(rect.right() - slot + 1.0, rect.top() + 4.0), Vec2::new(slot - 6.0, rect.height() - 8.0));
             mouse_glyph(painter, r, MouseKey::Right, glyph_dark);
         }
-        painter.text(
-            Pos2::new(rect.left() + slot + 4.0, rect.center().y),
-            Align2::LEFT_CENTER,
-            glyph,
-            crate::icons::font(15.0),
-            text_color,
-        );
+        paint_icon(ui, icon, Pos2::new(rect.left() + slot + 12.0, rect.center().y), 15.0, text_color, 255);
+        let painter = ui.painter();
         painter.text(
             Pos2::new(rect.left() + slot + 28.0, rect.center().y),
             Align2::LEFT_CENTER,
@@ -409,4 +440,85 @@ pub fn tiling_button(ui: &mut Ui, rows: usize, cols: usize, selected: bool, enab
         );
     }
     response
+}
+
+/// Width shared by the items of one menu: the widest item seen last frame.
+#[derive(Clone, Copy, Default)]
+struct MenuWidth {
+    frame: u64,
+    current: f32,
+    previous: f32,
+}
+
+fn menu_item_width(ui: &mut Ui, needed: f32) -> f32 {
+    let key = ui.scope_id().with("menu-width");
+    let frame = ui.ctx().cumulative_frame_nr();
+    let mut mw: MenuWidth = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+    if mw.frame != frame {
+        mw.previous = if mw.frame + 1 == frame { mw.current } else { 0.0 };
+        mw.current = 0.0;
+        mw.frame = frame;
+    }
+    mw.current = mw.current.max(needed);
+    ui.data_mut(|d| d.insert_temp(key, mw));
+    if mw.previous < mw.current {
+        ui.ctx().request_repaint();
+    }
+    mw.previous.max(needed).max(ui.spacing().menu_width)
+}
+
+/// A menu row in the macOS style: full width, blue highlight with white
+/// text under the pointer, a tick when `selected`.
+pub fn menu_item(ui: &mut Ui, text: impl Into<egui::WidgetText>, selected: bool) -> Response {
+    menu_item_enabled(ui, text, selected, true)
+}
+
+pub fn menu_item_enabled(ui: &mut Ui, text: impl Into<egui::WidgetText>, selected: bool, enabled: bool) -> Response {
+    let galley = text.into().into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+    let width = menu_item_width(ui, galley.size().x + 44.0);
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 24.0), if enabled { Sense::click() } else { Sense::hover() });
+    if ui.is_rect_visible(rect) {
+        let dark = ui.visuals().dark_mode;
+        let hovered = enabled && response.hovered();
+        if hovered {
+            ui.painter().rect_filled(rect, 5.0, theme::SELECTION_BLUE);
+        }
+        let color = if hovered {
+            Color32::WHITE
+        } else if !enabled {
+            if dark { Color32::from_gray(120) } else { Color32::from_gray(160) }
+        } else if dark {
+            Color32::from_gray(230)
+        } else {
+            Color32::from_gray(25)
+        };
+        if selected {
+            let c = Pos2::new(rect.left() + 12.0, rect.center().y);
+            let stroke = Stroke::new(1.8, color);
+            ui.painter().line_segment([c + Vec2::new(-4.0, 0.0), c + Vec2::new(-1.0, 3.0)], stroke);
+            ui.painter().line_segment([c + Vec2::new(-1.0, 3.0), c + Vec2::new(5.0, -4.0)], stroke);
+        }
+        let pos = Pos2::new(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0);
+        if hovered || !enabled {
+            ui.painter().galley_with_override_text_color(pos, galley, color);
+        } else {
+            ui.painter().galley(pos, galley, color);
+        }
+    }
+    response
+}
+
+/// A small grey heading inside a menu.
+pub fn menu_heading(ui: &mut Ui, text: &str) {
+    ui.add_space(3.0);
+    ui.label(egui::RichText::new(text).size(11.0).strong().color(Color32::from_gray(140)));
+}
+
+/// A menu row with a check box state that toggles on click.
+pub fn menu_check(ui: &mut Ui, value: &mut bool, text: &str) -> Response {
+    let r = menu_item(ui, text, *value);
+    if r.clicked() {
+        *value = !*value;
+    }
+    r
 }
