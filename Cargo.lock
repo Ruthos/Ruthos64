@@ -3973,6 +3973,7 @@ name = "ruthos-dicom"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dicom-core",
  "dicom-dictionary-std",
  "dicom-encoding",
@@ -3985,6 +3986,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -20,4 +20,6 @@ tracing = { workspace = true }
 plist = { workspace = true }
 serde = { workspace = true }
 image = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
 rayon = { workspace = true }

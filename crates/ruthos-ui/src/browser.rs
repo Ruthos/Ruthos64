@@ -32,6 +32,7 @@ enum Modal {
     NewAlbum { name: String },
     RenameAlbum { id: i64, name: String },
     EditComment { study_id: i64, text: String },
+    ImportPictures { files: Vec<PathBuf>, info: ruthos_dicom::sc::PictureInfo, add_to_selected: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -199,6 +200,32 @@ impl BrowserState {
         }
     }
 
+    /// Convert pictures to DICOM on a background thread, then import them.
+    fn start_picture_import(&mut self, shared: &Shared, files: Vec<PathBuf>, info: ruthos_dicom::sc::PictureInfo) {
+        let db = shared.db.clone();
+        let paths = shared.paths.clone();
+        let tx = shared.import_tx.clone();
+        let out_dir = paths.temp_dir().join(format!("pictures-{}", ruthos_dicom::sc::new_uid()));
+        self.import_progress = Some((0, files.len(), "Converting pictures…".to_string()));
+        std::thread::Builder::new()
+            .name("ruthos-pictures".into())
+            .spawn(move || match ruthos_dicom::sc::convert_pictures(&files, &info, &out_dir) {
+                Ok(written) => {
+                    let importer = Importer::new(db, paths);
+                    let handle = importer.spawn(written, ImportMode::Move, tx);
+                    let _ = handle.join();
+                    let _ = std::fs::remove_dir_all(&out_dir);
+                }
+                Err(e) => {
+                    let mut summary = ImportSummary::default();
+                    summary.errors.push((out_dir.clone(), format!("picture conversion failed: {e}")));
+                    let _ = tx.send(ImportEvent::Finished(summary));
+                    let _ = std::fs::remove_dir_all(&out_dir);
+                }
+            })
+            .expect("spawn picture import thread");
+    }
+
     fn start_import(&mut self, shared: &Shared, sources: Vec<PathBuf>) {
         if sources.is_empty() {
             return;
@@ -275,6 +302,34 @@ impl BrowserState {
             if ToolbarButton::new(icons::IMPORT_FILES, "Import Files").tooltip("Import individual DICOM files").show(ui).clicked() {
                 if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM files").pick_files() {
                     self.start_import(shared, paths);
+                }
+            }
+            if ToolbarButton::new(icons::PICTURES, "Pictures")
+                .tooltip("Import JPEG or PNG pictures as a DICOM series, asking for the patient")
+                .show(ui)
+                .clicked()
+            {
+                if let Some(mut files) = rfd::FileDialog::new()
+                    .set_title("Import pictures")
+                    .add_filter("Pictures", &["jpg", "jpeg", "png", "bmp"])
+                    .pick_files()
+                {
+                    files.sort();
+                    let mut info = ruthos_dicom::sc::PictureInfo {
+                        modality: "XC".to_string(),
+                        max_edge: Some(4096),
+                        ..Default::default()
+                    };
+                    if let Some(study) = self.selected_study.and_then(|id| self.studies.iter().find(|s| s.id == id)) {
+                        info.patient_name = study.patient_name.clone();
+                        info.patient_id = study.patient_id.clone();
+                        info.birth_date = study.patient_birth_date.clone().unwrap_or_default();
+                        info.sex = study.patient_sex.clone();
+                        info.species = study.patient_species.clone().unwrap_or_default();
+                        info.breed = study.patient_breed.clone().unwrap_or_default();
+                        info.responsible_person = study.responsible_person.clone().unwrap_or_default();
+                    }
+                    self.modal = Some(Modal::ImportPictures { files, info, add_to_selected: false });
                 }
             }
             let has_sel = self.selected_study.is_some();
@@ -861,6 +916,93 @@ impl BrowserState {
                         if ui.button("Rename").clicked() && !name.trim().is_empty() {
                             let _ = shared.db.rename_album(*id, name.trim());
                             self.dirty = true;
+                            close = true;
+                        }
+                    });
+                }
+                Modal::ImportPictures { files, info, add_to_selected } => {
+                    ui.set_min_width(460.0);
+                    ui.heading(format!(
+                        "Import {} picture{}",
+                        files.len(),
+                        if files.len() == 1 { "" } else { "s" }
+                    ));
+                    ui.label(
+                        RichText::new("The pictures become a DICOM series in the archive. Fill in the patient.")
+                            .size(12.0)
+                            .color(Color32::from_gray(90)),
+                    );
+                    ui.add_space(6.0);
+                    let selected = self.selected_study.and_then(|id| self.studies.iter().find(|s| s.id == id)).cloned();
+                    if let Some(study) = &selected {
+                        ui.checkbox(
+                            add_to_selected,
+                            format!("Add to the selected study ({}, {})", study.patient_name, study.study_date.clone().unwrap_or_default()),
+                        );
+                        ui.add_space(4.0);
+                    }
+                    let locked = *add_to_selected && selected.is_some();
+                    egui::Grid::new("picture-form").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                        let field = |ui: &mut Ui, label: &str, value: &mut String, hint: &str, enabled: bool| {
+                            ui.label(label);
+                            ui.add_enabled(enabled, egui::TextEdit::singleline(value).hint_text(hint).desired_width(300.0));
+                            ui.end_row();
+                        };
+                        field(ui, "Patient name", &mut info.patient_name, "Smith, Rex", !locked);
+                        field(ui, "Patient ID", &mut info.patient_id, "Practice record number", !locked);
+                        field(ui, "Species", &mut info.species, "Canine, Feline, Equine…", !locked);
+                        field(ui, "Breed", &mut info.breed, "", !locked);
+                        ui.label("Sex");
+                        ui.add_enabled_ui(!locked, |ui| {
+                            ui.horizontal(|ui| {
+                                for (v, l) in [("M", "Male"), ("F", "Female"), ("O", "Other"), ("", "Unknown")] {
+                                    ui.selectable_value(&mut info.sex, v.to_string(), l);
+                                }
+                                let mut neutered = info.neutered.unwrap_or(false);
+                                if ui.checkbox(&mut neutered, "Neutered").changed() {
+                                    info.neutered = Some(neutered);
+                                }
+                            });
+                        });
+                        ui.end_row();
+                        field(ui, "Date of birth", &mut info.birth_date, "YYYY-MM-DD", !locked);
+                        field(ui, "Owner", &mut info.responsible_person, "Responsible person", !locked);
+                        field(ui, "Study description", &mut info.study_description, "e.g. Dermatology photos", !locked);
+                        field(ui, "Series description", &mut info.series_description, "Pictures", true);
+                        field(ui, "Study date", &mut info.study_date, "Today", !locked);
+                        ui.label("Modality");
+                        ui.horizontal(|ui| {
+                            for (v, l) in [("XC", "Photo (XC)"), ("ES", "Endoscopy (ES)"), ("GM", "Microscopy (GM)"), ("OT", "Other (OT)")] {
+                                ui.selectable_value(&mut info.modality, v.to_string(), l);
+                            }
+                        });
+                        ui.end_row();
+                        ui.label("Size limit");
+                        ui.horizontal(|ui| {
+                            let mut cap = info.max_edge.is_some();
+                            if ui.checkbox(&mut cap, "Scale pictures down to 4096 px on the long edge").changed() {
+                                info.max_edge = if cap { Some(4096) } else { None };
+                            }
+                        });
+                        ui.end_row();
+                    });
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                        let ready = !info.patient_name.trim().is_empty() || locked;
+                        if ui.add_enabled(ready, egui::Button::new("Import")).clicked() {
+                            let mut info = info.clone();
+                            if locked {
+                                if let Some(study) = &selected {
+                                    info.existing_study_uid = Some(study.study_instance_uid.clone());
+                                    info.study_date = study.study_date.clone().unwrap_or_default();
+                                    info.study_description = study.study_description.clone();
+                                }
+                            }
+                            self.open_next_import = true;
+                            self.start_picture_import(shared, files.clone(), info);
                             close = true;
                         }
                     });

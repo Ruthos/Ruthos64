@@ -11,6 +11,7 @@ pub const FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/Phosphor.ttf
 pub const SIDEBAR: &str = "\u{EC24}";
 pub const IMPORT: &str = "\u{E256}"; // folder open
 pub const IMPORT_FILES: &str = "\u{E236}"; // file plus
+pub const PICTURES: &str = "\u{E836}"; // images
 pub const EXPORT: &str = "\u{EAF0}";
 pub const QUERY: &str = "\u{E30C}"; // magnifying glass
 pub const SEND: &str = "\u{E398}"; // paper plane

@@ -14,6 +14,7 @@ pub mod open;
 pub mod pixels;
 pub mod presets;
 pub mod quirks;
+pub mod sc;
 
 pub use clut::{Clut, ClutLibrary};
 pub use meta::{read_meta, InstanceMeta, PatientName};
