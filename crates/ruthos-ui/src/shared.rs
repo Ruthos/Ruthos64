@@ -49,6 +49,9 @@ pub struct Shared {
     /// Internal errors caught at a window boundary, shown by the database
     /// window in a dialog.
     pub errors: Mutex<Vec<String>>,
+    /// A note about the graphics adapter when it is worth knowing, e.g. a
+    /// software renderer is in use.
+    pub renderer_note: Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -78,6 +81,7 @@ impl Shared {
             next_id: AtomicU64::new(1),
             viewer_keys_to_forget: Mutex::new(Vec::new()),
             errors: Mutex::new(Vec::new()),
+            renderer_note: Mutex::new(None),
         })
     }
 

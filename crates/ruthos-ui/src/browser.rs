@@ -523,6 +523,10 @@ impl BrowserState {
 
         ui.add_space(8.0);
         ui.label(RichText::new(format!("{}", shared.paths.root.display())).size(10.0).color(Color32::from_gray(130)));
+        if let Some(note) = shared.renderer_note.lock().clone() {
+            ui.add_space(4.0);
+            ui.label(RichText::new(note).size(10.0).color(Color32::from_rgb(190, 120, 20)));
+        }
     }
 
     fn study_table(&mut self, ui: &mut Ui, shared: &Shared) {

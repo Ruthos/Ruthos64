@@ -3940,10 +3940,13 @@ dependencies = [
  "anyhow",
  "eframe",
  "egui",
+ "egui-wgpu",
+ "rfd",
  "ruthos-core",
  "ruthos-ui",
  "tracing",
  "tracing-subscriber",
+ "wgpu",
 ]
 
 [[package]]

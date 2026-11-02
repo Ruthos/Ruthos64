@@ -62,6 +62,19 @@ impl RuthosApp {
         }
 
         let shared = Shared::new(db.clone(), paths.clone(), settings.clone(), render_state);
+        {
+            let info = shared.render_state.adapter.get_info();
+            tracing::info!(
+                "renderer: {} via {:?} ({:?}), max texture {}",
+                info.name,
+                info.backend,
+                info.device_type,
+                shared.render_state.device.limits().max_texture_dimension_2d
+            );
+            if info.device_type == egui_wgpu::wgpu::DeviceType::Cpu {
+                *shared.renderer_note.lock() = Some(format!("Software rendering ({}): no GPU found", info.name));
+            }
+        }
 
         // DICOM listener writes to the incoming folder; the scanner imports.
         let mut startup_error = None;
