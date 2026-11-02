@@ -281,3 +281,86 @@ pub fn shadow_text(painter: &egui::Painter, pos: Pos2, anchor: Align2, text: &st
     painter.text(pos + Vec2::new(1.0, 1.0), anchor, text, font.clone(), theme::ANNOTATION_SHADOW);
     painter.text(pos, anchor, text, font, color)
 }
+
+/// Which mouse button a menu row is assigned to, for [`mouse_glyph`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MouseKey {
+    Left,
+    Right,
+}
+
+/// A small two-button mouse outline with one key darkened, drawn into `rect`.
+pub fn mouse_glyph(painter: &egui::Painter, rect: Rect, key: MouseKey, dark: bool) {
+    let outline = if dark { Color32::from_gray(205) } else { Color32::from_gray(70) };
+    let key_fill = if dark { Color32::from_gray(225) } else { Color32::from_gray(60) };
+    let body = if dark { Color32::from_white_alpha(18) } else { Color32::from_black_alpha(14) };
+    let w = rect.width().min(rect.height() * 0.68);
+    let h = w / 0.68;
+    let body_rect = Rect::from_center_size(rect.center(), Vec2::new(w, h));
+    let radius = w * 0.5;
+    painter.rect(body_rect, radius, body, Stroke::new(1.0, outline), egui::StrokeKind::Inside);
+    // The two keys occupy the upper half; the darker one is the assigned key.
+    let key_h = h * 0.46;
+    let key_rect = match key {
+        MouseKey::Left => Rect::from_min_size(body_rect.min, Vec2::new(w * 0.5, key_h)),
+        MouseKey::Right => Rect::from_min_size(Pos2::new(body_rect.center().x, body_rect.top()), Vec2::new(w * 0.5, key_h)),
+    };
+    let rounding = match key {
+        MouseKey::Left => egui::CornerRadius { nw: radius as u8, ne: 0, sw: 0, se: 0 },
+        MouseKey::Right => egui::CornerRadius { nw: 0, ne: radius as u8, sw: 0, se: 0 },
+    };
+    painter.rect_filled(key_rect.shrink(0.5), rounding, key_fill);
+    let mid_x = body_rect.center().x;
+    painter.line_segment(
+        [Pos2::new(mid_x, body_rect.top() + 0.5), Pos2::new(mid_x, body_rect.top() + key_h)],
+        Stroke::new(1.0, outline),
+    );
+    painter.line_segment(
+        [Pos2::new(body_rect.left() + 0.5, body_rect.top() + key_h), Pos2::new(body_rect.right() - 0.5, body_rect.top() + key_h)],
+        Stroke::new(1.0, outline),
+    );
+}
+
+/// A menu row for a tool: a mouse glyph on the left when the tool is on the
+/// left button, the tool's icon and name, and a mouse glyph on the right when
+/// it is on the right button. Left-click and right-click are both reported.
+pub fn tool_menu_row(ui: &mut Ui, glyph: &str, label: &str, on_left: bool, on_right: bool) -> Response {
+    let desired = Vec2::new(200.0, 24.0);
+    let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let dark = ui.visuals().dark_mode;
+        let active = on_left || on_right;
+        if response.hovered() {
+            painter.rect_filled(rect, 4.0, ui.visuals().selection.bg_fill);
+        } else if active {
+            painter.rect_filled(rect, 4.0, if dark { Color32::from_white_alpha(16) } else { Color32::from_black_alpha(12) });
+        }
+        let text_color = if response.hovered() { Color32::WHITE } else { ui.visuals().text_color() };
+        let glyph_dark = dark || response.hovered();
+        let slot = 20.0;
+        if on_left {
+            let r = Rect::from_min_size(Pos2::new(rect.left() + 5.0, rect.top() + 4.0), Vec2::new(slot - 6.0, rect.height() - 8.0));
+            mouse_glyph(painter, r, MouseKey::Left, glyph_dark);
+        }
+        if on_right {
+            let r = Rect::from_min_size(Pos2::new(rect.right() - slot + 1.0, rect.top() + 4.0), Vec2::new(slot - 6.0, rect.height() - 8.0));
+            mouse_glyph(painter, r, MouseKey::Right, glyph_dark);
+        }
+        painter.text(
+            Pos2::new(rect.left() + slot + 4.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            glyph,
+            crate::icons::font(15.0),
+            text_color,
+        );
+        painter.text(
+            Pos2::new(rect.left() + slot + 28.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::proportional(14.0),
+            text_color,
+        );
+    }
+    response
+}

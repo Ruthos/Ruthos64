@@ -21,7 +21,7 @@ use crate::roi::{roi_color, Roi, RoiKind};
 use crate::shared::Shared;
 use crate::icons;
 use crate::theme;
-use crate::widgets::{shadow_text, thumbnail_cell, toolbar_caption, toolbar_separator, ToolbarButton};
+use crate::widgets::{shadow_text, thumbnail_cell, tool_menu_row, toolbar_caption, toolbar_separator, ToolbarButton};
 
 /// Mouse tools, in the order Horos lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,10 +109,10 @@ pub struct ViewerState {
     pub frame_idx: u32,
 
     pub view: ViewState,
-    /// Tools assigned to the left, right and middle mouse buttons.
+    /// Tools assigned to the left and right mouse buttons. The middle button
+    /// always pans, as in Horos.
     pub tool: Tool,
     pub right_tool: Tool,
-    pub middle_tool: Tool,
     pub clut: String,
     pub annotations: AnnotationLevel,
     pub bilinear: bool,
@@ -185,7 +185,6 @@ impl ViewerState {
             view: ViewState::default(),
             tool: Tool::WindowLevel,
             right_tool: Tool::Zoom,
-            middle_tool: Tool::Move,
             clut,
             annotations,
             bilinear: true,
@@ -531,39 +530,28 @@ impl ViewerState {
                 ui.add_space(2.0);
                 let glyph = self.tool.glyph();
                 ui.menu_button((icons::rich(glyph, 16.0), egui::RichText::new(format!("  {}  ", self.tool.label())).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
-                    // One row per tool; the three columns assign it to the
-                    // left, right or middle mouse button.
-                    ui.horizontal(|ui| {
-                        ui.add_space(4.0);
-                        for (w, h) in [(26.0, "L"), (26.0, "R"), (26.0, "M")] {
-                            ui.add_sized([w, 18.0], egui::Label::new(egui::RichText::new(h).size(11.0).strong().color(Color32::from_gray(170))));
-                        }
-                        ui.label(egui::RichText::new("Tool  (mouse button)").size(11.0).color(Color32::from_gray(170)));
-                    });
-                    ui.separator();
+                    // One row per tool. Left-click puts it on the left mouse
+                    // button, right-click on the right button; a small mouse
+                    // glyph beside the name shows which.
                     let mut changed = false;
                     for t in Tool::ALL {
-                        ui.horizontal(|ui| {
-                            ui.add_space(4.0);
-                            if ui.add_sized([26.0, 20.0], egui::Button::selectable(self.tool == t, "L")).clicked() {
-                                self.tool = t;
-                                changed = true;
-                            }
-                            if ui.add_sized([26.0, 20.0], egui::Button::selectable(self.right_tool == t, "R")).clicked() {
-                                self.right_tool = t;
-                                changed = true;
-                            }
-                            if ui.add_sized([26.0, 20.0], egui::Button::selectable(self.middle_tool == t, "M")).clicked() {
-                                self.middle_tool = t;
-                                changed = true;
-                            }
-                            if ui.selectable_label(self.tool == t, (icons::rich(t.glyph(), 15.0), egui::RichText::new(format!("  {}", t.label())))).clicked() {
-                                self.tool = t;
-                                changed = true;
-                                ui.close();
-                            }
-                        });
+                        let r = tool_menu_row(ui, t.glyph(), t.label(), self.tool == t, self.right_tool == t);
+                        if r.clicked() {
+                            self.tool = t;
+                            changed = true;
+                            ui.close();
+                        } else if r.secondary_clicked() {
+                            self.right_tool = t;
+                            changed = true;
+                            ui.close();
+                        }
                     }
+                    ui.add_space(3.0);
+                    ui.label(
+                        egui::RichText::new("Click: left button  ·  Right-click: right button")
+                            .size(11.0)
+                            .color(Color32::from_gray(150)),
+                    );
                     if changed {
                         self.drag_draft = None;
                         self.angle_draft = None;
@@ -1062,7 +1050,7 @@ impl ViewerState {
         for (button, tool) in [
             (PointerButton::Primary, self.tool),
             (PointerButton::Secondary, self.right_tool),
-            (PointerButton::Middle, self.middle_tool),
+            (PointerButton::Middle, Tool::Move),
         ] {
             self.apply_tool(ui, response, t, frame, key, tool, button, hover, pos);
         }
