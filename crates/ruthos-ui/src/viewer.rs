@@ -1000,8 +1000,8 @@ impl ViewerState {
                 let current = self.series.get(self.panes[self.active].series_idx).map(|s| s.display_name()).unwrap_or_default();
                 let mut chosen = self.panes[self.active].series_idx;
                 egui::ComboBox::from_id_salt(("series-popup", self.id))
-                    .selected_text(crate::widgets::truncate(&current, 24))
-                    .width(190.0)
+                    .selected_text(crate::widgets::truncate(&current, 15))
+                    .width(138.0)
                     .show_ui(ui, |ui| {
                         for (i, s) in self.series.iter().enumerate() {
                             let label = format!("{}  ({} im)", s.display_name(), s.number_of_images);
@@ -1017,9 +1017,10 @@ impl ViewerState {
             // Tiling menu (Horos: image tiling and series layout)
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                let label = match self.tiling.mode {
-                    TilingMode::Series => format!("  {}  ", self.tiling.label()),
-                    TilingMode::Study => format!("  {} series  ", self.tiling.label()),
+                let label = format!(" {} ", self.tiling.label());
+                let caption = match self.tiling.mode {
+                    TilingMode::Series => "Tiling",
+                    TilingMode::Study => "Tiling: series",
                 };
                 let mut chosen: Option<Tiling> = None;
                 ui.menu_button((icons::rich(icons::TILING, 16.0), egui::RichText::new(label).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
@@ -1046,7 +1047,7 @@ impl ViewerState {
                         }
                     }
                 });
-                toolbar_caption(ui, "Tiling");
+                toolbar_caption(ui, caption);
                 if let Some(t) = chosen {
                     self.set_tiling(shared, t);
                 }
@@ -1066,7 +1067,7 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 let title_icon = icons::image(ui.ctx(), self.tool.bitmap(), 18.0);
-                ui.menu_button((title_icon, egui::RichText::new(format!("  {}  ", self.tool.label())).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
+                ui.menu_button((title_icon, egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     // One row per tool. Left-click puts it on the left mouse
                     // button, right-click on the right button; a small mouse
                     // glyph beside the name shows which.
@@ -1094,14 +1095,14 @@ impl ViewerState {
                         self.angle_draft = None;
                     }
                 });
-                toolbar_caption(ui, "Tools");
+                toolbar_caption(ui, &format!("Tool: {}", self.tool.label()));
             });
 
             // WL/WW menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 let wl_icon = icons::image(ui.ctx(), Bitmap::Wlww, 18.0);
-                ui.menu_button((wl_icon, egui::RichText::new("  WL/WW  ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
+                ui.menu_button((wl_icon, egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     if menu_item(ui, "Default WL & WW", false).clicked() {
                         self.apply_default_window(shared, false);
                         ui.close();
@@ -1134,7 +1135,8 @@ impl ViewerState {
             // CLUT menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button((icons::rich(icons::CLUT, 16.0), egui::RichText::new(format!("  {}  ", crate::widgets::truncate(&self.panes[self.active].clut, 12))).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
+                let clut_caption = crate::widgets::truncate(&self.panes[self.active].clut, 12);
+                ui.menu_button((icons::rich(icons::CLUT, 16.0), egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                         for name in shared.cluts.names() {
                             if menu_item(ui, name, self.panes[self.active].clut == name).clicked() {
@@ -1144,7 +1146,7 @@ impl ViewerState {
                         }
                     });
                 });
-                toolbar_caption(ui, "CLUT");
+                toolbar_caption(ui, &clut_caption);
             });
 
             ToolbarButton::new(Bitmap::ThreeD, "3D")
@@ -1155,7 +1157,7 @@ impl ViewerState {
             // Orientation menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button((icons::rich(icons::ORIENTATION, 16.0), egui::RichText::new("  Orientation  ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
+                ui.menu_button((icons::rich(icons::ORIENTATION, 16.0), egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
                     if menu_item(ui, "Rotate 90° clockwise", false).clicked() {
                         self.panes[self.active].view.rotation_deg = (self.panes[self.active].view.rotation_deg + 90.0).rem_euclid(360.0);
                         self.panes[self.active].fit_pending = true;

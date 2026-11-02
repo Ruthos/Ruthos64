@@ -60,7 +60,7 @@ impl<'a> ToolbarButton<'a> {
             enabled: true,
             selected: false,
             tooltip: None,
-            width: 62.0,
+            width: 56.0,
         }
     }
 
@@ -153,7 +153,7 @@ impl<'a> ToolbarButton<'a> {
 
 /// Thin vertical separator between toolbar groups.
 pub fn toolbar_separator(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(11.0, theme::TOOLBAR_HEIGHT - 10.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(7.0, theme::TOOLBAR_HEIGHT - 10.0), Sense::hover());
     let x = rect.center().x;
     let color = if ui.visuals().dark_mode {
         Color32::from_white_alpha(40)
