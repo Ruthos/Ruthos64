@@ -118,6 +118,12 @@ fn load_system_font(candidates: &[&str]) -> Option<Vec<u8>> {
 /// rendered to 128 px PNG with alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Bitmap {
+    /// Ruthos' own artwork: import image files.
+    ImportImages,
+    /// Ruthos' own artwork: add pictures.
+    AddImages,
+    /// Ruthos' own artwork: the report.
+    ReportCustom,
     Add,
     Album,
     Angle,
@@ -178,6 +184,9 @@ pub enum Bitmap {
 impl Bitmap {
     fn bytes(self) -> &'static [u8] {
         match self {
+            Bitmap::ImportImages => include_bytes!("../../../assets/horos/icons/import_images.png"),
+            Bitmap::AddImages => include_bytes!("../../../assets/horos/icons/add_images.png"),
+            Bitmap::ReportCustom => include_bytes!("../../../assets/horos/icons/report_custom.png"),
             Bitmap::Add => include_bytes!("../../../assets/horos/icons/add.png"),
             Bitmap::Album => include_bytes!("../../../assets/horos/icons/album.png"),
             Bitmap::Angle => include_bytes!("../../../assets/horos/icons/angle.png"),
@@ -238,6 +247,9 @@ impl Bitmap {
 
     fn name(self) -> &'static str {
         match self {
+            Bitmap::ImportImages => "import_images",
+            Bitmap::AddImages => "add_images",
+            Bitmap::ReportCustom => "report_custom",
             Bitmap::Add => "add",
             Bitmap::Album => "album",
             Bitmap::Angle => "angle",

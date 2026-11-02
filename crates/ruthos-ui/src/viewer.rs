@@ -1228,7 +1228,7 @@ impl ViewerState {
             if ToolbarButton::new(Bitmap::Export, "Export").tooltip("Export the current image as PNG or JPEG").show(ui).clicked() {
                 self.export_current(shared);
             }
-            if ToolbarButton::new(Bitmap::Report, "Report").tooltip("The report for this study: measurements, findings, key images").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::ReportCustom, "Report").tooltip("The report for this study: measurements, findings, key images").show(ui).clicked() {
                 shared.open_reports.lock().push(self.study.id);
             }
             toolbar_separator(ui);

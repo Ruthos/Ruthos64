@@ -392,12 +392,12 @@ impl BrowserState {
                     self.start_import(shared, paths);
                 }
             }
-            if ToolbarButton::new(icons::IMPORT_FILES, "Import Files").tooltip("Import individual DICOM files").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::ImportImages, "Import Files").tooltip("Import individual DICOM files").show(ui).clicked() {
                 if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM files").pick_files() {
                     self.start_import(shared, paths);
                 }
             }
-            if ToolbarButton::new(icons::PICTURES, "Pictures")
+            if ToolbarButton::new(Bitmap::AddImages, "Pictures")
                 .tooltip("Import JPEG or PNG pictures as a DICOM series, asking for the patient")
                 .show(ui)
                 .clicked()
@@ -448,7 +448,7 @@ impl BrowserState {
                     self.open_requests.push((id, self.selected_series));
                 }
             }
-            if ToolbarButton::new(Bitmap::Report, "Report").enabled(has_sel).tooltip("Open the report for the selected study").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::ReportCustom, "Report").enabled(has_sel).tooltip("Open the report for the selected study").show(ui).clicked() {
                 if let Some(id) = self.selected_study {
                     shared.open_reports.lock().push(id);
                 }
@@ -774,7 +774,7 @@ impl BrowserState {
                                     let has_report = reports.contains(&s.id);
                                     row.col(|ui| {
                                         if has_report {
-                                            ui.add(icons::image(&ctx, Bitmap::Report, 17.0));
+                                            ui.add(icons::image(&ctx, Bitmap::ReportCustom, 17.0));
                                         }
                                     });
                                     continue;
