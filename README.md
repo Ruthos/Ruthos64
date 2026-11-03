@@ -64,20 +64,25 @@ Work is organised in tiers. Each tier is usable on its own.
 - Anonymisation for teaching: allowlist header profile, derived UIDs, shifted dates, ultrasound-region and template pixel masking with review, named teaching cases, sidecar for measurements, independent verification pass (see `docs/anonymiser.md`)
 - Preferences window
 
-### Tier 2: 3D
+### Tier 2: MPR, data and integration
 
-- Orthogonal and oblique MPR, curved MPR, thick slab, MIP and MinIP
+- Orthogonal and oblique MPR, curved MPR, thick slab, MIP and MinIP, with reference lines and 3D position across series
+- Measurements, calculations and findings saved as DICOM Structured Reports (measurement reports, TID 1500) and read back in, so they travel with the study to a PACS and other viewers; key object selection documents for key images
+- Measurements and reports exported as data (CSV and JSON) for research, audit and teaching
+- API ready for practice management systems (PMS). Comments, measurements, reports and annotated still images are produced through one documented, versioned interface, so a PMS can be told when a study is reported and receive its findings, values and key images with their annotations. No particular PMS integration is promised yet; the principle is that connecting one needs a small connector, not changes to Ruthos
+
+### Tier 3: volume and surface rendering
+
 - GPU volume rendering with the Horos preset library
+- Surface rendering and mesh export (STL and OBJ, for 3D printing and surgical planning)
+- ROI volumes: regions grown across slices, with their volume
+
+### Tier 4: the future
+
 - PET-CT and other fusion
-- ROI volumes and 3D position
-
-### Tier 3: the long tail
-
-- Surface rendering and mesh export
-- Reports
 - Hanging protocols
 - A plugin interface (Horos plugins are Objective-C bundles and do not carry over)
-- DICOM print and structured reports
+- DICOM print
 
 Not planned: anything that depended on Apple-only services in Horos (iChat, Mail scripting, disc burning, QuickTime, iCloud).
 
@@ -90,7 +95,7 @@ Ruthos is a Cargo workspace. Each crate has a single job and a clear boundary.
 | `ruthos-core` | Data model (Study, Series, Image, Album), SQLite storage, import pipeline, file store, smart-album predicates, Horos database migration |
 | `ruthos-dicom` | Wraps [dicom-rs](https://github.com/Enet4/dicom-rs). Decoding to typed pixel buffers, rescale, geometry, default WL, CLUT and preset loaders |
 | `ruthos-net` | DICOM networking on the dicom-rs upper layer: listener, send, query/retrieve, echo |
-| `ruthos-render` | `wgpu` pipelines. Tier 1: texture upload, WL/CLUT shader, ROI geometry, annotation text. Tier 2: volume pipelines |
+| `ruthos-render` | `wgpu` pipelines. Tier 1: texture upload, WL/CLUT shader, ROI geometry, annotation text. Tier 2: MPR reslicing. Tier 3: volume and surface pipelines |
 | `ruthos-ui` | The windows, one module per Horos window, built with `egui` |
 | `ruthos` | The application binary, settings, updates |
 
