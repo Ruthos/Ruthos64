@@ -11,7 +11,7 @@
 
 product-name = "Ruthos"
 identifier = "org.ruthos.Ruthos"
-version = "0.1.0"
+version = "0.1.0-alpha"
 description = "A Horos-inspired DICOM viewer and patient archive"
 long-description = "Ruthos is a community, open-source DICOM viewer and patient archive inspired by Horos: an archive with a DICOM listener, a 2D viewer, measurements with a stated scale basis, reports, and teaching anonymisation."
 authors = ["The Ruthos contributors"]

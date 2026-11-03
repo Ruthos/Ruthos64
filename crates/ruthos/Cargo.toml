@@ -6,6 +6,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+description = "Ruthos DICOM viewer and patient archive"
+build = "build.rs"
 
 [dependencies]
 eframe = { workspace = true }
@@ -18,3 +20,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 ruthos-core = { workspace = true }
 ruthos-ui = { workspace = true }
+
+# Version information in ruthos.exe (build.rs).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

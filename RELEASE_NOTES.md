@@ -4,7 +4,7 @@ The first public build of Ruthos, a Horos-inspired DICOM viewer and patient arch
 
 ## What works
 
-- **Archive.** Import folders, files or drag-and-drop; a DICOM listener (C-STORE SCP, AE title RUTHOS, port 11112) that files what modalities send; a Horos-style database window with albums, smart albums, the built-in Horos albums, search and filters, series thumbnails and a preview pane.
+- **Archive.** Import folders, files or drag-and-drop; a DICOM listener (C-STORE SCP, AE title RUTHOS, port 11112), off until you turn it on in Preferences, that files what modalities send; a Horos-style database window with albums, smart albums, the built-in Horos albums, search and filters, series thumbnails and a preview pane.
 - **Codecs.** Uncompressed, RLE, deflate, JPEG baseline and 12-bit, JPEG lossless, JPEG-LS and JPEG 2000. Files without a meta header are accepted.
 - **Viewer.** GPU window/level and the Horos colour lookup tables, zoom, pan, rotate, flip, cine at the file's frame rate, tiling of a series or of a study, per-cell lock, Horos corner annotations, key images, export to PNG and JPEG.
 - **Measurements.** Length, angle, rectangle, oval, arrow, point and an LV M-mode tool with fractional shortening. Every value states its scale basis (ultrasound region, calibrated pixel spacing, patient plane, estimated magnification, detector plane, hand calibration or uncalibrated) and the report flags values that are not at the patient's scale. Handles on every measurement with keyboard nudging and undo, a GPU loupe while placing points, a Measurements menu, and a library of definitions, sets and calculations (Teichholz, LA/Ao, VHS and more) that is edited in Preferences and shared as JSON.
@@ -22,10 +22,35 @@ The first public build of Ruthos, a Horos-inspired DICOM viewer and patient arch
 
 ## Running
 
-Unzip anywhere and run `ruthos.exe`. The archive and logs live in `%LOCALAPPDATA%\Ruthos\Ruthos Data`, settings in `%APPDATA%\Ruthos\settings.json`. Point a modality at this computer's address, AE title RUTHOS, port 11112, and allow Ruthos through Windows Firewall when asked.
+Unzip anywhere and run `ruthos.exe`. The archive and logs live in `%LOCALAPPDATA%\Ruthos\Ruthos Data`, settings in `%APPDATA%\Ruthos\settings.json`. To receive from a modality, turn the listener on in Preferences > Listener, point the modality at this computer's address, AE title RUTHOS, port 11112, and allow Ruthos through Windows Firewall when asked.
 
 The archive format may change before 1.0. Keep your original files.
 
 ## Reporting problems
 
 A file that does not import or display correctly is the most useful report you can make. Open an issue with the "file does not import" template and attach `ruthos.log` from the data folder.
+
+## Verifying a download
+
+`SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
+
+```
+gh attestation verify Ruthos-0.1.0-alpha-win64.zip --repo Ruthos/Ruthos64
+```
+
+This alpha is not code-signed: Windows SmartScreen warns on first run, and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow from the next version; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
+
+## Code signing policy
+
+Free code signing on Windows is provided by [SignPath.io](https://about.signpath.io), with a certificate by the [SignPath Foundation](https://signpath.org). macOS builds are signed with an Apple Developer ID and notarised by Apple.
+
+Every signed release is built from this repository by the release workflow on GitHub-hosted runners, from a tagged commit. Each release carries SHA256 checksums and a GitHub build-provenance attestation; verify a download with `gh attestation verify <file> --repo Ruthos/Ruthos64`.
+
+Team roles:
+
+- Committers and reviewers: Mark Bowen
+- Approvers of signing requests: Mark Bowen
+
+## Privacy
+
+Ruthos does not transmit any data to its developers or to third parties. It makes network connections only when the user configures them: the DICOM listener, which is off by default and receives only what the user's own devices send it, and DICOM connections the user initiates.

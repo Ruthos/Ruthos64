@@ -91,7 +91,9 @@ impl Default for Settings {
         Self {
             data_root: None,
             copy_files_on_import: true,
-            listener_enabled: true,
+            // Off until the user turns it on: Ruthos makes no network
+            // connection the user has not configured.
+            listener_enabled: false,
             listener_port: 11112,
             listener_ae_title: "RUTHOS".to_string(),
             incoming_scan_seconds: 2,

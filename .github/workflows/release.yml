@@ -1,84 +1,127 @@
-# A version tag (v0.2.0) builds every platform and creates a draft
-# pre-release with all the artefacts and RELEASE_NOTES.md as its text.
-# Nothing is published until the draft is reviewed, and a failure on any
-# platform stops the draft, so a release never ships for Windows while
-# silently missing its Mac build.
+# A version tag (v0.1.1-alpha) builds Ruthos and creates a draft
+# pre-release. Nothing is published until the maintainer reviews the draft.
 #
-# Signing and notarisation are named here and configured through
-# repository secrets and variables (see docs/cross-platform.md):
-#   Windows: SignPath (SIGNPATH_API_TOKEN secret, SIGNPATH_ORGANIZATION_ID,
-#            SIGNPATH_PROJECT_SLUG and SIGNPATH_SIGNING_POLICY_SLUG variables)
-#   macOS:   Developer ID (APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
-#            APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID)
-# Without them the builds are unsigned, as the alpha is.
+# Signing happens only here, on GitHub-hosted runners, from a tagged commit
+# (docs/release-signing.md):
+#   Windows  SignPath Foundation. Runs when the repository variable
+#            SIGNPATH_ORGANIZATION_ID is set; the job uses the protected
+#            environment "release", so it waits for the maintainer's
+#            approval, and SignPath waits for a second approval of the
+#            signing request itself.
+#   macOS    Developer ID and notarisation. Runs when the repository
+#            variable MACOS_RELEASE is "true", also in "release".
+#   Linux    AppImage, when LINUX_RELEASE is "true".
+# Every artefact gets a SHA-256 checksum and a build-provenance attestation.
+# A failure on any platform that was asked for stops the draft.
 name: Release
 
 on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  windows:
-    name: Windows x86-64
+  # ---------------------------------------------------------------- Windows
+  windows-build:
+    name: Windows build
     runs-on: windows-latest
+    outputs:
+      artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/setup-nasm@v1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p ruthos
-      - name: SignPath signing
-        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
-        uses: signpath/github-action-submit-signing-request@v1
+      - name: Version resource (required on every signed binary)
+        shell: pwsh
+        run: |
+          $v = (Get-Item target/release/ruthos.exe).VersionInfo
+          $v | Format-List ProductName, ProductVersion, FileDescription, OriginalFilename
+          $want = $env:GITHUB_REF_NAME.TrimStart('v')
+          if ($v.ProductName -ne 'Ruthos') { throw "ProductName is '$($v.ProductName)'" }
+          if ($v.OriginalFilename -ne 'ruthos.exe') { throw "OriginalFilename is '$($v.OriginalFilename)'" }
+          if ($v.ProductVersion -ne $want) { throw "ProductVersion $($v.ProductVersion) does not match tag $want" }
+      - uses: actions/upload-artifact@v4
+        id: unsigned
+        with:
+          name: windows-unsigned
+          path: target/release/ruthos.exe
+          if-no-files-found: error
+
+  windows-sign:
+    name: Windows signing (SignPath)
+    needs: windows-build
+    if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - name: Submit to SignPath and wait for approval
+        uses: signpath/github-action-submit-signing-request@v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
           signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          github-artifact-id: ""
+          github-artifact-id: ${{ needs.windows-build.outputs.artifact-id }}
           wait-for-completion: true
-          output-artifact-directory: target/release
+          output-artifact-directory: signed
+      - name: Authenticode must be Valid, by SignPath Foundation, timestamped
+        shell: pwsh
+        run: |
+          $s = Get-AuthenticodeSignature signed/ruthos.exe
+          $s | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+          if ($s.Status -ne 'Valid') { throw "Authenticode status is $($s.Status)" }
+          if ($s.SignerCertificate.Subject -notmatch 'SignPath Foundation') { throw "Signer is $($s.SignerCertificate.Subject)" }
+          if (-not $s.TimeStamperCertificate) { throw "The signature has no timestamp" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-signed
+          path: signed/ruthos.exe
+          if-no-files-found: error
+
+  windows-package:
+    name: Windows zip
+    needs: [windows-build, windows-sign]
+    if: ${{ !cancelled() && needs.windows-build.result == 'success' && needs.windows-sign.result != 'failure' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Signed executable, or the unsigned one when signing is not set up
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.windows-sign.result == 'success' && 'windows-signed' || 'windows-unsigned' }}
+          path: bin
       - name: Zip
         shell: pwsh
         run: |
           $name = "Ruthos-$($env:GITHUB_REF_NAME.TrimStart('v'))-win64"
           New-Item -ItemType Directory -Force "dist/$name" | Out-Null
-          Copy-Item target/release/ruthos.exe, LICENSE, README.md "dist/$name"
+          Copy-Item bin/ruthos.exe, LICENSE, README.md "dist/$name"
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: windows
+          name: release-windows
           path: dist/*.zip
+          if-no-files-found: error
 
+  # ------------------------------------------------------------------ macOS
   macos:
-    name: macOS universal
+    name: macOS universal, signed and notarised
+    if: ${{ vars.MACOS_RELEASE == 'true' }}
     runs-on: macos-latest
-    env:
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    environment: release
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
-      - name: Developer ID certificate
-        if: ${{ env.APPLE_SIGNING_IDENTITY != '' }}
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
-          security create-keychain -p actions build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p actions build.keychain
-          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k actions build.keychain
       - run: cargo build --release -p ruthos --target aarch64-apple-darwin
       - run: cargo build --release -p ruthos --target x86_64-apple-darwin
       - name: Universal binary
@@ -88,21 +131,82 @@ jobs:
             target/aarch64-apple-darwin/release/ruthos target/x86_64-apple-darwin/release/ruthos
           lipo -info target/release/ruthos
       - run: cargo install cargo-packager --locked
-      - name: Ruthos.app and disk image (signed and notarised when the secrets are set)
-        run: cargo packager --release --formats app,dmg
-      - name: Zip the application
+      - name: Ruthos.app (unsigned; signed below)
+        run: cargo packager --release --formats app
+      - name: Temporary keychain with the Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          cd dist
-          ditto -c -k --keepParent Ruthos.app "Ruthos-${GITHUB_REF_NAME#v}-macos.zip"
+          KEYCHAIN="$RUNNER_TEMP/ruthos.keychain-db"
+          PASS="$(uuidgen)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASS" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$PASS" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')
+          test -n "$IDENTITY" || { echo "no Developer ID Application identity in the certificate"; exit 1; }
+          echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+      - name: App Store Connect API key
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          echo "$APPLE_API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+      - name: Sign the application (hardened runtime, secure timestamp)
+        run: |
+          codesign --force --options runtime --timestamp \
+            --entitlements packaging/macos/entitlements.plist \
+            --sign "$IDENTITY" --keychain "$KEYCHAIN" dist/Ruthos.app
+          codesign --verify --deep --strict --verbose=2 dist/Ruthos.app
+      - name: Notarise and staple the application
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          ditto -c -k --keepParent dist/Ruthos.app "$RUNNER_TEMP/notarise.zip"
+          scripts/notarise.sh "$RUNNER_TEMP/notarise.zip"
+          xcrun stapler staple dist/Ruthos.app
+      - name: Disk image, signed, notarised and stapled
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DMG="dist/Ruthos-$VERSION-macos.dmg"
+          hdiutil create -volname Ruthos -srcfolder dist/Ruthos.app -ov -format UDZO "$DMG"
+          codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN" "$DMG"
+          scripts/notarise.sh "$DMG"
+          xcrun stapler staple "$DMG"
+          ditto -c -k --keepParent dist/Ruthos.app "dist/Ruthos-$VERSION-macos.zip"
+      - name: Verify (a failure here stops the release)
+        run: |
+          spctl --assess --type execute -vv dist/Ruthos.app 2>&1 | tee "$RUNNER_TEMP/spctl.txt"
+          grep -q "source=Notarized Developer ID" "$RUNNER_TEMP/spctl.txt"
+          xcrun stapler validate dist/Ruthos.app
+          xcrun stapler validate dist/Ruthos-*-macos.dmg
+      - name: Delete the keychain and key
+        if: always()
+        run: |
+          [ -n "$KEYCHAIN" ] && security delete-keychain "$KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
+          name: release-macos
           path: |
             dist/*.dmg
-            dist/*.zip
+            dist/*-macos.zip
+          if-no-files-found: error
 
+  # ------------------------------------------------------------------ Linux
   linux:
-    name: Linux x86-64 AppImage
+    name: Linux AppImage
+    if: ${{ vars.LINUX_RELEASE == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -118,27 +222,45 @@ jobs:
       - run: cargo packager --release --formats appimage
       - uses: actions/upload-artifact@v4
         with:
-          name: linux
+          name: release-linux
           path: dist/*.AppImage
+          if-no-files-found: error
 
+  # ------------------------------------------------------------------ draft
   draft:
-    name: Draft pre-release
-    needs: [windows, macos, linux]
+    name: Checksums, provenance and draft pre-release
+    needs: [windows-package, macos, linux]
+    # Windows is always built; macOS and Linux count when they were asked for.
+    if: ${{ !cancelled() && needs.windows-package.result == 'success' && needs.macos.result != 'failure' && needs.linux.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
+          pattern: release-*
           path: artefacts
-      - uses: softprops/action-gh-release@v2
+          merge-multiple: true
+      - name: SHA256SUMS.txt
+        run: |
+          cd artefacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Build-provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artefacts/*.zip
+            artefacts/*.dmg
+            artefacts/*.AppImage
+      - name: Draft pre-release
+        uses: softprops/action-gh-release@v2
         with:
           draft: true
           prerelease: true
           name: Ruthos ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
-          files: |
-            artefacts/windows/*
-            artefacts/macos/*
-            artefacts/linux/*
+          files: artefacts/*

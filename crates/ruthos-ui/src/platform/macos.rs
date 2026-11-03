@@ -65,18 +65,19 @@ fn install_open_hook() {
     let imp: unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut NSArray<NSURL>) = open_urls;
     // Type encoding: void return, self, _cmd, two objects.
     let types: &CStr = c"v@:@@";
+    // objc2 0.6: class_addMethod(cls: *mut AnyClass, name: Sel, imp: Imp, types) -> Bool.
     let added = unsafe {
         objc2::ffi::class_addMethod(
-            class.as_ptr(),
-            sel!(application:openURLs:).as_ptr(),
-            Some(std::mem::transmute::<
+            class as *const objc2::runtime::AnyClass as *mut objc2::runtime::AnyClass,
+            sel!(application:openURLs:),
+            std::mem::transmute::<
                 unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut NSArray<NSURL>),
                 unsafe extern "C-unwind" fn(),
-            >(imp)),
+            >(imp),
             types.as_ptr(),
         )
     };
-    if added as u8 != 0 {
+    if added.as_bool() {
         tracing::info!("Finder open events forwarded to the import queue");
     } else {
         tracing::warn!("open hook not installed: the delegate already handles application:openURLs:");

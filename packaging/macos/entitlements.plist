@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for Ruthos.app: none. The codecs are
+  statically linked, nothing is compiled at run time and Metal needs no
+  entitlement. Keep this empty; an exception here weakens every release.
+  The application is not sandboxed (the listener, arbitrary import folders
+  and a Horos database in Documents are incompatible with the App Sandbox,
+  and Developer ID distribution does not require it).
+-->
+<plist version="1.0">
+<dict/>
+</plist>
