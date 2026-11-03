@@ -1,28 +1,30 @@
-# Ruthos 0.1.2-alpha
+# Ruthos 0.1.3-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
-## New in 0.1.2-alpha
+## New in 0.1.3-alpha
 
-- **PACS set-up without the jargon.** Preferences > PACS shows this computer's AE title, address and port, with a button that copies them as a message for your PACS administrator. Add a PACS from a preset (Orthanc, Horos or OsiriX, dcm4chee, Conquest), press Test, and Ruthos says what worked or what to change.
-- **Query/Retrieve.** One search box for patient name or ID or accession, date presets and modality. Each result shows whether the study is already in the database, with retrieval progress, Cancel, Retry with the reason, and Open once imported. Retrieval uses C-GET, or C-MOVE when the listener is on.
-- **Browse by series.** The arrow beside a study lists its series with modality, description and image count, each with its own Retrieve.
-- **Send to a PACS** from the database window, with progress and the reason for any image the PACS refused. Compressed images are converted when the PACS accepts only uncompressed ones.
-- **Automatic routing** (Preferences > Routing). Rules read as a sentence: when images arrive over the network (or from any import), of these modalities, send them to this PACS. A study is sent once it has been quiet for five seconds, failures are retried three times, and a study retrieved from a PACS is never sent back to it. Recent activity lists what happened.
-- **Fixed:** Anonymise for Teaching could sit at "verifying" for a very long time on a study of large echo loops, and Cancel did nothing. Verification now skips pixel data (24 loops, 860 MB, in under a second), shows progress image by image, and Cancel stops the copy and cleans up.
+This release completes Tier 1 of the roadmap, the complete 2D viewer.
 
-## Previously, in 0.1.1-alpha
+- **Import a Horos database.** File > Import Horos Database reads a Horos or OsiriX library (the Horos Data folder copied from the Mac) and brings its studies over with their albums, smart albums, comments, status, key images and the dates they were added. You can copy the images into Ruthos or use them where they are. Horos's files are never changed, and running the import again only adds what is new. Smart albums whose rule Ruthos cannot express yet are listed with the rule; Horos report files and Horos's own saved measurements are counted and left behind. The guide is `docs/moving-from-horos.md`.
+- **Export a movie.** The Movie button in the viewer saves the current loop, or the series, as an MP4 (H.264) at the cine speed with the current window and colour table, for PowerPoint, teaching and messages.
+- **More tools:** Cobb angle, the angle between two lines (Horos's dynamic angle), open polygon (a length along a curve), pencil (a freehand outline), brush (paint a region; Alt erases, [ and ] size it), text notes, and the repulsor for reshaping outlines.
+- **ROI Manager and ROI Info** (Measurements menu). The manager lists every measurement on the image to select or delete; ROI Info shows the selected one's name, value, pixel count, mean, SD, min and max, area, perimeter and scale.
+- **Histogram and plot.** The histogram of the values inside an area, the values along a line or open polygon, or the whole image's histogram, with the mean and SD marked; on CT the values are Hounsfield units. Copy values puts the numbers on the clipboard.
+- **Watch folders** (Preferences > Watch folders). New DICOM files that appear in folders you choose (a modality's export share, a CR reader's output folder) are imported automatically, once each, after they have finished copying. The files are never moved or deleted.
 
-- One caliper for distance, time and velocity in 2D, M-mode and spectral Doppler; the measurement name decides what is recorded.
-- LV dimensions in 2D as well as M-mode, several sets per image; measurement points that move freely; polygon areas; the Doppler set and calculations; Tools and Measurements menus side by side.
+## Previously, in 0.1.2-alpha
+
+- PACS set-up with presets and a connection test, Query/Retrieve by study and series, Send, and automatic routing.
+- Anonymise for Teaching no longer stalls verifying large echo loops, and Cancel works.
 
 ## What works
 
-- **Archive.** Import folders, files or drag-and-drop; a DICOM listener (C-STORE SCP, AE title RUTHOS, port 11112), off until you turn it on in Preferences, that files what modalities send; a Horos-style database window with albums, smart albums, the built-in Horos albums, search and filters, series thumbnails and a preview pane.
+- **Archive.** Import folders, files, drag-and-drop, watch folders or a whole Horos database; a DICOM listener (C-STORE SCP, AE title RUTHOS, port 11112), off until you turn it on in Preferences, that files what modalities send; a Horos-style database window with albums, smart albums, the built-in Horos albums, search and filters, series thumbnails and a preview pane.
 - **PACS.** Connection test, Query/Retrieve by study and series (C-FIND, C-GET, C-MOVE), Send (C-STORE) with conversion where needed, and automatic routing rules, all set up in Preferences with plain-language errors. The user guide is `docs/pacs.md`.
 - **Codecs.** Uncompressed, RLE, deflate, JPEG baseline and 12-bit, JPEG lossless, JPEG-LS and JPEG 2000. Files without a meta header are accepted.
-- **Viewer.** GPU window/level and the Horos colour lookup tables, zoom, pan, rotate, flip, cine at the file's frame rate, tiling of a series or of a study, per-cell lock, Horos corner annotations, key images, export to PNG and JPEG.
-- **Measurements.** Caliper (distance, time, velocity), LV dimensions in M-mode and 2D with fractional shortening, angle, rectangle, ellipse and polygon areas, arrow and point. Every value states its scale basis (ultrasound region, calibrated pixel spacing, patient plane, estimated magnification, detector plane, hand calibration or uncalibrated) and the report flags values that are not at the patient's scale. Handles on every measurement with keyboard nudging and undo, a GPU loupe while placing points, a Measurements menu, and a library of definitions, sets and calculations (Teichholz, LA/Ao, VHS and more) that is edited in Preferences and shared as JSON.
+- **Viewer.** GPU window/level and the Horos colour lookup tables, zoom, pan, rotate, flip, cine at the file's frame rate, tiling of a series or of a study, per-cell lock, Horos corner annotations, key images, export to PNG, JPEG and MP4.
+- **Measurements.** Caliper (distance, time, velocity), LV dimensions in M-mode and 2D with fractional shortening, angle, Cobb angle, angle between two lines, open polygon, rectangle, ellipse, polygon, pencil and brush areas, arrow, point and text, with ROI Manager, ROI Info, histograms and line plots. Every value states its scale basis (ultrasound region, calibrated pixel spacing, patient plane, estimated magnification, detector plane, hand calibration or uncalibrated) and the report flags values that are not at the patient's scale. Handles on every measurement with keyboard nudging and undo, a GPU loupe while placing points, a Measurements menu, and a library of definitions, sets and calculations (Teichholz, LA/Ao, VHS and more) that is edited in Preferences and shared as JSON.
 - **Reports.** A report per study with the named measurements, the LV M-mode block, calculations, findings and conclusion, exported to PDF with the key images.
 - **Anonymisation for teaching.** Teaching copies built by allowlist with derived UIDs, shifted dates, pixel masking of ultrasound regions or saved templates with review, a named teaching case register, a sidecar that carries measurements, and an independent verification pass before anything is written.
 - **Pictures.** Import JPEG or PNG photographs as DICOM with a patient form; grayscale radiograph exports become monochrome so they window.
@@ -31,7 +33,7 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 ## Not yet
 
 - Query by worklist (Modality Worklist) and storage commitment.
-- Importing an existing Horos database.
+- Reading Horos report files and Horos's saved measurements (ROIs).
 - Anything 3D.
 - A signed installer. This build is an unsigned zip: Windows SmartScreen will warn on first run, and a PC with Smart App Control in enforce mode will refuse it. Building from source avoids both.
 
@@ -50,7 +52,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.2-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.3-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed yet: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
