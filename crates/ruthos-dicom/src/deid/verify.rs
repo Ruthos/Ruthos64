@@ -6,7 +6,7 @@
 //! attribute, a sensitive token in any text at any depth, an original UID,
 //! or an original date.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use dicom_core::value::Value;
@@ -25,6 +25,12 @@ pub struct VerifyContext {
     pub original_uids: HashSet<String>,
     /// Every DA value of the source (`YYYYMMDD`).
     pub original_dates: HashSet<String>,
+    /// The original dates of each date attribute (DA, and the date part
+    /// of DT), so a correctly shifted value that happens to equal some
+    /// other original date is not mistaken for a leak.
+    pub dates_by_tag: HashMap<Tag, HashSet<String>>,
+    /// The shift the copy applies, when known.
+    pub date_shift: Option<super::DateShift>,
 }
 
 impl VerifyContext {
@@ -37,6 +43,22 @@ impl VerifyContext {
         }
         self.original_uids.extend(other.original_uids);
         self.original_dates.extend(other.original_dates);
+        for (tag, dates) in other.dates_by_tag {
+            self.dates_by_tag.entry(tag).or_default().extend(dates);
+        }
+        if self.date_shift.is_none() {
+            self.date_shift = other.date_shift;
+        }
+    }
+
+    /// Whether `digits` in attribute `tag` is exactly the shifted value of
+    /// one of that attribute's own original dates: the expected output,
+    /// even when it coincides with another original date of the study.
+    fn is_expected_shift(&self, tag: Tag, digits: &str) -> bool {
+        let Some(shift) = self.date_shift else { return false };
+        self.dates_by_tag
+            .get(&tag)
+            .is_some_and(|orig| orig.iter().any(|o| shift.shift(o).is_some_and(|d| d == digits)))
     }
 }
 
@@ -157,7 +179,16 @@ fn collect_uids_and_dates(obj: &InMemDicomObject, ctx: &mut VerifyContext) {
                     for d in e.value().to_multi_str().map(|v| v.to_vec()).unwrap_or_default() {
                         let digits: String = d.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
                         if digits.len() == 8 {
-                            ctx.original_dates.insert(digits);
+                            ctx.original_dates.insert(digits.clone());
+                            ctx.dates_by_tag.entry(tag).or_default().insert(digits);
+                        }
+                    }
+                }
+                VR::DT => {
+                    for d in e.value().to_multi_str().map(|v| v.to_vec()).unwrap_or_default() {
+                        let digits: String = d.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
+                        if digits.len() == 8 {
+                            ctx.dates_by_tag.entry(tag).or_default().insert(digits);
                         }
                     }
                 }
@@ -292,7 +323,7 @@ fn check_dataset(obj: &InMemDicomObject, prefix: &str, file: &str, ctx: &VerifyC
                 } else if vr == VR::DA {
                     for d in &values {
                         let digits: String = d.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
-                        if ctx.original_dates.contains(&digits) {
+                        if ctx.original_dates.contains(&digits) && !ctx.is_expected_shift(tag, &digits) {
                             out.push(Finding {
                                 file: file.into(),
                                 path: path.clone(),
@@ -305,7 +336,7 @@ fn check_dataset(obj: &InMemDicomObject, prefix: &str, file: &str, ctx: &VerifyC
                 } else if vr == VR::DT {
                     for d in &values {
                         let digits: String = d.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
-                        if ctx.original_dates.contains(&digits) {
+                        if ctx.original_dates.contains(&digits) && !ctx.is_expected_shift(tag, &digits) {
                             out.push(Finding {
                                 file: file.into(),
                                 path: path.clone(),
@@ -339,6 +370,38 @@ fn check_dataset(obj: &InMemDicomObject, prefix: &str, file: &str, ctx: &VerifyC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shifted study date that lands on the original birth date is the
+    /// expected output, not a leak; an unshifted original date still is.
+    #[test]
+    fn a_shift_landing_on_another_original_date_is_not_a_leak() {
+        use dicom_core::{DataElement, PrimitiveValue};
+        let el = |tag, v: &str| DataElement::new(tag, VR::DA, PrimitiveValue::from(v));
+        let mut src = InMemDicomObject::new_empty();
+        src.put(el(tags::SERIES_DATE, "20150401"));
+        src.put(el(tags::CONTENT_DATE, "20240607"));
+        let mut ctx = collect_context(&src);
+        // The offset that moves 2024-06-07 onto 2015-04-01.
+        let offset = (365..=3650)
+            .find(|d| super::super::DateShift::new(*d, false).shift("20240607").as_deref() == Some("20150401"))
+            .unwrap();
+        let shift = super::super::DateShift::new(offset, false);
+        ctx.date_shift = Some(shift);
+        let dates = |out: &[Finding]| out.iter().filter(|f| f.what == "original date").count();
+
+        let mut good = InMemDicomObject::new_empty();
+        good.put(el(tags::CONTENT_DATE, "20150401"));
+        good.put(el(tags::SERIES_DATE, &shift.shift("20150401").unwrap()));
+        let mut out = Vec::new();
+        check_dataset(&good, "", "f", &ctx, &mut out);
+        assert_eq!(dates(&out), 0, "the content date is correctly shifted: {out:?}");
+
+        let mut leak = InMemDicomObject::new_empty();
+        leak.put(el(tags::SERIES_DATE, "20150401"));
+        let mut out = Vec::new();
+        check_dataset(&leak, "", "f", &ctx, &mut out);
+        assert_eq!(dates(&out), 1, "an unshifted series date is still a leak");
+    }
 
     #[test]
     fn token_rules() {

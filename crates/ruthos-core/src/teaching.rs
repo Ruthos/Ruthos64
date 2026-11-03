@@ -750,7 +750,10 @@ pub fn prepare(
         return Err(e);
     }
 
-    // The independent pass over what is on disk.
+    // The independent pass over what is on disk. It knows the shift, so a
+    // correctly shifted date that coincides with another original date of
+    // the study is not taken for a leak.
+    ctx.date_shift = Some(dates);
     progress(total, total, "verifying");
     let mut findings = Vec::new();
     for f in &files {

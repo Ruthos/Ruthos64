@@ -12,6 +12,7 @@ The first public build of Ruthos, a Horos-inspired DICOM viewer and patient arch
 - **Tools and Measurements menus side by side:** Tools holds the mouse tools and one Measure row; Measurements picks what Measure draws.
 - **Doppler set and calculations:** MV E and A, deceleration time and slope, MV and AR pressure half-time, Ao, PA, MR, TR and AR Vmax, RR interval; E/A, heart rate, MVA by pressure half-time and peak gradients. Repeated measurements are averaged in the report.
 - The calibration basis panel names every unit and shows the Doppler baseline.
+- **Fixed:** the anonymiser occasionally refused a valid teaching copy when the random date shift moved one date exactly onto another original date of the study (a study date onto the birth date, say). A correctly shifted date is now recognised as such; an unshifted original date is still refused.
 
 ## What works
 
