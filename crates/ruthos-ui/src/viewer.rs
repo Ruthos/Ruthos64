@@ -253,6 +253,13 @@ pub struct ViewerState {
     drag_draft: Option<(Vec2, Vec2)>,
     angle_draft: Option<AngleDraft>,
     pub selected_roi: Option<usize>,
+    /// The handle the keyboard nudges, index into `Roi::handles`.
+    active_handle: usize,
+    handle_drag: Option<HandleDrag>,
+    move_drag: Option<MoveDrag>,
+    dev_selected: bool,
+    /// Previous geometry of edited measurements, newest last.
+    undo: Vec<UndoEntry>,
 
     pub playing: bool,
     pub fps: f32,
@@ -271,6 +278,32 @@ pub struct ViewerState {
     wl_drag_anchor: Option<(f32, f32)>,
     calibrate: Option<CalibrateDraft>,
     pending_clear_calibration: Option<i64>,
+}
+
+/// A handle being dragged.
+struct HandleDrag {
+    key: FrameKey,
+    index: usize,
+    handle: usize,
+    original: RoiKind,
+    /// Sub-pixel position carried while Shift scales the movement.
+    fine: Option<Vec2>,
+}
+
+/// A whole measurement being dragged by its outline.
+struct MoveDrag {
+    key: FrameKey,
+    index: usize,
+    original: RoiKind,
+    last: Vec2,
+}
+
+/// What Ctrl+Z puts back.
+struct UndoEntry {
+    key: FrameKey,
+    id: Option<i64>,
+    index: usize,
+    kind: RoiKind,
 }
 
 /// The popup that assigns a ROI to a named measurement.
@@ -341,6 +374,11 @@ impl ViewerState {
             drag_draft: None,
             angle_draft: None,
             selected_roi: None,
+            active_handle: 0,
+            handle_drag: None,
+            move_drag: None,
+            dev_selected: false,
+            undo: Vec::new(),
             playing: false,
             fps: 10.0,
             last_tick: None,
@@ -666,15 +704,175 @@ impl ViewerState {
     fn flush_rois(&mut self, shared: &Shared) {
         for key in std::mem::take(&mut self.dirty_rois) {
             let frame = self.frames.get(&key).cloned();
-            let records: Vec<ruthos_core::RoiRecord> = self
+            let mut records: Vec<ruthos_core::RoiRecord> = self
                 .rois
                 .get(&key)
                 .map(|list| list.iter().map(|r| r.to_record(key.image_id, key.frame, frame.as_deref())).collect())
                 .unwrap_or_default();
-            if let Err(e) = shared.db.replace_rois(key.image_id, key.frame as i64, &records) {
-                tracing::warn!("could not store ROIs: {e}");
+            match shared.db.sync_rois(key.image_id, key.frame as i64, &mut records) {
+                Ok(()) => {
+                    // New rows now have ids; keep them so edits update in place.
+                    if let Some(list) = self.rois.get_mut(&key) {
+                        for (roi, rec) in list.iter_mut().zip(records.iter()) {
+                            roi.id = Some(rec.id);
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("could not store ROIs: {e}"),
             }
         }
+    }
+
+    /// Record a measurement's geometry before an edit so Ctrl+Z can restore it.
+    fn push_undo(&mut self, key: FrameKey, index: usize, kind: RoiKind) {
+        let id = self.rois.get(&key).and_then(|l| l.get(index)).and_then(|r| r.id);
+        self.undo.push(UndoEntry { key, id, index, kind });
+        if self.undo.len() > 200 {
+            self.undo.remove(0);
+        }
+    }
+
+    /// Undo the last edit to any measurement in this viewer.
+    fn undo_edit(&mut self) {
+        let Some(entry) = self.undo.pop() else {
+            self.set_status("Nothing to undo");
+            return;
+        };
+        if let Some(list) = self.rois.get_mut(&entry.key) {
+            let idx = entry
+                .id
+                .and_then(|id| list.iter().position(|r| r.id == Some(id)))
+                .or(Some(entry.index).filter(|i| *i < list.len()));
+            if let Some(i) = idx {
+                list[i].kind = entry.kind;
+                self.dirty_rois.insert(entry.key);
+                self.set_status("Measurement edit undone");
+                return;
+            }
+        }
+        self.set_status("The edited measurement is no longer there");
+    }
+
+    /// Handle and whole-measurement drags on the selected measurement. They
+    /// take priority over every tool, so a crowded image does not steal the
+    /// drag. Returns true while such a drag is in progress.
+    fn edit_input(&mut self, ui: &Ui, response: &egui::Response, t: &ViewTransform, key: &FrameKey, settings: (bool, f32)) -> bool {
+        let (fine_enabled, magnification) = settings;
+        let pos = response.interact_pointer_pos();
+        if response.drag_started_by(PointerButton::Primary) {
+            if let Some(p) = pos {
+                // A handle of the selected measurement first.
+                if let Some(sel) = self.selected_roi {
+                    if let Some(roi) = self.rois.get(key).and_then(|l| l.get(sel)) {
+                        if let Some(h) = roi.handle_hit(t, p) {
+                            self.handle_drag = Some(HandleDrag { key: *key, index: sel, handle: h, original: roi.kind.clone(), fine: None });
+                            self.active_handle = h;
+                            return true;
+                        }
+                    }
+                }
+                // Then any measurement's outline, with a measuring tool: move it whole.
+                if self.tool.is_roi() {
+                    if let Some(list) = self.rois.get(key) {
+                        let hit = list
+                            .iter()
+                            .enumerate()
+                            .map(|(i, r)| (i, r.screen_distance(t, p)))
+                            .filter(|(_, d)| *d < 8.0)
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(i, _)| i);
+                        if let Some(i) = hit {
+                            self.selected_roi = Some(i);
+                            self.active_handle = 0;
+                            self.move_drag = Some(MoveDrag { key: *key, index: i, original: list[i].kind.clone(), last: t.screen_to_image(p) });
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        let escape = ui.input(|i| i.key_pressed(Key::Escape));
+        if let Some(drag) = &mut self.handle_drag {
+            if escape {
+                if let Some(roi) = self.rois.get_mut(&drag.key).and_then(|l| l.get_mut(drag.index)) {
+                    roi.kind = drag.original.clone();
+                }
+                self.handle_drag = None;
+                return true;
+            }
+            if response.dragged_by(PointerButton::Primary) {
+                if let Some(p) = pos {
+                    let shift = ui.input(|i| i.modifiers.shift);
+                    let target = if shift && fine_enabled {
+                        // Fine positioning: pointer movement scaled by 1/magnification.
+                        let delta = response.drag_delta() / magnification.max(1.0);
+                        let base = drag.fine.unwrap_or_else(|| {
+                            self.rois.get(&drag.key).and_then(|l| l.get(drag.index)).map(|r| r.handles()[drag.handle]).unwrap_or_else(|| t.screen_to_image(p))
+                        });
+                        let moved = base + delta / t.state.zoom.max(1e-6);
+                        drag.fine = Some(moved);
+                        moved
+                    } else {
+                        drag.fine = None;
+                        t.screen_to_image(p)
+                    };
+                    if let Some(roi) = self.rois.get_mut(&drag.key).and_then(|l| l.get_mut(drag.index)) {
+                        roi.set_handle(drag.handle, target);
+                    }
+                }
+            }
+            if response.drag_stopped_by(PointerButton::Primary) {
+                let d = self.handle_drag.take().unwrap();
+                self.push_undo(d.key, d.index, d.original);
+                self.dirty_rois.insert(d.key);
+            }
+            return true;
+        }
+        if let Some(drag) = &mut self.move_drag {
+            if escape {
+                if let Some(roi) = self.rois.get_mut(&drag.key).and_then(|l| l.get_mut(drag.index)) {
+                    roi.kind = drag.original.clone();
+                }
+                self.move_drag = None;
+                return true;
+            }
+            if response.dragged_by(PointerButton::Primary) {
+                if let Some(p) = pos {
+                    let now = t.screen_to_image(p);
+                    let delta = now - drag.last;
+                    drag.last = now;
+                    if let Some(roi) = self.rois.get_mut(&drag.key).and_then(|l| l.get_mut(drag.index)) {
+                        roi.translate(delta);
+                    }
+                }
+            }
+            if response.drag_stopped_by(PointerButton::Primary) {
+                let d = self.move_drag.take().unwrap();
+                self.push_undo(d.key, d.index, d.original);
+                self.dirty_rois.insert(d.key);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Nudge the active handle of the selected measurement by image pixels.
+    fn nudge_handle(&mut self, dx: f32, dy: f32) {
+        let Some(key) = self.current_key() else { return };
+        let Some(sel) = self.selected_roi else { return };
+        let Some(roi) = self.rois.get(&key).and_then(|l| l.get(sel)) else { return };
+        let handles = roi.handles();
+        if handles.is_empty() {
+            return;
+        }
+        let h = self.active_handle.min(handles.len() - 1);
+        let before = roi.kind.clone();
+        let target = handles[h] + Vec2::new(dx, dy);
+        if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(sel)) {
+            roi.set_handle(h, target);
+        }
+        self.push_undo(key, sel, before);
+        self.dirty_rois.insert(key);
     }
 
     /// The popup under a clicked measurement label.
@@ -839,6 +1037,10 @@ impl ViewerState {
 
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("viewer");
+        {
+            let st = shared.settings.lock();
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("ruthos-fine-move"), (st.loupe_fine_movement, st.loupe_magnification as f32)));
+        }
         ui.style_mut().visuals = theme::viewer_visuals();
         if ui.input(|i| i.viewport().close_requested()) {
             self.persist_series_display(shared);
@@ -1370,6 +1572,51 @@ impl ViewerState {
         if ui.ctx().memory(|m| m.focused().is_some()) {
             return;
         }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Z)) {
+            if !self.active_locked() {
+                self.undo_edit();
+            }
+            return;
+        }
+        // With a measurement selected, Tab and the arrows edit its points.
+        if self.selected_roi.is_some() && !self.active_locked() {
+            let (tab, left, right, up_k, down_k, shift) = ui.input(|i| {
+                (
+                    i.key_pressed(Key::Tab),
+                    i.key_pressed(Key::ArrowLeft),
+                    i.key_pressed(Key::ArrowRight),
+                    i.key_pressed(Key::ArrowUp),
+                    i.key_pressed(Key::ArrowDown),
+                    i.modifiers.shift,
+                )
+            });
+            let step = if shift { 0.1 } else { 1.0 };
+            if tab {
+                let n = self
+                    .current_key()
+                    .and_then(|k| self.rois.get(&k))
+                    .and_then(|l| self.selected_roi.and_then(|s| l.get(s)))
+                    .map(|r| r.handles().len())
+                    .unwrap_or(1)
+                    .max(1);
+                self.active_handle = (self.active_handle + 1) % n;
+            }
+            if left {
+                self.nudge_handle(-step, 0.0);
+            }
+            if right {
+                self.nudge_handle(step, 0.0);
+            }
+            if up_k {
+                self.nudge_handle(0.0, -step);
+            }
+            if down_k {
+                self.nudge_handle(0.0, step);
+            }
+            if tab || left || right || up_k || down_k {
+                return;
+            }
+        }
         if self.active_locked() {
             if esc {
                 self.drag_draft = None;
@@ -1666,12 +1913,26 @@ impl ViewerState {
         self.ensure_rois_loaded(shared, key);
         if active {
             self.label_hits.retain(|(k, _, _)| *k != key);
+            // Developer option: `RUTHOS_SELECT_ROI=<index>` selects a stored
+            // measurement on the first frame shown, for screenshots.
+            if self.selected_roi.is_none() && !self.dev_selected {
+                if let Some(i) = std::env::var("RUTHOS_SELECT_ROI").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+                    if self.rois.get(&key).is_some_and(|l| i < l.len()) {
+                        self.selected_roi = Some(i);
+                        self.active_handle = 0;
+                        self.dev_selected = true;
+                    }
+                }
+            }
         }
         let hidden = self.study.teaching_answer_key && !self.reveal_answers;
         if let Some(list) = self.rois.get(&key).filter(|_| !hidden) {
             for (i, roi) in list.iter().enumerate() {
                 let sel = active && self.selected_roi == Some(i);
                 let label = roi.draw(&painter, &transform, &frame, roi_color(sel), sel);
+                if sel {
+                    roi.draw_handles(&painter, &transform, Some(self.active_handle), roi_color(true));
+                }
                 if active {
                     if let Some(r) = label {
                         self.label_hits.push((key, i, r));
@@ -1802,6 +2063,15 @@ impl ViewerState {
                     return;
                 }
             }
+        }
+
+        // Editing a selected measurement comes before any tool.
+        let fine = {
+            let st = shared_settings_snapshot(ui);
+            (st.0, st.1)
+        };
+        if self.edit_input(ui, response, t, key, fine) {
+            return;
         }
 
         // Each mouse button drives the tool assigned to it (Tools menu).
@@ -2016,6 +2286,9 @@ impl ViewerState {
         }
         match best {
             Some((i, _)) => {
+                if self.selected_roi != Some(i) {
+                    self.active_handle = 0;
+                }
                 self.selected_roi = Some(i);
                 true
             }
@@ -2046,6 +2319,14 @@ fn parse_tiling(v: &str) -> Option<Tiling> {
     };
     let (r, c) = grid.split_once('x')?;
     Some(Tiling { mode, rows: r.parse().ok()?, cols: c.parse().ok()? })
+}
+
+/// Fine-movement settings the editing code needs, stored in the egui
+/// context by `show` so `handle_input` can read them without `Shared`.
+fn shared_settings_snapshot(ui: &Ui) -> (bool, f32) {
+    ui.ctx()
+        .data(|d| d.get_temp::<(bool, f32)>(egui::Id::unique("ruthos-fine-move")))
+        .unwrap_or((true, 4.0))
 }
 
 fn steps_nonzero(steps: f32) -> bool {

@@ -1416,6 +1416,50 @@ mod tests {
         assert!(db.rois(image_id, 0).unwrap().is_empty());
     }
 
+    /// Acceptance test 5 (storage half): editing a measurement's points keeps
+    /// its row id, name and creation time.
+    #[test]
+    fn edited_rois_keep_their_row() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let InsertOutcome::Inserted { image_id, .. } =
+            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        else {
+            panic!()
+        };
+        let mut recs = vec![RoiRecord {
+            id: 0,
+            image_id,
+            frame: 0,
+            kind: "rect".into(),
+            points: vec![[1.0, 2.0], [3.5, 4.0]],
+            name: Some("LA".into()),
+            value: Some(42.0),
+            unit: "mm2".into(),
+            basis: Some("ultrasound-region".into()),
+        }];
+        db.sync_rois(image_id, 0, &mut recs).unwrap();
+        let id = recs[0].id;
+        assert!(id > 0, "sync fills in the new row's id");
+        let created: i64 = db.conn.lock().query_row("SELECT date_created FROM roi WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+        // Move one corner: the row is updated in place.
+        recs[0].points = vec![[1.0, 2.0], [6.0, 4.0]];
+        recs[0].value = Some(50.0);
+        db.sync_rois(image_id, 0, &mut recs).unwrap();
+        let got = db.rois(image_id, 0).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, id);
+        assert_eq!(got[0].points, vec![[1.0, 2.0], [6.0, 4.0]]);
+        assert_eq!(got[0].name.as_deref(), Some("LA"));
+        let created_after: i64 = db.conn.lock().query_row("SELECT date_created FROM roi WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+        assert_eq!(created, created_after);
+        // A second measurement added later gets its own id; the first keeps its row.
+        recs.push(RoiRecord { id: 0, name: None, kind: "length".into(), points: vec![[0.0, 0.0], [1.0, 1.0]], ..recs[0].clone() });
+        db.sync_rois(image_id, 0, &mut recs).unwrap();
+        assert_eq!(recs[0].id, id);
+        assert!(recs[1].id > id);
+        assert_eq!(db.rois(image_id, 0).unwrap().len(), 2);
+    }
+
     #[test]
     fn calibration_round_trip() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();

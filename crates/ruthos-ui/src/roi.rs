@@ -159,6 +159,74 @@ impl Roi {
         }
     }
 
+    /// The draggable handles: the defining points, or the four corners of a
+    /// rectangle's or oval's bounding box.
+    pub fn handles(&self) -> Vec<Vec2> {
+        match &self.kind {
+            RoiKind::Rect { a, b } | RoiKind::Oval { a, b } => {
+                vec![Vec2::new(a.x, a.y), Vec2::new(b.x, a.y), Vec2::new(b.x, b.y), Vec2::new(a.x, b.y)]
+            }
+            _ => self.points(),
+        }
+    }
+
+    /// Move one handle. A corner of a rectangle or oval moves the two edges
+    /// that meet there while the opposite corner stays fixed.
+    pub fn set_handle(&mut self, i: usize, p: Vec2) {
+        match &mut self.kind {
+            RoiKind::Rect { a, b } | RoiKind::Oval { a, b } => match i {
+                0 => *a = p,
+                1 => {
+                    b.x = p.x;
+                    a.y = p.y;
+                }
+                2 => *b = p,
+                3 => {
+                    a.x = p.x;
+                    b.y = p.y;
+                }
+                _ => {}
+            },
+            RoiKind::Length { a, b } | RoiKind::Arrow { a, b } => match i {
+                0 => *a = p,
+                1 => *b = p,
+                _ => {}
+            },
+            RoiKind::Angle { a, b, c } => match i {
+                0 => *a = p,
+                1 => *b = p,
+                2 => *c = p,
+                _ => {}
+            },
+            RoiKind::Point { p: q } => *q = p,
+        }
+    }
+
+    /// The handle within 6 screen pixels of a point, nearest first.
+    pub fn handle_hit(&self, t: &ViewTransform, screen: Pos2) -> Option<usize> {
+        self.handles()
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (i, (t.image_to_screen(*h) - screen).length()))
+            .filter(|(_, d)| *d <= 6.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    }
+
+    /// Draw the handles of a selected measurement: 7 screen pixels, the
+    /// active one filled.
+    pub fn draw_handles(&self, painter: &Painter, t: &ViewTransform, active: Option<usize>, color: Color32) {
+        for (i, h) in self.handles().iter().enumerate() {
+            let r = Rect::from_center_size(t.image_to_screen(*h), Vec2::splat(7.0));
+            if active == Some(i) {
+                painter.rect_filled(r, 0.0, color);
+            } else {
+                painter.rect_filled(r, 0.0, Color32::from_black_alpha(120));
+                painter.rect_stroke(r, 0.0, Stroke::new(1.0, color), egui::StrokeKind::Middle);
+            }
+        }
+    }
+
     pub fn translate(&mut self, d: Vec2) {
         match &mut self.kind {
             RoiKind::Length { a, b } | RoiKind::Rect { a, b } | RoiKind::Oval { a, b } | RoiKind::Arrow { a, b } => {
@@ -348,11 +416,7 @@ impl Roi {
                 for p in &pts {
                     painter.line_segment([*p - n * 6.0, *p + n * 6.0], stroke);
                 }
-                if selected {
-                    for p in &pts {
-                        painter.rect_stroke(Rect::from_center_size(*p, Vec2::splat(7.0)), 0.0, Stroke::new(1.0, color), egui::StrokeKind::Middle);
-                    }
-                }
+                let _ = selected;
                 let mid = Pos2::new((pts[0].x + pts[1].x) / 2.0, (pts[0].y + pts[1].y) / 2.0);
                 let r = shadow_text(painter, mid + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, &self.label(frame), label_font, color);
                 return Some(r);
@@ -365,11 +429,6 @@ impl Roi {
                 painter.line_segment([pts[1], pts[2]], stroke);
                 for p in &pts {
                     painter.circle_filled(*p, 2.5, color);
-                }
-                if selected {
-                    for p in &pts {
-                        painter.rect_stroke(Rect::from_center_size(*p, Vec2::splat(7.0)), 0.0, Stroke::new(1.0, color), egui::StrokeKind::Middle);
-                    }
                 }
                 let r = shadow_text(painter, pts[1] + Vec2::new(10.0, 10.0), Align2::LEFT_TOP, &self.label(frame), label_font, color);
                 return Some(r);
@@ -522,12 +581,25 @@ mod tests {
     }
 
     #[test]
+    fn corner_handles_move_two_edges() {
+        let mut roi = Roi::new(RoiKind::Rect { a: Vec2::new(0.0, 0.0), b: Vec2::new(10.0, 10.0) });
+        assert_eq!(roi.handles().len(), 4);
+        roi.set_handle(1, Vec2::new(12.0, -2.0));
+        assert_eq!(roi.kind, RoiKind::Rect { a: Vec2::new(0.0, -2.0), b: Vec2::new(12.0, 10.0) });
+        roi.set_handle(3, Vec2::new(-1.0, 11.0));
+        assert_eq!(roi.kind, RoiKind::Rect { a: Vec2::new(-1.0, -2.0), b: Vec2::new(12.0, 11.0) });
+        let mut angle = Roi::new(RoiKind::Angle { a: Vec2::ZERO, b: Vec2::new(1.0, 0.0), c: Vec2::new(1.0, 1.0) });
+        angle.set_handle(1, Vec2::new(5.0, 5.0));
+        assert_eq!(angle.handles()[1], Vec2::new(5.0, 5.0));
+    }
+
+    #[test]
     fn length_label() {
         let f = frame();
         let mut roi = Roi::new(RoiKind::Length { a: Vec2::ZERO, b: Vec2::new(0.0, 4.0) });
-        assert_eq!(roi.label(&f), "2.00 mm");
+        assert_eq!(roi.label(&f), "2.00 mm ?");
         roi.name = Some("LVIDd".into());
-        assert_eq!(roi.label(&f), "LVIDd: 2.00 mm");
+        assert_eq!(roi.label(&f), "LVIDd: 2.00 mm ?");
         let rec = roi.to_record(7, 0, Some(&f));
         assert_eq!((rec.kind.as_str(), rec.unit.as_str()), ("length", "mm"));
         assert!((rec.value.unwrap() - 2.0).abs() < 1e-6);

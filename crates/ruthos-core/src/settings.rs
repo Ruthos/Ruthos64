@@ -29,6 +29,16 @@ pub struct Settings {
     pub measurement_sets: Vec<MeasurementSet>,
     /// Prefix of suggested teaching references, e.g. `EQ-CARD-2026`.
     pub teaching_reference_prefix: String,
+    /// Loupe while measuring.
+    pub loupe_enabled: bool,
+    /// 2, 3, 4, 6 or 8 times.
+    pub loupe_magnification: u32,
+    /// 120, 160 or 200 screen pixels.
+    pub loupe_size: u32,
+    /// Shift scales pointer movement by the reciprocal of the magnification.
+    pub loupe_fine_movement: bool,
+    /// Length unit for echocardiography values: "mm" or "cm".
+    pub echo_length_unit: String,
 }
 
 /// A named group of measurements, e.g. the M-mode left-ventricle set.
@@ -70,6 +80,11 @@ impl Default for Settings {
             browser_window_size: None,
             measurement_sets: default_measurement_sets(),
             teaching_reference_prefix: "RUTHOS-2026".to_string(),
+            loupe_enabled: true,
+            loupe_magnification: 4,
+            loupe_size: 160,
+            loupe_fine_movement: true,
+            echo_length_unit: "mm".to_string(),
         }
     }
 }
