@@ -30,7 +30,7 @@ Order of work:
 4. Publish v0.1.0-alpha unsigned from the release workflow, so the project is released in the form to be signed. Done: published 3 November 2026.
 5. Apply at <https://signpath.org/apply> with the answers in `docs/signpath-application.md`, naming the repository `Ruthos/Ruthos64`, the workflow `.github/workflows/release.yml` and Mark Bowen as the approver of signing requests.
 6. Once accepted: add the secret `SIGNPATH_API_TOKEN` to the `release` environment, and the repository variables `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG` and `SIGNPATH_SIGNING_POLICY_SLUG`. In SignPath, configure the artefact as a single PE file (`ruthos.exe`) and link the GitHub trusted build system.
-7. Tag the next alpha (v0.1.5-alpha or later). The workflow builds, uploads the unsigned executable, and the signing job waits for approval of the `release` environment; SignPath then waits for approval of the signing request. After both, the workflow checks that `Get-AuthenticodeSignature` reports `Valid`, that the signer is SignPath Foundation and that the signature is timestamped, and fails otherwise.
+7. Tag the next alpha (v0.1.6-alpha or later). The workflow builds, uploads the unsigned executable, and the signing job waits for approval of the `release` environment; SignPath then waits for approval of the signing request. After both, the workflow checks that `Get-AuthenticodeSignature` reports `Valid`, that the signer is SignPath Foundation and that the signature is timestamped, and fails otherwise.
 
 ## macOS: Developer ID and notarisation
 
@@ -93,7 +93,7 @@ secrets from fork workflows, and the environment accepts only `v*` tags.
 ## Cutting a release
 
 1. Update `RELEASE_NOTES.md` and the workspace version in `Cargo.toml` (and `Packager.toml`), so `ruthos.exe` reports the same version as the tag.
-2. Push the commit, wait for CI to pass, then `git tag v0.1.5-alpha && git push origin v0.1.5-alpha`, using the version just set.
+2. Push the commit, wait for CI to pass, then `git tag v0.1.6-alpha && git push origin v0.1.6-alpha`, using the version just set.
 3. Approve the `release` environment run in GitHub Actions, then the signing request in SignPath.
 4. Review the draft release: download each artefact on a clean machine, check `SHA256SUMS.txt` and `gh attestation verify`, then publish.
 

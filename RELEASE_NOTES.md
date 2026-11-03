@@ -1,15 +1,18 @@
-# Ruthos 0.1.4-alpha
+# Ruthos 0.1.5-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
-## New in 0.1.4-alpha
+## New in 0.1.5-alpha
 
-- **MPR: orthogonal and oblique.** The MPR button in the viewer opens a CT, MR or cone-beam series as three linked planes (axial, coronal and sagittal for an axial study) meeting at a crosshair. Drag a coloured line to move that plane, the crossing to move two, or a round handle to tilt the planes into oblique views; the wheel steps through a plane. Thick slabs up to 60 mm with MIP, MinIP or mean. Each pane names its plane, gives its position and labels its edges; the status line reads the value and patient position under the pointer. The guide is `docs/mpr.md`.
-- **The dial** (Windows). A Surface Dial, an ASUS Dial or a ProArt DialPad set to Microsoft Wheel Device steps frames and slices and fine-tunes window width and level, a measurement point and the loupe; a press changes the mode and the mode and value show on the image. Turn it on and choose its modes in Preferences > Viewer > Dial. Every action also has a keyboard shortcut (Ctrl+Shift with the arrows and page keys, Alt+Left/Right, Ctrl+Shift+M), and a DialPad that cannot act as a wheel device can be mapped to them in ProArt Creator Hub. The guide is `docs/dial.md`.
+- **Tools in MPR.** A tool bar as in the 2D viewer: Crosshair, WL/WW, Move and Zoom, and Caliper, Angle, Rectangle, Ellipse, Arrow, Point and Text, with the same letter shortcuts. Measurements are in millimetres and belong to the plane they were drawn on; select one to move its handles, Delete removes it.
+- **Lock planes**, so measuring cannot move or tilt them.
+- **Layouts:** 1×3, 2×2 (the fourth pane is the original slice through the crosshair) or a single pane.
+- **Save to study:** the plane, or a stack of planes across the volume, as a new series in the same study with its measurements; it opens, measures and reports like any other series. **Save image** writes a pane as a picture.
+- **The dial is reliable:** every turn and press reaches the viewer you last used, whatever Windows says has focus, and the dial's own menu shows the same mode as Ruthos.
 
-## Previously, in 0.1.3-alpha
+## Previously, in 0.1.4-alpha
 
-- Import of a whole Horos or OsiriX database, MP4 movies of loops, the remaining Horos 2D tools with ROI Manager and ROI Info, histograms and line plots, and watch folders.
+- Orthogonal and oblique MPR with thick slabs, and the dial control (Surface Dial, ASUS Dial and DialPad) with keyboard shortcuts.
 
 ## What works
 
@@ -17,7 +20,7 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - **PACS.** Connection test, Query/Retrieve by study and series (C-FIND, C-GET, C-MOVE), Send (C-STORE) with conversion where needed, and automatic routing rules, all set up in Preferences with plain-language errors. The user guide is `docs/pacs.md`.
 - **Codecs.** Uncompressed, RLE, deflate, JPEG baseline and 12-bit, JPEG lossless, JPEG-LS and JPEG 2000. Files without a meta header are accepted.
 - **Viewer.** GPU window/level and the Horos colour lookup tables, zoom, pan, rotate, flip, cine at the file's frame rate, tiling of a series or of a study, per-cell lock, Horos corner annotations, key images, export to PNG, JPEG and MP4.
-- **MPR.** Orthogonal and oblique planes through CT, MR and cone-beam series, with thick slab MIP, MinIP and mean.
+- **MPR.** Orthogonal and oblique planes through CT, MR and cone-beam series in 1×3, 2×2 or single layouts, with thick slab MIP, MinIP and mean, measuring and annotation tools, and saving planes or stacks to the study.
 - **Measurements.** Caliper (distance, time, velocity), LV dimensions in M-mode and 2D with fractional shortening, angle, Cobb angle, angle between two lines, open polygon, rectangle, ellipse, polygon, pencil and brush areas, arrow, point and text, with ROI Manager, ROI Info, histograms and line plots. Every value states its scale basis (ultrasound region, calibrated pixel spacing, patient plane, estimated magnification, detector plane, hand calibration or uncalibrated) and the report flags values that are not at the patient's scale. Handles on every measurement with keyboard nudging and undo, a GPU loupe while placing points, a Measurements menu, and a library of definitions, sets and calculations (Teichholz, LA/Ao, VHS and more) that is edited in Preferences and shared as JSON.
 - **Reports.** A report per study with the named measurements, the LV M-mode block, calculations, findings and conclusion, exported to PDF with the key images.
 - **Anonymisation for teaching.** Teaching copies built by allowlist with derived UIDs, shifted dates, pixel masking of ultrasound regions or saved templates with review, a named teaching case register, a sidecar that carries measurements, and an independent verification pass before anything is written.
@@ -46,7 +49,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.4-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.5-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed yet: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
