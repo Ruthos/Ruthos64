@@ -906,6 +906,27 @@ impl Database {
         Ok(out)
     }
 
+    /// The local study with this Study Instance UID, if it is in the archive.
+    pub fn study_id_for_uid(&self, study_uid: &str) -> Result<Option<i64>> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                "SELECT id FROM study WHERE study_instance_uid = ?1",
+                params![study_uid],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?)
+    }
+
+    /// Every image of a study, for sending it.
+    pub fn images_for_study(&self, study_id: i64) -> Result<Vec<ImageRow>> {
+        let mut out = Vec::new();
+        for series in self.series_for_study(study_id)? {
+            out.extend(self.images_for_series(series.id)?);
+        }
+        Ok(out)
+    }
+
     /// Key images of a study in series and instance order.
     pub fn key_images_for_study(&self, study_id: i64) -> Result<Vec<ImageRow>> {
         let conn = self.conn.lock();

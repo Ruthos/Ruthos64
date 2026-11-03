@@ -4710,6 +4710,7 @@ dependencies = [
  "dicom-dictionary-std",
  "dicom-encoding",
  "dicom-object",
+ "dicom-pixeldata",
  "dicom-transfer-syntax-registry",
  "dicom-ul",
  "thiserror 2.0.21",

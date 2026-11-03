@@ -115,6 +115,7 @@ pub struct BrowserState {
     /// Source studies (by UID) that have teaching cases; shown only here.
     teaching_sources: HashSet<String>,
     anonymize: Option<Box<AnonymizeState>>,
+    send: Option<SendDialog>,
     preview: Preview,
     modalities: Vec<String>,
     dirty: bool,
@@ -146,6 +147,7 @@ impl BrowserState {
             reports: HashSet::new(),
             teaching_sources: HashSet::new(),
             anonymize: None,
+            send: None,
             preview: Preview::default(),
             modalities: Vec::new(),
             dirty: true,
@@ -484,6 +486,7 @@ impl BrowserState {
             .show(ui, |ui| self.study_table(ui, shared));
 
         self.show_modal(&ctx, shared);
+        self.send_dialog(&ctx, shared);
         if let Some(mut a) = self.anonymize.take() {
             if a.show(&ctx, shared) {
                 self.dirty = true;
@@ -594,14 +597,28 @@ impl BrowserState {
             {
                 self.export_selected(shared);
             }
-            ToolbarButton::new(Bitmap::Query, "Query")
-                .enabled(false)
-                .tooltip("PACS query/retrieve is next on the Tier 1 list")
-                .show(ui);
-            ToolbarButton::new(Bitmap::Send, "Send")
-                .enabled(false)
-                .tooltip("Send to PACS is next on the Tier 1 list")
-                .show(ui);
+            if ToolbarButton::new(Bitmap::Query, "Query")
+                .tooltip("Search a PACS and retrieve studies from it")
+                .show(ui)
+                .clicked()
+            {
+                *shared.open_query.lock() = Some(None);
+            }
+            let has_pacs = !shared.settings.lock().pacs_nodes.is_empty();
+            if ToolbarButton::new(Bitmap::Send, "Send")
+                .enabled(has_sel)
+                .tooltip(if has_pacs {
+                    "Send the selected study to a PACS"
+                } else {
+                    "Send the selected study to a PACS (set one up in Preferences > PACS)"
+                })
+                .show(ui)
+                .clicked()
+            {
+                if let Some(id) = self.selected_study {
+                    self.open_send(shared, id);
+                }
+            }
             if ToolbarButton::new(Bitmap::Anonymize, "Anonymize")
                 .enabled(has_sel)
                 .tooltip("Make a de-identified teaching copy of the selected study")
@@ -857,6 +874,26 @@ impl BrowserState {
             tip.push_str(&format!("Last error: {e}"));
         }
         r.on_hover_text(tip);
+        let nodes = shared.settings.lock().pacs_nodes.clone();
+        for (i, n) in nodes.iter().enumerate() {
+            if source_row(ui, icons::QUERY, &n.name, None, false)
+                .on_hover_text(format!(
+                    "{}:{}, AE title {}\nClick to search it.",
+                    n.host, n.port, n.ae_title
+                ))
+                .clicked()
+            {
+                *shared.open_query.lock() = Some(Some(i));
+            }
+        }
+        if nodes.is_empty()
+            && source_row(ui, icons::PLUS, "Add a PACS\u{2026}", None, false)
+                .on_hover_text("Set up a PACS to search, retrieve from and send to")
+                .clicked()
+        {
+            *shared.prefs_section.lock() = Some("pacs");
+            shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
 
         ui.add_space(8.0);
         if source_row(ui, icons::SMART_ALBUM, "Preferences…", None, false)
@@ -1483,6 +1520,167 @@ impl BrowserState {
         self.set_status(format!("Exported {n} files to {}", dir.display()));
     }
 
+    /// Start the Send dialog for a study.
+    fn open_send(&mut self, shared: &Shared, study_id: i64) {
+        let Ok(Some(study)) = shared.db.study(study_id) else {
+            return;
+        };
+        let files: Vec<PathBuf> = shared
+            .db
+            .images_for_study(study_id)
+            .unwrap_or_default()
+            .iter()
+            .map(|i| shared.resolve(&i.path))
+            .collect();
+        self.send = Some(SendDialog {
+            label: format!(
+                "{}{}",
+                study.patient_name,
+                study.study_date.map(|d| format!(", {d}")).unwrap_or_default()
+            ),
+            files,
+            node: 0,
+            task: None,
+            progress: Arc::new(parking_lot::Mutex::new((0, 0))),
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            outcome: None,
+        });
+    }
+
+    fn send_dialog(&mut self, ctx: &Context, shared: &Shared) {
+        use crate::pacs::{me, node, problem, show_problem, Task};
+        let Some(d) = self.send.as_mut() else { return };
+        let settings = shared.settings.lock().clone();
+        let listener_on = shared.net_status.lock().running;
+        if let Some(t) = &d.task {
+            if let Some(r) = t.take() {
+                d.task = None;
+                d.outcome = Some(r);
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            }
+        }
+        let mut close = false;
+        egui::Modal::new(egui::Id::unique("send-modal")).show(ctx, |ui| {
+            ui.set_width(460.0);
+            ui.label(RichText::new("Send to a PACS").size(16.0).strong());
+            ui.add_space(4.0);
+            ui.label(format!(
+                "{}: {} image{}",
+                d.label,
+                d.files.len(),
+                if d.files.len() == 1 { "" } else { "s" }
+            ));
+            ui.add_space(8.0);
+            if settings.pacs_nodes.is_empty() {
+                ui.label("No PACS is set up yet.");
+                ui.horizontal(|ui| {
+                    if ui.button("Set up a PACS\u{2026}").clicked() {
+                        *shared.prefs_section.lock() = Some("pacs");
+                        shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
+                        close = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+                return;
+            }
+            if d.node >= settings.pacs_nodes.len() {
+                d.node = 0;
+            }
+            let busy = d.task.is_some();
+            ui.horizontal(|ui| {
+                ui.label("To");
+                ui.add_enabled_ui(!busy, |ui| {
+                    egui::ComboBox::from_id_salt("send-node")
+                        .selected_text(settings.pacs_nodes[d.node].name.clone())
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            for (i, n) in settings.pacs_nodes.iter().enumerate() {
+                                ui.selectable_value(&mut d.node, i, n.name.clone());
+                            }
+                        });
+                });
+            });
+            ui.add_space(8.0);
+            if busy {
+                let (done, total) = *d.progress.lock();
+                ui.add(
+                    egui::ProgressBar::new(if total == 0 { 0.0 } else { done as f32 / total as f32 })
+                        .text(format!("{done} of {total} sent")),
+                );
+            }
+            let n = settings.pacs_nodes[d.node].clone();
+            match &d.outcome {
+                Some(Ok(o)) if o.failed.is_empty() => {
+                    ui.label(
+                        RichText::new(format!("Sent all {} images to {}.", o.sent, n.name))
+                            .color(Color32::from_rgb(30, 120, 50)),
+                    );
+                }
+                Some(Ok(o)) => {
+                    ui.label(format!("Sent {} images; {} could not be sent:", o.sent, o.failed.len()));
+                    egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                        for (f, why) in o.failed.iter().take(50) {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{}: {why}",
+                                    f.file_name()
+                                        .map(|x| x.to_string_lossy().to_string())
+                                        .unwrap_or_default()
+                                ))
+                                .size(11.5),
+                            );
+                        }
+                    });
+                }
+                Some(Err(e)) => show_problem(ui, "send-problem", &problem(e, &n, &me(&settings, listener_on))),
+                None => {}
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if busy {
+                    if ui.button("Stop").clicked() {
+                        d.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                } else {
+                    let label = if d.outcome.is_some() { "Send again" } else { "Send" };
+                    if ui
+                        .add_enabled(!d.files.is_empty(), egui::Button::new(RichText::new(label).strong()))
+                        .clicked()
+                    {
+                        let target = node(&n);
+                        let ae = settings.listener_ae_title.clone();
+                        let files = d.files.clone();
+                        let (p2, c2, ctx2) = (d.progress.clone(), d.cancel.clone(), ctx.clone());
+                        c2.store(false, std::sync::atomic::Ordering::Relaxed);
+                        *p2.lock() = (0, files.len());
+                        d.outcome = None;
+                        d.task = Some(Task::spawn(ctx, "ruthos-send", move || {
+                            ruthos_net::send_files(
+                                &target,
+                                &ae,
+                                &files,
+                                &|done, total| {
+                                    *p2.lock() = (done, total);
+                                    ctx2.request_repaint();
+                                },
+                                &c2,
+                            )
+                        }));
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                }
+            });
+        });
+        if close {
+            self.send = None;
+        }
+    }
+
     fn show_modal(&mut self, ctx: &Context, shared: &Shared) {
         let Some(modal) = self.modal.clone() else { return };
         let mut close = false;
@@ -1719,4 +1917,15 @@ fn smart_album_name(f: &StudyFilter) -> String {
     } else {
         parts.join(" · ")
     }
+}
+
+/// Sending one study to a PACS.
+struct SendDialog {
+    label: String,
+    files: Vec<PathBuf>,
+    node: usize,
+    task: Option<crate::pacs::Task<Result<ruthos_net::SendOutcome, ruthos_net::NetError>>>,
+    progress: Arc<parking_lot::Mutex<(usize, usize)>>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    outcome: Option<Result<ruthos_net::SendOutcome, ruthos_net::NetError>>,
 }

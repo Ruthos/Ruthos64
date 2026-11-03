@@ -46,6 +46,35 @@ pub struct Settings {
     pub loupe_fine_movement: bool,
     /// Length unit for echocardiography values: "mm" or "cm".
     pub echo_length_unit: String,
+    /// PACS that Ruthos can search, retrieve from and send to.
+    pub pacs_nodes: Vec<PacsNode>,
+}
+
+/// A PACS (or another viewer's archive) as Ruthos knows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PacsNode {
+    /// Anything the user likes: "Clinic PACS".
+    pub name: String,
+    /// Computer name or IP address.
+    pub host: String,
+    pub port: u16,
+    /// The PACS's own AE title, matched exactly.
+    pub ae_title: String,
+    /// `auto` (C-GET, then C-MOVE), `get` or `move`.
+    pub retrieve: String,
+}
+
+impl Default for PacsNode {
+    fn default() -> Self {
+        Self {
+            name: "New PACS".into(),
+            host: String::new(),
+            port: 104,
+            ae_title: String::new(),
+            retrieve: "auto".into(),
+        }
+    }
 }
 
 /// A named group of measurements, e.g. the M-mode left-ventricle set.
@@ -110,6 +139,7 @@ impl Default for Settings {
             loupe_size: 160,
             loupe_fine_movement: true,
             echo_length_unit: "mm".to_string(),
+            pacs_nodes: Vec::new(),
         }
     }
 }
@@ -127,6 +157,11 @@ impl Settings {
     /// `%APPDATA%\Ruthos\settings.json` on Windows, `~/Library/Application
     /// Support/Ruthos/settings.json` on macOS, `~/.config/ruthos` on Linux.
     pub fn file_path() -> PathBuf {
+        // Developer option: `RUTHOS_SETTINGS=<file>` uses another settings
+        // file, so tests and screenshots never touch the real one.
+        if let Some(p) = std::env::var_os("RUTHOS_SETTINGS").filter(|v| !v.is_empty()) {
+            return PathBuf::from(p);
+        }
         crate::paths::config_dir().join("settings.json")
     }
 

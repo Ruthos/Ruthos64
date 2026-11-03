@@ -16,6 +16,7 @@ use ruthos_render::ImageRenderer;
 
 use crate::browser::BrowserState;
 use crate::prefs::PrefsState;
+use crate::query::QueryState;
 use crate::report::ReportState;
 use crate::shared::Shared;
 use crate::theme;
@@ -36,6 +37,7 @@ pub struct RuthosApp {
     /// Internal errors waiting to be acknowledged in a dialog.
     error_dialog: Vec<String>,
     prefs: Option<PrefsState>,
+    query: Option<QueryState>,
 }
 
 impl RuthosApp {
@@ -136,6 +138,14 @@ impl RuthosApp {
         }
 
         // Developer option: open Preferences at startup for screenshots.
+        // Developer option: `RUTHOS_OPEN_QUERY=<PACS index>` opens the
+        // Query/Retrieve window on that PACS and searches straight away.
+        if let Some(i) = std::env::var("RUTHOS_OPEN_QUERY")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+        {
+            *shared.open_query.lock() = Some(Some(i));
+        }
         if std::env::var_os("RUTHOS_OPEN_PREFS").is_some() {
             shared.open_prefs.store(true, Ordering::Relaxed);
         }
@@ -200,6 +210,7 @@ impl RuthosApp {
             startup_open,
             error_dialog: Vec::new(),
             prefs: None,
+            query: None,
         })
     }
 
@@ -258,6 +269,45 @@ impl RuthosApp {
                 }
             }
             None => tracing::warn!("unknown menu item {id}"),
+        }
+    }
+
+    /// The Query/Retrieve window, opened from the toolbar or a PACS in the
+    /// source list.
+    fn query_window(&mut self, ctx: &egui::Context) {
+        let id = ViewportId::from_hash_of("ruthos-query");
+        if let Some(node) = self.shared.open_query.lock().take() {
+            match self.query.as_mut() {
+                Some(q) => {
+                    if let Some(n) = node {
+                        q.select_node(n);
+                    }
+                }
+                None => self.query = Some(QueryState::new(node)),
+            }
+            ctx.send_viewport_cmd_to(id, ViewportCommand::Focus);
+        }
+        let Some(query) = self.query.as_mut() else { return };
+        let shared = self.shared.clone();
+        ctx.show_viewport_immediate(
+            id,
+            ViewportBuilder::default()
+                .with_title("Query/Retrieve \u{2014} Ruthos")
+                .with_inner_size([1040.0, 640.0])
+                .with_min_inner_size([720.0, 420.0]),
+            |ctx, _class| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+                    if let Err(msg) = crate::crash::guarded(|| query.show(ui, &shared)) {
+                        shared.errors.lock().push(format!(
+                            "The Query/Retrieve window was closed after an internal error: {msg}"
+                        ));
+                        query.close_requested = true;
+                    }
+                });
+            },
+        );
+        if query.close_requested {
+            self.query = None;
         }
     }
 
@@ -483,6 +533,7 @@ impl eframe::App for RuthosApp {
         }
 
         self.preferences(&ctx);
+        self.query_window(&ctx);
 
         let caught = std::mem::take(&mut *self.shared.errors.lock());
         for msg in caught {

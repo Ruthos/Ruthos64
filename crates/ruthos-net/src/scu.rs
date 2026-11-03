@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 
 use dicom_core::{dicom_value, DataElement, PrimitiveValue, Tag, VR};
 use dicom_dictionary_std::{tags, uids};
+use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, OpenFileOptions};
+use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 use dicom_ul::association::client::{ClientAssociation, ClientAssociationOptions};
 
 use crate::dimse::{
@@ -579,25 +581,21 @@ pub fn send_files(
     if items.is_empty() {
         return Ok(outcome);
     }
-    let mut classes: Vec<(String, Vec<String>)> = Vec::new();
+    // One proposal per image type and format as stored, so a PACS that
+    // takes the format gets the image unchanged, and one uncompressed
+    // proposal per image type as the fallback.
+    let mut contexts: Vec<(String, Vec<String>)> = Vec::new();
     for (_, sop, ts) in &items {
-        match classes.iter_mut().find(|(s, _)| s == sop) {
-            Some((_, list)) => {
-                if !list.contains(ts) {
-                    list.insert(0, ts.clone());
-                }
-            }
-            None => classes.push((
-                sop.clone(),
-                vec![ts.clone(), EXPLICIT_VR_LE.into(), IMPLICIT_VR_LE.into()],
-            )),
+        if !is_uncompressed(ts) && !contexts.iter().any(|(s, t)| s == sop && t.len() == 1 && t[0] == *ts) {
+            contexts.push((sop.clone(), vec![ts.clone()]));
+        }
+        if !contexts.iter().any(|(s, t)| s == sop && t.len() > 1) {
+            contexts.push((sop.clone(), vec![EXPLICIT_VR_LE.into(), IMPLICIT_VR_LE.into()]));
         }
     }
     let mut options = ClientAssociationOptions::new();
-    for (sop, ts) in classes.iter().take(127) {
-        let mut list = ts.clone();
-        list.dedup();
-        options = options.with_presentation_context(sop.clone(), list);
+    for (sop, ts) in contexts.iter().take(127) {
+        options = options.with_presentation_context(sop.clone(), ts.clone());
     }
     let mut assoc = connect(options, node, me_ae)?;
     let total = items.len();
@@ -606,29 +604,42 @@ pub fn send_files(
             release(assoc);
             return Err(NetError::Cancelled);
         }
-        let Some((pc, ts)) = context_for(&assoc, sop) else {
+        let accepted = assoc.contexts();
+        let exact = accepted.iter().find(|(_, a, t)| a == sop && t == file_ts);
+        let plain = accepted.iter().find(|(_, a, t)| a == sop && is_uncompressed(t));
+        let Some((pc, ts)) = exact.or(plain).map(|(id, _, t)| (*id, t.clone())) else {
             outcome
                 .failed
                 .push((path.clone(), "the PACS does not accept this kind of image".into()));
             continue;
         };
-        if ts != *file_ts && !(is_uncompressed(&ts) && is_uncompressed(file_ts)) {
-            outcome.failed.push((
-                path.clone(),
-                format!(
-                    "the PACS only accepts {} for this kind of image, and this one is compressed",
-                    ts_name(&ts)
-                ),
-            ));
-            continue;
-        }
-        let obj = match dicom_object::open_file(path) {
+        let mut obj = match dicom_object::open_file(path) {
             Ok(o) => o,
             Err(e) => {
                 outcome.failed.push((path.clone(), format!("cannot be read: {e}")));
                 continue;
             }
         };
+        if ts != *file_ts && !is_uncompressed(file_ts) {
+            // The PACS takes only uncompressed images of this type.
+            use dicom_pixeldata::Transcode as _;
+            let Some(target) = TransferSyntaxRegistry.get(&ts) else {
+                outcome
+                    .failed
+                    .push((path.clone(), format!("unknown transfer syntax {ts}")));
+                continue;
+            };
+            if let Err(e) = obj.transcode(target) {
+                outcome.failed.push((
+                    path.clone(),
+                    format!(
+                        "the PACS accepts only {} for this kind of image, and this compressed one could not be converted ({e})",
+                        ts_name(&ts)
+                    ),
+                ));
+                continue;
+            }
+        }
         let sop_instance = obj
             .meta()
             .media_storage_sop_instance_uid

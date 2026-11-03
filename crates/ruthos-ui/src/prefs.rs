@@ -21,6 +21,7 @@ use crate::widgets::{toolbar_separator, ToolbarButton};
 enum Section {
     General,
     Listener,
+    Pacs,
     Viewer,
     Measurements,
 }
@@ -29,6 +30,10 @@ pub struct PrefsState {
     section: Section,
     draft: Settings,
     library_editor: LibraryEditor,
+    /// The PACS being edited, by index.
+    pacs_edit: Option<usize>,
+    pacs_tests: std::collections::HashMap<usize, crate::pacs::Task<Result<std::time::Duration, ruthos_net::NetError>>>,
+    pacs_results: std::collections::HashMap<usize, Result<std::time::Duration, ruthos_net::NetError>>,
     pub close_requested: bool,
     /// The saved settings, handed to the app to apply.
     pub saved: Option<Settings>,
@@ -38,17 +43,23 @@ pub struct PrefsState {
 impl PrefsState {
     pub fn new(shared: &Shared) -> Self {
         let draft = shared.settings.lock().clone();
-        // Developer option: `RUTHOS_OPEN_PREFS=listener|viewer|measurements`.
-        let section = match std::env::var("RUTHOS_OPEN_PREFS").as_deref() {
-            Ok("listener") => Section::Listener,
-            Ok("viewer") => Section::Viewer,
-            Ok("measurements") => Section::Measurements,
+        // Developer option: `RUTHOS_OPEN_PREFS=listener|pacs|viewer|measurements`;
+        // other windows can ask for a section through `prefs_section`.
+        let asked = shared.prefs_section.lock().take().map(String::from);
+        let section = match asked.or_else(|| std::env::var("RUTHOS_OPEN_PREFS").ok()).as_deref() {
+            Some("listener") => Section::Listener,
+            Some("pacs") => Section::Pacs,
+            Some("viewer") => Section::Viewer,
+            Some("measurements") => Section::Measurements,
             _ => Section::General,
         };
         Self {
             section,
             draft,
             library_editor: LibraryEditor::default(),
+            pacs_edit: None,
+            pacs_tests: Default::default(),
+            pacs_results: Default::default(),
             close_requested: false,
             saved: None,
             note: None,
@@ -83,6 +94,7 @@ impl PrefsState {
                             crate::widgets::Icon::Bitmap(Bitmap::Network),
                             "Listener",
                         ),
+                        (Section::Pacs, crate::widgets::Icon::Bitmap(Bitmap::Query), "PACS"),
                         (Section::Viewer, crate::widgets::Icon::Bitmap(Bitmap::Viewer), "Viewer"),
                         (
                             Section::Measurements,
@@ -138,6 +150,7 @@ impl PrefsState {
                     .show(ui, |ui| match self.section {
                         Section::General => self.general(ui, shared),
                         Section::Listener => self.listener(ui),
+                        Section::Pacs => self.pacs(ui, shared),
                         Section::Viewer => self.viewer(ui, shared),
                         Section::Measurements => self.measurements(ui),
                     });
@@ -226,6 +239,233 @@ impl PrefsState {
             ui.add(egui::Slider::new(&mut self.draft.thumbnail_size, 64..=160).suffix(" px"));
         });
         Self::hint(ui, "Applies to thumbnails made after the next start.");
+    }
+
+    fn pacs(&mut self, ui: &mut Ui, shared: &Shared) {
+        use crate::pacs::{admin_text, clean_ae, me, node, show_problem, Task, PRESETS};
+        let listener_on = shared.net_status.lock().running;
+        let me = me(&self.draft, listener_on);
+
+        Self::heading(ui, "This computer");
+        egui::Grid::new("pacs-me")
+            .num_columns(2)
+            .spacing([12.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("AE title");
+                ui.label(RichText::new(&me.ae_title).monospace());
+                ui.end_row();
+                ui.label("Address");
+                ui.label(RichText::new(&me.address).monospace());
+                ui.end_row();
+                ui.label("Port");
+                ui.label(RichText::new(me.port.to_string()).monospace());
+                ui.end_row();
+                ui.label("Listener");
+                ui.label(if listener_on { "On" } else { "Off" });
+                ui.end_row();
+            });
+        ui.add_space(4.0);
+        if ui.button("Copy details for your PACS administrator").clicked() {
+            ui.ctx().copy_text(admin_text(&me));
+            self.note = Some("Copied. Paste it into an email to whoever runs the PACS.".into());
+        }
+        Self::hint(
+            ui,
+            "A PACS has to be told about Ruthos before it lets Ruthos search it. The AE title and port are set under Listener.",
+        );
+        ui.add_space(14.0);
+
+        Self::heading(ui, "PACS");
+        // Finished connection tests.
+        let done: Vec<usize> = self.pacs_tests.keys().copied().collect();
+        for i in done {
+            if let Some(r) = self.pacs_tests.get(&i).and_then(|t| t.take()) {
+                self.pacs_tests.remove(&i);
+                self.pacs_results.insert(i, r);
+            }
+        }
+        if self.draft.pacs_nodes.is_empty() {
+            Self::hint(
+                ui,
+                "None yet. Add one to search it, retrieve studies from it and send studies to it.",
+            );
+        }
+        let mut remove = None;
+        let mut test = None;
+        for i in 0..self.draft.pacs_nodes.len() {
+            let n = self.draft.pacs_nodes[i].clone();
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&n.name).strong());
+                        ui.label(
+                            RichText::new(format!("{}:{}  \u{b7}  AE title {}", n.host, n.port, n.ae_title))
+                                .size(12.0)
+                                .color(Color32::from_gray(110)),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Remove").clicked() {
+                            remove = Some(i);
+                        }
+                        if ui
+                            .button(if self.pacs_edit == Some(i) { "Close" } else { "Edit" })
+                            .clicked()
+                        {
+                            self.pacs_edit = if self.pacs_edit == Some(i) { None } else { Some(i) };
+                        }
+                        let testing = self.pacs_tests.contains_key(&i);
+                        if ui
+                            .add_enabled(
+                                !testing,
+                                egui::Button::new(if testing { "Testing\u{2026}" } else { "Test" }),
+                            )
+                            .clicked()
+                        {
+                            test = Some(i);
+                        }
+                    });
+                });
+                match self.pacs_results.get(&i) {
+                    Some(Ok(d)) => {
+                        ui.label(
+                            RichText::new(format!("Connected: the PACS answered in {} ms.", d.as_millis().max(1)))
+                                .color(Color32::from_rgb(30, 120, 50)),
+                        );
+                    }
+                    Some(Err(e)) => show_problem(ui, ("pacs-problem", i), &crate::pacs::problem(e, &n, &me)),
+                    None => {}
+                }
+            });
+            ui.add_space(4.0);
+        }
+        if let Some(i) = test {
+            let n = node(&self.draft.pacs_nodes[i]);
+            let ae = self.draft.listener_ae_title.clone();
+            self.pacs_results.remove(&i);
+            self.pacs_tests.insert(
+                i,
+                Task::spawn(ui.ctx(), "ruthos-echo", move || ruthos_net::echo(&n, &ae)),
+            );
+        }
+        if let Some(i) = remove {
+            self.draft.pacs_nodes.remove(i);
+            self.pacs_edit = None;
+            self.pacs_tests.clear();
+            self.pacs_results.clear();
+        }
+        if ui.button("Add a PACS").clicked() {
+            self.draft.pacs_nodes.push(ruthos_core::settings::PacsNode::default());
+            self.pacs_edit = Some(self.draft.pacs_nodes.len() - 1);
+        }
+
+        // The editor.
+        let Some(i) = self.pacs_edit.filter(|i| *i < self.draft.pacs_nodes.len()) else {
+            return;
+        };
+        ui.add_space(12.0);
+        let mut test_now = false;
+        let n = &mut self.draft.pacs_nodes[i];
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(format!("Edit {}", n.name)).size(14.0).strong());
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Start from");
+                egui::ComboBox::from_id_salt("pacs-preset")
+                    .selected_text("Choose a system\u{2026}")
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for (name, port, ae, note) in PRESETS {
+                            if ui.selectable_label(false, *name).on_hover_text(*note).clicked() {
+                                n.port = *port;
+                                if !ae.is_empty() {
+                                    n.ae_title = ae.to_string();
+                                }
+                                if n.name == "New PACS" {
+                                    n.name = name.to_string();
+                                }
+                            }
+                        }
+                    });
+            });
+            ui.add_space(4.0);
+            egui::Grid::new("pacs-edit").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                ui.label("Name");
+                ui.add(egui::TextEdit::singleline(&mut n.name).desired_width(240.0).hint_text("Anything you like"));
+                ui.end_row();
+                ui.label("Address");
+                ui.add(
+                    egui::TextEdit::singleline(&mut n.host)
+                        .desired_width(240.0)
+                        .hint_text("pacs.clinic.local or 192.168.1.20"),
+                );
+                ui.end_row();
+                ui.label("Port");
+                let mut port = n.port as u32;
+                ui.add(egui::DragValue::new(&mut port).range(1..=65535));
+                n.port = port as u16;
+                ui.end_row();
+                ui.label("AE title");
+                let mut ae = n.ae_title.clone();
+                if ui
+                    .add(egui::TextEdit::singleline(&mut ae).desired_width(160.0).hint_text("The PACS's DICOM name"))
+                    .changed()
+                {
+                    n.ae_title = clean_ae(&ae);
+                }
+                ui.end_row();
+            });
+            Self::hint(
+                ui,
+                "The address, port and AE title come from whoever runs the PACS. AE titles must match exactly, capitals included.",
+            );
+            ui.add_space(8.0);
+            ui.label("Retrieve with");
+            for (value, label, explain) in [
+                (
+                    "auto",
+                    "Automatic (recommended)",
+                    "Uses C-GET, which needs nothing more set up on the PACS, and C-MOVE when the PACS only offers that.",
+                ),
+                ("get", "C-GET", "The PACS sends the images back over the same connection."),
+                (
+                    "move",
+                    "C-MOVE",
+                    "The PACS connects back to Ruthos to send the images, so it must know Ruthos's address and port, and the listener must be on.",
+                ),
+            ] {
+                ui.radio_value(&mut n.retrieve, value.to_string(), label);
+                ui.label(RichText::new(format!("    {explain}")).size(11.5).color(Color32::from_gray(110)));
+            }
+            if n.retrieve == "move" && !self.draft.listener_enabled {
+                ui.label(
+                    RichText::new("The listener is off, so C-MOVE cannot work. Turn it on under Listener.")
+                        .color(Color32::from_rgb(190, 40, 30)),
+                );
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let ready = !n.host.trim().is_empty() && !n.ae_title.trim().is_empty();
+                if ui.add_enabled(ready, egui::Button::new("Test connection")).clicked() {
+                    test_now = true;
+                }
+                if !ready {
+                    ui.label(RichText::new("Fill in the address and AE title to test.").size(12.0).color(Color32::from_gray(110)));
+                }
+            });
+        });
+        if test_now {
+            let n = node(&self.draft.pacs_nodes[i]);
+            let ae = self.draft.listener_ae_title.clone();
+            self.pacs_results.remove(&i);
+            self.pacs_tests.insert(
+                i,
+                Task::spawn(ui.ctx(), "ruthos-echo", move || ruthos_net::echo(&n, &ae)),
+            );
+        }
+        Self::hint(ui, "Changes are kept when you press Save.");
     }
 
     fn listener(&mut self, ui: &mut Ui) {

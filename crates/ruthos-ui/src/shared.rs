@@ -57,6 +57,10 @@ pub struct Shared {
     pub renderer_note: Mutex<Option<String>>,
     /// Set by the Preferences button; the app opens the window.
     pub open_prefs: AtomicBool,
+    /// The Preferences section to open on, set with `open_prefs`.
+    pub prefs_section: Mutex<Option<&'static str>>,
+    /// Open the Query/Retrieve window, on a PACS by index.
+    pub open_query: Mutex<Option<Option<usize>>>,
     /// The viewer window that last had keyboard focus, for menu actions.
     pub focused_viewer: AtomicU64,
     /// Studies whose report window should open.
@@ -93,6 +97,8 @@ impl Shared {
             errors: Mutex::new(Vec::new()),
             renderer_note: Mutex::new(None),
             open_prefs: AtomicBool::new(false),
+            prefs_section: Mutex::new(None),
+            open_query: Mutex::new(None),
             focused_viewer: AtomicU64::new(0),
             open_reports: Mutex::new(Vec::new()),
         })
