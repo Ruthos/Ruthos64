@@ -4,8 +4,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::measure::{self, Library};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default = "Settings::file_defaults")]
 pub struct Settings {
     /// Root of the data folder. `None` means the platform default.
     pub data_root: Option<PathBuf>,
@@ -24,9 +26,14 @@ pub struct Settings {
     pub thumbnail_size: u32,
     /// Window geometry remembered between runs.
     pub browser_window_size: Option<[f32; 2]>,
-    /// Named measurements a ROI can be assigned to, grouped by study type.
-    /// They are what later goes into a report.
+    /// Legacy (before the measurement library): named measurements grouped
+    /// by study type. Migrated into `measurements` on load and then empty.
     pub measurement_sets: Vec<MeasurementSet>,
+    /// The user's measurement definitions, sets and calculations, laid over
+    /// the built-in library (`Settings::library`).
+    pub measurements: Library,
+    /// Set once the legacy sets have been migrated.
+    pub measurements_migrated: bool,
     /// Prefix of suggested teaching references, e.g. `EQ-CARD-2026`.
     pub teaching_reference_prefix: String,
     /// Loupe while measuring.
@@ -78,7 +85,9 @@ impl Default for Settings {
             default_clut: "No CLUT".to_string(),
             thumbnail_size: 100,
             browser_window_size: None,
-            measurement_sets: default_measurement_sets(),
+            measurement_sets: Vec::new(),
+            measurements: Library::default(),
+            measurements_migrated: true,
             teaching_reference_prefix: "RUTHOS-2026".to_string(),
             loupe_enabled: true,
             loupe_magnification: 4,
@@ -90,6 +99,12 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Defaults for fields missing from a settings file: as `Default`, but
+    /// a file without the migration flag is an old file that needs it.
+    fn file_defaults() -> Self {
+        Self { measurements_migrated: false, ..Self::default() }
+    }
+
     /// `%APPDATA%\Ruthos\settings.json` on Windows.
     pub fn file_path() -> PathBuf {
         if let Some(roaming) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
@@ -104,12 +119,24 @@ impl Settings {
     pub fn load() -> Self {
         let path = Self::file_path();
         let mut settings: Self = match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
+            Ok(text) => serde_json::from_str::<Self>(&text).unwrap_or_else(|e| {
                 tracing::warn!("settings at {} unreadable ({e}), using defaults", path.display());
                 Self::default()
             }),
             Err(_) => Self::default(),
         };
+        if settings.migrate_measurement_sets() {
+            // Keep the file as it was before the library existed.
+            let backup = path.with_extension("json.bak");
+            if path.exists() && !backup.exists() {
+                if let Err(e) = std::fs::copy(&path, &backup) {
+                    tracing::warn!("could not back up settings before migration: {e}");
+                }
+            }
+            if let Err(e) = settings.save() {
+                tracing::warn!("could not save migrated settings: {e}");
+            }
+        }
         // The posterior wall is the free wall in veterinary echo; older
         // settings carry the human names.
         for set in &mut settings.measurement_sets {
@@ -122,6 +149,31 @@ impl Settings {
             }
         }
         settings
+    }
+
+    /// The effective measurement library: built-in entries with the user's
+    /// laid over them.
+    pub fn library(&self) -> Library {
+        measure::effective(&self.measurements)
+    }
+
+    /// Turn legacy label sets into library entries. Returns true when
+    /// something was migrated and the file should be rewritten. A file
+    /// from before the flag existed carries `measurements_migrated: false`
+    /// only through serde's default, so the flag is set explicitly here.
+    fn migrate_measurement_sets(&mut self) -> bool {
+        if self.measurements_migrated {
+            return false;
+        }
+        self.measurements_migrated = true;
+        if self.measurement_sets.is_empty() {
+            return true;
+        }
+        let old: Vec<(String, Vec<String>)> = self.measurement_sets.iter().map(|s| (s.name.clone(), s.items.clone())).collect();
+        let migrated = measure::migrate_label_sets(&old);
+        self.measurements.merge(migrated);
+        self.measurement_sets.clear();
+        true
     }
 
     pub fn save(&self) -> std::io::Result<()> {
@@ -142,5 +194,26 @@ impl Settings {
         self.data_root
             .clone()
             .unwrap_or_else(crate::paths::DataPaths::default_root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_files_migrate_their_label_sets() {
+        let old = r#"{"listener_port": 4242, "measurement_sets": [{"name": "Mine", "items": ["LVIDd", "Spleen thickness"]}]}"#;
+        let mut s: Settings = serde_json::from_str(old).unwrap();
+        assert!(!s.measurements_migrated, "a file without the flag is pre-library");
+        assert!(s.migrate_measurement_sets());
+        assert!(s.measurement_sets.is_empty());
+        let lib = s.library();
+        assert_eq!(lib.set("Mine").unwrap().keys, vec!["lv.lvidd", "custom.spleen_thickness"]);
+        assert_eq!(s.listener_port, 4242);
+        assert!(!s.migrate_measurement_sets(), "only once");
+        // A fresh file carries the flag and nothing to migrate.
+        let fresh: Settings = serde_json::from_str(&serde_json::to_string(&Settings::default()).unwrap()).unwrap();
+        assert!(fresh.measurements_migrated);
     }
 }

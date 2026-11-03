@@ -8,7 +8,9 @@
 
 use egui::{Color32, RichText, Ui};
 
-use ruthos_core::{settings::default_measurement_sets, MeasurementSet, Settings};
+use ruthos_core::Settings;
+
+use crate::measure_prefs::LibraryEditor;
 
 use crate::icons::{self, Bitmap};
 use crate::shared::Shared;
@@ -26,8 +28,7 @@ enum Section {
 pub struct PrefsState {
     section: Section,
     draft: Settings,
-    /// Measurement sets are edited as text, one item per line.
-    set_text: Vec<String>,
+    library_editor: LibraryEditor,
     pub close_requested: bool,
     /// The saved settings, handed to the app to apply.
     pub saved: Option<Settings>,
@@ -37,7 +38,6 @@ pub struct PrefsState {
 impl PrefsState {
     pub fn new(shared: &Shared) -> Self {
         let draft = shared.settings.lock().clone();
-        let set_text = draft.measurement_sets.iter().map(|s| s.items.join("\n")).collect();
         // Developer option: `RUTHOS_OPEN_PREFS=listener|viewer|measurements`.
         let section = match std::env::var("RUTHOS_OPEN_PREFS").as_deref() {
             Ok("listener") => Section::Listener,
@@ -48,7 +48,7 @@ impl PrefsState {
         Self {
             section,
             draft,
-            set_text,
+            library_editor: LibraryEditor::default(),
             close_requested: false,
             saved: None,
             note: None,
@@ -254,42 +254,23 @@ impl PrefsState {
         Self::hint(ui, "The unit of LV M-mode values on the image and in reports. Calculations work in centimetres regardless.");
         ui.add_space(16.0);
 
-        Self::heading(ui, "Measurement sets");
-        Self::hint(ui, "Clicking a measurement's number in the viewer offers these names. One name per line.");
-        ui.add_space(8.0);
-        let mut remove: Option<usize> = None;
-        let n = self.draft.measurement_sets.len();
-        for i in 0..n {
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.draft.measurement_sets[i].name).desired_width(220.0).hint_text("Set name"));
-                if ui.small_button("Remove set").clicked() {
-                    remove = Some(i);
-                }
-            });
-            ui.add(egui::TextEdit::multiline(&mut self.set_text[i]).desired_width(360.0).desired_rows(4).hint_text("One measurement per line"));
-            ui.add_space(10.0);
+        Self::heading(ui, "Definitions, sets and calculations");
+        Self::hint(ui, "What can be measured, how measurements are grouped when naming one, and the numbers calculated from them. Changes apply when saved.");
+        ui.add_space(6.0);
+        self.library_editor.show(ui, &mut self.draft.measurements);
+        if let Some(note) = self.library_editor.note.take() {
+            self.note = Some(note);
         }
-        if let Some(i) = remove {
-            self.draft.measurement_sets.remove(i);
-            self.set_text.remove(i);
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Add set").clicked() {
-                self.draft.measurement_sets.push(MeasurementSet { name: "New set".into(), items: Vec::new() });
-                self.set_text.push(String::new());
-            }
-            if ui.button("Restore defaults").clicked() {
-                self.draft.measurement_sets = default_measurement_sets();
-                self.set_text = self.draft.measurement_sets.iter().map(|s| s.items.join("\n")).collect();
-            }
-        });
     }
 
     fn save(&mut self, shared: &Shared) {
-        for (set, text) in self.draft.measurement_sets.iter_mut().zip(&self.set_text) {
-            set.items = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
+        self.library_editor.flush(&mut self.draft.measurements);
+        let problems = ruthos_core::measure::validate(&self.draft.library());
+        if let Some(p) = problems.first() {
+            self.section = Section::Measurements;
+            self.note = Some(format!("Not saved: {p}"));
+            return;
         }
-        self.draft.measurement_sets.retain(|s| !s.name.trim().is_empty());
         if self.draft.listener_ae_title.trim().is_empty() {
             self.draft.listener_ae_title = "RUTHOS".into();
         }
@@ -297,6 +278,7 @@ impl PrefsState {
             Ok(()) => {
                 let previous = shared.settings.lock().clone();
                 *shared.settings.lock() = self.draft.clone();
+                *shared.library.lock() = std::sync::Arc::new(self.draft.library());
                 let mut notes = Vec::new();
                 if previous.data_root != self.draft.data_root {
                     notes.push("the database folder");

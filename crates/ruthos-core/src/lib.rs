@@ -6,6 +6,7 @@
 
 pub mod db;
 pub mod import;
+pub mod measure;
 pub mod mmode;
 pub mod incoming;
 pub mod model;
@@ -17,7 +18,7 @@ pub mod thumbs;
 
 pub use db::{Database, StudyFilter};
 pub use import::{ImportEvent, ImportMode, Importer};
-pub use model::{AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, RoiValue, SeriesRow, StudyRow};
+pub use model::{AlbumRow, DateFilter, ImageRow, MeasurementInput, MeasurementRow, ReportRow, RoiRecord, RoiValue, SeriesRow, StudyRow};
 pub use paths::DataPaths;
 pub use settings::{MeasurementSet, Settings};
 pub use teaching::TeachingCase;

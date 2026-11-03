@@ -43,6 +43,8 @@ pub struct ReportDocument {
     pub measurements: Vec<ReportMeasurement>,
     /// The LV M-mode block: paired diastolic and systolic values and FS.
     pub mmode: Vec<ReportMeasurement>,
+    /// Calculations from the measurement library whose inputs were present.
+    pub calculations: Vec<ReportMeasurement>,
     pub findings: String,
     pub conclusion: String,
     pub images: Vec<ReportImage>,
@@ -281,6 +283,22 @@ pub fn write_pdf(report: &ReportDocument, path: &Path) -> std::io::Result<()> {
         }
     }
 
+    if !report.calculations.is_empty() {
+        w.heading("Calculations");
+        w.columns(&[("Calculation", 56.0), ("Value", 36.0), ("From", TEXT_W - 92.0)], 9.5, true);
+        w.gap(0.5);
+        let mut flagged = false;
+        for m in &report.calculations {
+            let value = if m.patient_scale { m.value.clone() } else { format!("{} *", m.value) };
+            flagged |= !m.patient_scale;
+            w.columns(&[(m.name.as_str(), 56.0), (value.as_str(), 36.0), (m.location.as_str(), TEXT_W - 92.0)], 10.0, false);
+        }
+        if flagged {
+            w.gap(1.0);
+            w.text("* Depends on the scale of an input that was not measured at the patient's scale.", 8.5, false);
+        }
+    }
+
     if !report.findings.trim().is_empty() {
         w.heading("Findings");
         w.text(report.findings.trim(), 10.5, false);
@@ -357,6 +375,13 @@ mod tests {
                 name: "FS".into(),
                 value: "38.0 %".into(),
                 location: "US 1".into(),
+                basis: String::new(),
+                patient_scale: true,
+            }],
+            calculations: vec![ReportMeasurement {
+                name: "Vertebral heart score".into(),
+                value: "10.2 v".into(),
+                location: "VHS long axis, VHS short axis, T4 vertebral length".into(),
                 basis: String::new(),
                 patient_scale: true,
             }],

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use ruthos_dicom::meta::{dicom_date_to_iso, dicom_time_to_hms, InstanceMeta};
 
 use crate::mmode::MmodeRow;
-use crate::model::{RoiValue, AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, SeriesRow, StudyRow};
+use crate::model::{MeasurementInput, RoiValue, AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, SeriesRow, StudyRow};
 use crate::teaching::TeachingCase;
 use crate::paths::DataPaths;
 use crate::Result;
@@ -637,7 +637,7 @@ impl Database {
     pub fn rois(&self, image_id: i64, frame: i64) -> Result<Vec<RoiRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, image_id, frame, kind, points, name, value, unit, basis FROM roi
+            "SELECT id, image_id, frame, kind, points, name, value, unit, basis, def_key FROM roi
              WHERE image_id = ?1 AND frame = ?2 ORDER BY id",
         )?;
         let rows = stmt.query_map(params![image_id, frame], roi_from_row)?;
@@ -669,14 +669,14 @@ impl Database {
             let points = serde_json::to_string(&r.points).unwrap_or_else(|_| "[]".into());
             if r.id > 0 && existing.contains(&r.id) {
                 tx.execute(
-                    "UPDATE roi SET kind = ?1, points = ?2, name = ?3, value = ?4, unit = ?5, basis = ?6, date_modified = ?7 WHERE id = ?8",
-                    params![r.kind, points, r.name, r.value, r.unit, r.basis, now_unix(), r.id],
+                    "UPDATE roi SET kind = ?1, points = ?2, name = ?3, value = ?4, unit = ?5, basis = ?6, date_modified = ?7, def_key = ?9 WHERE id = ?8",
+                    params![r.kind, points, r.name, r.value, r.unit, r.basis, now_unix(), r.id, r.def_key],
                 )?;
             } else {
                 tx.execute(
-                    "INSERT INTO roi (image_id, frame, kind, points, name, value, unit, basis, date_created, date_modified)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
-                    params![image_id, frame, r.kind, points, r.name, r.value, r.unit, r.basis, now_unix()],
+                    "INSERT INTO roi (image_id, frame, kind, points, name, value, unit, basis, date_created, date_modified, def_key)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)",
+                    params![image_id, frame, r.kind, points, r.name, r.value, r.unit, r.basis, now_unix(), r.def_key],
                 )?;
                 r.id = tx.last_insert_rowid();
             }
@@ -690,7 +690,7 @@ impl Database {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT r.id, r.image_id, r.frame, r.kind, r.points, r.name, r.value, r.unit, r.basis,
-                    i.series_id, s.modality, s.series_number, s.series_description, i.instance_number
+                    i.series_id, s.modality, s.series_number, s.series_description, i.instance_number, r.def_key
              FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
              WHERE s.study_id = ?1 AND r.name IS NOT NULL ORDER BY s.series_number, i.instance_number, r.id",
         )?;
@@ -713,6 +713,53 @@ impl Database {
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Give stored measurements their definition key from their name:
+    /// a row named "LVIDd" without a key gets `lv.lvidd`. Returns how many
+    /// rows changed.
+    pub fn assign_def_keys_by_label(&self, label_keys: &[(String, String)]) -> Result<usize> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        let mut n = 0;
+        for (label, key) in label_keys {
+            n += tx.execute(
+                "UPDATE roi SET def_key = ?1 WHERE def_key IS NULL AND name = ?2 COLLATE NOCASE",
+                params![key, label],
+            )?;
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Every valued measurement of a study keyed by definition: rows with
+    /// a definition key, plus derived values (`roi_value`). Oldest edit
+    /// first, so the last of a key is the latest.
+    pub fn measurement_inputs_for_study(&self, study_id: i64) -> Result<Vec<MeasurementInput>> {
+        let conn = self.conn.lock();
+        let mut out = Vec::new();
+        let mut stmt = conn.prepare(
+            "SELECT r.def_key, r.value, r.unit, r.basis, COALESCE(r.date_modified, 0)
+             FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
+             WHERE s.study_id = ?1 AND r.def_key IS NOT NULL AND r.value IS NOT NULL
+             ORDER BY COALESCE(r.date_modified, 0), r.id",
+        )?;
+        let rows = stmt.query_map(params![study_id], |row| {
+            Ok(MeasurementInput { def_key: row.get(0)?, value: row.get(1)?, unit: row.get(2)?, basis: row.get(3)?, date_modified: row.get(4)? })
+        })?;
+        out.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
+        let mut stmt = conn.prepare(
+            "SELECT v.def_key, v.value, v.unit, v.basis, COALESCE(r.date_modified, 0)
+             FROM roi_value v JOIN roi r ON r.id = v.roi_id JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
+             WHERE s.study_id = ?1 AND v.value IS NOT NULL
+             ORDER BY COALESCE(r.date_modified, 0), r.id, v.def_key",
+        )?;
+        let rows = stmt.query_map(params![study_id], |row| {
+            Ok(MeasurementInput { def_key: row.get(0)?, value: row.get(1)?, unit: row.get(2)?, basis: row.get(3)?, date_modified: row.get(4)? })
+        })?;
+        out.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
+        out.sort_by_key(|m| m.date_modified);
+        Ok(out)
     }
 
     /// Replace the derived values of a measurement.
@@ -1169,6 +1216,7 @@ fn roi_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoiRecord> {
         value: row.get(6)?,
         unit: row.get(7)?,
         basis: row.get::<_, Option<String>>(8)?,
+        def_key: row.get::<_, Option<String>>("def_key")?,
     })
 }
 
@@ -1456,6 +1504,7 @@ mod tests {
             value: Some(50.0),
             unit: "mm".into(),
             basis: None,
+            def_key: None,
         };
         db.replace_rois(image_id, 0, &[rec]).unwrap();
         let named = db.named_measurements_for_study(study_id).unwrap();
@@ -1485,6 +1534,7 @@ mod tests {
             value: Some(42.0),
             unit: "mm".into(),
             basis: None,
+            def_key: None,
         };
         db.replace_rois(image_id, 0, &[rec.clone()]).unwrap();
         let got = db.rois(image_id, 0).unwrap();
@@ -1515,6 +1565,7 @@ mod tests {
             value: Some(42.0),
             unit: "mm2".into(),
             basis: Some("ultrasound-region".into()),
+            def_key: None,
         }];
         db.sync_rois(image_id, 0, &mut recs).unwrap();
         let id = recs[0].id;
@@ -1529,6 +1580,10 @@ mod tests {
         assert_eq!(got[0].id, id);
         assert_eq!(got[0].points, vec![[1.0, 2.0], [6.0, 4.0]]);
         assert_eq!(got[0].name.as_deref(), Some("LA"));
+        // A definition key assigned from the label survives round trips.
+        assert_eq!(db.assign_def_keys_by_label(&[("la".into(), "echo.la".into())]).unwrap(), 1);
+        assert_eq!(db.rois(image_id, 0).unwrap()[0].def_key.as_deref(), Some("echo.la"));
+        recs[0].def_key = Some("echo.la".into());
         let created_after: i64 = db.conn.lock().query_row("SELECT date_created FROM roi WHERE id = ?1", [id], |r| r.get(0)).unwrap();
         assert_eq!(created, created_after);
         // A second measurement added later gets its own id; the first keeps its row.
@@ -1560,6 +1615,7 @@ mod tests {
             value: Some(40.0),
             unit: "mm".into(),
             basis: Some("ultrasound-region".into()),
+            def_key: None,
         }];
         db.sync_rois(image_id, 0, &mut recs).unwrap();
         let values: Vec<RoiValue> = crate::mmode::KEYS_D

@@ -25,6 +25,8 @@ pub struct ReportState {
     measurements: Vec<MeasurementRow>,
     /// The LV M-mode block, already formatted.
     mmode: Vec<ReportMeasurement>,
+    /// Library calculations whose inputs were all present.
+    calculations: Vec<ReportMeasurement>,
     key_images: Vec<ImageRow>,
     findings: String,
     conclusion: String,
@@ -45,6 +47,7 @@ impl ReportState {
             study,
             measurements: Vec::new(),
             mmode: Vec::new(),
+            calculations: Vec::new(),
             key_images: Vec::new(),
             saved: (findings.clone(), conclusion.clone()),
             findings,
@@ -92,6 +95,7 @@ impl ReportState {
         }
         self.measurements = measurements;
         self.mmode = self.mmode_block(shared);
+        self.calculations = self.calculations_block(shared);
         self.key_images = shared.db.key_images_for_study(self.study.id).unwrap_or_default();
         self.last_refresh = Instant::now();
     }
@@ -129,6 +133,34 @@ impl ReportState {
             }
         }
         out
+    }
+
+    /// Every library calculation whose inputs this study has, from the
+    /// latest value of each definition.
+    fn calculations_block(&self, shared: &Shared) -> Vec<ReportMeasurement> {
+        use ruthos_core::measure::{evaluate_all, Input};
+        let library = shared.library.lock().clone();
+        let inputs = shared.db.measurement_inputs_for_study(self.study.id).unwrap_or_default();
+        let mut values: std::collections::BTreeMap<String, Input> = std::collections::BTreeMap::new();
+        for m in inputs {
+            if m.unit == "px" {
+                continue;
+            }
+            let patient_scale = m.basis.as_deref().and_then(ruthos_dicom::SpacingBasis::from_key).map(|b| b.is_patient_scale()).unwrap_or(true);
+            values.insert(m.def_key, Input { value: m.value, patient_scale });
+        }
+        let has_mmode = !self.mmode.is_empty();
+        evaluate_all(&library, &values)
+            .into_iter()
+            .filter(|r| !(has_mmode && r.key == "lv.fs"))
+            .map(|r| ReportMeasurement {
+                name: r.label.clone(),
+                value: r.text.clone(),
+                location: r.inputs.iter().map(|k| library.label(k)).collect::<Vec<_>>().join(", "),
+                basis: if r.scale_independent { "Scale independent".into() } else { String::new() },
+                patient_scale: r.trustworthy_scale,
+            })
+            .collect()
     }
 
     fn is_dirty(&self) -> bool {
@@ -278,6 +310,33 @@ impl ReportState {
             ui.add_space(14.0);
         }
 
+        if !self.calculations.is_empty() {
+            ui.label(RichText::new("Calculations").size(15.0).strong());
+            ui.add_space(4.0);
+            egui::Grid::new(("report-calculations", self.id))
+                .num_columns(3)
+                .striped(true)
+                .spacing([18.0, 4.0])
+                .min_col_width(90.0)
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Calculation").strong());
+                    ui.label(RichText::new("Value").strong());
+                    ui.label(RichText::new("From").strong());
+                    ui.end_row();
+                    for m in &self.calculations {
+                        ui.label(&m.name);
+                        let value = if m.patient_scale { m.value.clone() } else { format!("{} *", m.value) };
+                        let r = ui.label(value);
+                        if !m.patient_scale {
+                            r.on_hover_text("Depends on the scale of an input that was not measured at the patient's scale");
+                        }
+                        ui.label(RichText::new(&m.location).color(Color32::from_gray(90)));
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(14.0);
+        }
+
         ui.label(RichText::new("Findings").size(15.0).strong());
         ui.add_space(4.0);
         ui.add(
@@ -385,6 +444,7 @@ impl ReportState {
                 })
                 .collect(),
             mmode: self.mmode.clone(),
+            calculations: self.calculations.clone(),
             findings: self.findings.clone(),
             conclusion: self.conclusion.clone(),
             images,

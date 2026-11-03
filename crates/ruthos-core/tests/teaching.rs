@@ -349,7 +349,7 @@ fn measurements_calibrations_and_key_images_round_trip_through_a_folder() {
     a.db.replace_rois(
         image.id,
         0,
-        &[RoiRecord { id: 0, image_id: image.id, frame: 0, kind: "length".into(), points: vec![[20.0, 50.0], [60.0, 50.0]], name: Some("LVIDd".into()), value: Some(20.0), unit: "mm".into(), basis: None }],
+        &[RoiRecord { id: 0, image_id: image.id, frame: 0, kind: "length".into(), points: vec![[20.0, 50.0], [60.0, 50.0]], name: Some("LVIDd".into()), value: Some(20.0), unit: "mm".into(), basis: None, def_key: None }],
     )
     .unwrap();
     a.db.set_calibration(image.id, 0.5, 0.5, "ruler").unwrap();

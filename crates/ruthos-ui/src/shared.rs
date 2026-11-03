@@ -29,6 +29,9 @@ pub struct Shared {
     pub db: Arc<Database>,
     pub paths: DataPaths,
     pub settings: Mutex<Settings>,
+    /// The effective measurement library (built-in plus the user's),
+    /// rebuilt when Preferences are saved.
+    pub library: Mutex<Arc<ruthos_core::measure::Library>>,
     pub render_state: egui_wgpu::RenderState,
     pub loader: FrameLoader,
     pub thumbs: ThumbnailService,
@@ -70,6 +73,7 @@ impl Shared {
         Arc::new(Self {
             db,
             paths,
+            library: Mutex::new(Arc::new(settings.library())),
             settings: Mutex::new(settings),
             render_state,
             loader: FrameLoader::new(),

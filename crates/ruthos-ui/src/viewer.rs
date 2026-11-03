@@ -10,7 +10,8 @@ use std::time::Instant;
 
 use egui::{Align2, Color32, FontId, Key, PointerButton, Pos2, Rect, Sense, Ui, Vec2, ViewportId};
 
-use ruthos_core::{ImageRow, MeasurementSet, SeriesRow, StudyRow};
+use ruthos_core::measure::Library;
+use ruthos_core::{ImageRow, SeriesRow, StudyRow};
 
 use ruthos_dicom::Frame;
 use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTransform};
@@ -306,8 +307,8 @@ pub struct ViewerState {
     dev_selected: bool,
     /// Loupe settings, refreshed from Preferences each frame.
     loupe: LoupeSettings,
-    /// Measurement sets from Preferences, refreshed each frame.
-    sets: Vec<MeasurementSet>,
+    /// The measurement library, refreshed each frame.
+    library: Arc<Library>,
     /// The set the Measurements menu names from.
     current_set: usize,
     show_rois: bool,
@@ -388,7 +389,8 @@ enum MenuAction {
     SetTool(Tool),
     SetPhase(MmodePhase),
     SetSet(usize),
-    Name(String),
+    /// Label and, when it comes from a definition, its key.
+    Name(String, Option<String>),
     NamePopup,
     Undo,
     DeleteSelected,
@@ -481,7 +483,7 @@ impl ViewerState {
             dev_selected: false,
             loupe: LoupeSettings::default(),
             loupe_target: None,
-            sets: Vec::new(),
+            library: Arc::new(Library::default()),
             current_set: 0,
             show_rois: true,
             show_labels: true,
@@ -1094,10 +1096,11 @@ impl ViewerState {
                 }
             }
         });
-        if !self.sets.is_empty() {
+        if !self.library.sets.is_empty() {
+            let names: Vec<String> = self.library.sets.iter().map(|s| s.name.clone()).collect();
             ui.menu_button("Measurement set", |ui| {
-                for (i, set) in self.sets.iter().enumerate() {
-                    if menu_item(ui, set.name.as_str(), self.current_set == i).clicked() {
+                for (i, name) in names.iter().enumerate() {
+                    if menu_item(ui, name.as_str(), self.current_set == i).clicked() {
                         pick(ui, MenuAction::SetSet(i));
                     }
                 }
@@ -1119,11 +1122,14 @@ impl ViewerState {
                     }
                     ui.separator();
                 }
-                if let Some(set) = self.sets.get(self.current_set) {
+                let current_key = selected.and_then(|r| r.def_key.clone());
+                if let Some(set) = self.library.sets.get(self.current_set) {
                     menu_heading(ui, &set.name);
-                    for item in &set.items {
-                        if menu_item(ui, item.as_str(), current.as_deref() == Some(item.as_str())).clicked() {
-                            pick(ui, MenuAction::Name(item.clone()));
+                    for key in &set.keys {
+                        let label = self.library.label(key);
+                        let is_current = current_key.as_deref() == Some(key.as_str()) || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
+                        if menu_item(ui, label.as_str(), is_current).clicked() {
+                            pick(ui, MenuAction::Name(label.clone(), Some(key.clone())));
                         }
                     }
                     ui.separator();
@@ -1208,14 +1214,15 @@ impl ViewerState {
             }
             MenuAction::SetSet(i) => {
                 self.current_set = i;
-                if let Some(set) = self.sets.get(i) {
+                if let Some(set) = self.library.sets.get(i) {
                     self.set_status(format!("Measurement set: {}", set.name));
                 }
             }
-            MenuAction::Name(name) => {
+            MenuAction::Name(name, def_key) => {
                 if let (Some(key), Some(sel)) = (key, self.selected_roi) {
                     if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(sel)) {
                         roi.name = Some(name.clone());
+                        roi.def_key = def_key;
                         self.dirty_rois.insert(key);
                         self.set_status(format!("Named {name}"));
                     }
@@ -1417,9 +1424,12 @@ impl ViewerState {
         let (key, index, pos) = (popup.key, popup.index, popup.pos);
         let mut custom = popup.custom.clone();
         let current = self.rois.get(&key).and_then(|l| l.get(index)).and_then(|r| r.name.clone());
-        let sets = shared.settings.lock().measurement_sets.clone();
+        let current_key = self.rois.get(&key).and_then(|l| l.get(index)).and_then(|r| r.def_key.clone());
+        let library = self.library.clone();
+        let _ = shared;
         let ctx = ui.ctx().clone();
-        let mut choice: Option<Option<String>> = None;
+        // Chosen label and definition key; `Some(None)` removes the name.
+        let mut choice: Option<Option<(String, Option<String>)>> = None;
         let mut close = ui.input(|i| i.key_pressed(Key::Escape));
         let area = egui::Area::new(egui::Id::unique(("assign-roi", self.id)))
             .order(egui::Order::Foreground)
@@ -1428,11 +1438,13 @@ impl ViewerState {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_min_width(210.0);
                     ui.label(egui::RichText::new("Assign measurement").strong());
-                    for set in &sets {
+                    for set in &library.sets {
                         menu_heading(ui, &set.name);
-                        for item in &set.items {
-                            if menu_item(ui, item.as_str(), current.as_deref() == Some(item.as_str())).clicked() {
-                                choice = Some(Some(item.clone()));
+                        for k in &set.keys {
+                            let label = library.label(k);
+                            let is_current = current_key.as_deref() == Some(k.as_str()) || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
+                            if menu_item(ui, label.as_str(), is_current).clicked() {
+                                choice = Some(Some((label.clone(), Some(k.clone()))));
                             }
                         }
                     }
@@ -1442,7 +1454,10 @@ impl ViewerState {
                         let r = ui.add(egui::TextEdit::singleline(&mut custom).hint_text("Custom name").desired_width(150.0));
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                         if (enter || ui.button("Set").clicked()) && !custom.trim().is_empty() {
-                            choice = Some(Some(custom.trim().to_string()));
+                            // A custom name takes a definition's key when it matches its label.
+                            let text = custom.trim().to_string();
+                            let key = library.definition_by_label(&text).map(|d| d.key.clone());
+                            choice = Some(Some((text, key)));
                         }
                     });
                     if menu_item_enabled(ui, "Remove name", false, current.is_some()).clicked() {
@@ -1457,10 +1472,19 @@ impl ViewerState {
         }
         if let Some(name) = choice {
             if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(index)) {
-                roi.name = name.clone();
+                match &name {
+                    Some((label, def_key)) => {
+                        roi.name = Some(label.clone());
+                        roi.def_key = def_key.clone();
+                    }
+                    None => {
+                        roi.name = None;
+                        roi.def_key = None;
+                    }
+                }
                 self.dirty_rois.insert(key);
                 self.set_status(match name {
-                    Some(n) => format!("Measurement assigned to {n}"),
+                    Some((n, _)) => format!("Measurement assigned to {n}"),
                     None => "Measurement name removed".to_string(),
                 });
             }
@@ -1576,9 +1600,9 @@ impl ViewerState {
         {
             let st = shared.settings.lock();
             self.loupe = LoupeSettings::from(&*st);
-            self.sets = st.measurement_sets.clone();
             crate::roi::set_echo_cm(st.echo_length_unit == "cm");
         }
+        self.library = shared.library.lock().clone();
         if let Some(sid) = self.current_series_id() {
             if !self.mmode_latest.contains_key(&sid) {
                 self.mmode_refresh.insert(sid);
@@ -1587,7 +1611,7 @@ impl ViewerState {
         for sid in std::mem::take(&mut self.mmode_refresh) {
             self.refresh_mmode_latest(shared, sid);
         }
-        if self.current_set >= self.sets.len() {
+        if self.current_set >= self.library.sets.len() {
             self.current_set = 0;
         }
         ui.style_mut().visuals = theme::viewer_visuals();

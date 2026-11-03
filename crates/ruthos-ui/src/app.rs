@@ -49,12 +49,23 @@ impl RuthosApp {
 
         crate::icons::install(&cc.egui_ctx);
         theme::apply_global_style(&cc.egui_ctx);
+        // Developer option: `RUTHOS_ZOOM=0.8` scales the whole interface,
+        // for screenshots on small screens.
+        if let Some(z) = std::env::var("RUTHOS_ZOOM").ok().and_then(|v| v.trim().parse::<f32>().ok()).filter(|z| (0.3..=3.0).contains(z)) {
+            cc.egui_ctx.set_zoom_factor(z);
+        }
 
         let settings = Settings::load();
         let paths = DataPaths::new(settings.data_root());
         paths.ensure()?;
         let db = Database::open(&paths)?;
         tracing::info!("database at {}", paths.database_file().display());
+        // Measurements named before definitions existed get their key.
+        match db.assign_def_keys_by_label(&ruthos_core::measure::label_keys(&settings.library())) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("{n} stored measurements linked to their definitions"),
+            Err(e) => tracing::warn!("could not link stored measurements to definitions: {e}"),
+        }
         crate::crash::install(paths.root.join("crash.log"));
         // A teaching export interrupted by a crash leaves its temporary
         // folder behind; nothing can be in progress at startup, so clear them.

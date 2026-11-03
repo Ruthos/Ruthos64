@@ -13,6 +13,7 @@ pub mod crash;
 pub mod icons;
 pub mod loader;
 pub mod loupe;
+pub mod measure_prefs;
 pub mod prefs;
 pub mod report;
 pub mod roi;

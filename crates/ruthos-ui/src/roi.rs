@@ -81,6 +81,8 @@ pub struct Roi {
     pub name: Option<String>,
     /// Archive row id once stored; edits keep it.
     pub id: Option<i64>,
+    /// The definition this measurement was assigned to (`lv.lvidd`).
+    pub def_key: Option<String>,
 }
 
 /// The outcome of measuring a ROI on a frame.
@@ -105,7 +107,7 @@ pub struct RoiStats {
 
 impl Roi {
     pub fn new(kind: RoiKind) -> Self {
-        Self { kind, name: None, id: None }
+        Self { kind, name: None, id: None, def_key: None }
     }
 
     /// The storage form, with the value as measured on `frame`.
@@ -130,6 +132,7 @@ impl Roi {
             value: m.as_ref().and_then(|m| m.value),
             unit: m.as_ref().map(|m| m.unit.to_string()).unwrap_or_default(),
             basis: m.as_ref().and_then(|m| m.basis).map(|b| b.key().to_string()),
+            def_key: self.def_key.clone(),
         }
     }
 
@@ -149,7 +152,7 @@ impl Roi {
             }
             _ => return None,
         };
-        Some(Self { kind, name: r.name.clone(), id: if r.id > 0 { Some(r.id) } else { None } })
+        Some(Self { kind, name: r.name.clone(), id: if r.id > 0 { Some(r.id) } else { None }, def_key: r.def_key.clone() })
     }
 
     /// The headline number, unit and scale basis, for storage and reports.

@@ -285,9 +285,21 @@ pub struct RoiRecord {
     pub unit: String,
     /// The scale basis the value was computed from (`SpacingBasis::key`).
     pub basis: Option<String>,
+    /// The measurement definition this ROI was assigned to (`lv.lvidd`).
+    pub def_key: Option<String>,
 }
 
 /// A named measurement with where it was taken, for reports.
+/// A valued measurement of a study keyed by definition, for calculations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeasurementInput {
+    pub def_key: String,
+    pub value: f64,
+    pub unit: String,
+    pub basis: Option<String>,
+    pub date_modified: i64,
+}
+
 /// One derived value of a measurement, keyed by definition (e.g. `lv.ivsd`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoiValue {
