@@ -17,6 +17,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+getrandom = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 crossbeam-channel = { workspace = true }
@@ -25,3 +26,6 @@ uuid = { workspace = true }
 parking_lot = { workspace = true }
 image = { workspace = true }
 ruthos-dicom = { workspace = true }
+dicom-dictionary-std = { workspace = true }
+dicom-object = { workspace = true }
+dicom-core = { workspace = true }

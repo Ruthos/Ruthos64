@@ -9,6 +9,7 @@
 //! [`quirks`] behind one trait and never leaks into feature code.
 
 pub mod clut;
+pub mod deid;
 pub mod jpeg;
 pub mod meta;
 pub mod open;

@@ -56,6 +56,15 @@ impl RuthosApp {
         let db = Database::open(&paths)?;
         tracing::info!("database at {}", paths.database_file().display());
         crate::crash::install(paths.root.join("crash.log"));
+        // A teaching export interrupted by a crash leaves its temporary
+        // folder behind; nothing can be in progress at startup, so clear them.
+        if let Ok(entries) = std::fs::read_dir(paths.temp_dir()) {
+            for e in entries.flatten() {
+                if e.file_name().to_string_lossy().starts_with("export-") && e.path().is_dir() {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
 
         // Register the image pipeline with egui-wgpu once.
         {
@@ -120,6 +129,18 @@ impl RuthosApp {
                 shared.db.list_studies(&filter).ok()?.first().map(|s| s.id)
             });
             browser.selected_study = id;
+        }
+
+        // Developer option: `RUTHOS_OPEN_ANON=<study>[:pixels|verify]` opens the anonymiser.
+        if let Some(v) = std::env::var("RUTHOS_OPEN_ANON").ok().filter(|v| !v.is_empty()) {
+            let (who, step) = v.split_once(':').map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or((v.clone(), String::new()));
+            let id = who.trim().parse::<i64>().ok().or_else(|| {
+                let filter = ruthos_core::StudyFilter { text: who.clone(), ..Default::default() };
+                shared.db.list_studies(&filter).ok()?.first().map(|s| s.id)
+            });
+            if let Some(id) = id {
+                browser.dev_open_anonymize(&shared, id, &step);
+            }
         }
         if !startup_paths.is_empty() {
             browser.open_next_import = true;

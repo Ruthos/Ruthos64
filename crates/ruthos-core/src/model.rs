@@ -34,6 +34,10 @@ pub struct StudyRow {
     pub state: i64,
     pub number_of_series: i64,
     pub number_of_images: i64,
+    /// Set only on teaching copies: the case reference they carry.
+    pub teaching_reference: Option<String>,
+    /// A teaching copy whose measurements are hidden until revealed.
+    pub teaching_answer_key: bool,
 }
 
 impl StudyRow {
@@ -244,6 +248,8 @@ mod tests {
             state: 0,
             number_of_series: 0,
             number_of_images: 0,
+                    teaching_reference: None,
+            teaching_answer_key: false,
         };
         assert_eq!(s.age_at_study().as_deref(), Some("4Y"));
         s.study_date = Some("2020-04-15".into());

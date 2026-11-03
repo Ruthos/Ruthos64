@@ -6,6 +6,7 @@
 //! windows as native viewports.
 
 pub mod annotations;
+pub mod anonymize;
 pub mod app;
 pub mod browser;
 pub mod crash;

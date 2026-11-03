@@ -122,6 +122,8 @@ pub struct InstanceMeta {
     /// Time between frames of a multi-frame image in milliseconds, from
     /// Frame Time, Cine Rate or Recommended Display Frame Rate.
     pub frame_time_ms: Option<f64>,
+    /// Burned In Annotation (0028,0301): YES, NO or empty.
+    pub burned_in_annotation: String,
     pub bits_allocated: u16,
     pub bits_stored: u16,
     pub pixel_representation: u16,
@@ -283,6 +285,7 @@ pub fn meta_from_object(obj: &Obj) -> InstanceMeta {
         rows: g.int(tags::ROWS).unwrap_or(0) as u32,
         columns: g.int(tags::COLUMNS).unwrap_or(0) as u32,
         number_of_frames: g.int(tags::NUMBER_OF_FRAMES).unwrap_or(1).max(1) as u32,
+        burned_in_annotation: g.str(tags::BURNED_IN_ANNOTATION),
         frame_time_ms: g
             .f64(tags::FRAME_TIME)
             .filter(|t| *t > 0.0)

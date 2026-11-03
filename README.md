@@ -58,7 +58,8 @@ Work is organised in tiers. Each tier is usable on its own.
 - Key images, comments and study state
 - Hounsfield and pixel value readout, histograms and plots
 - DICOM listener (C-STORE SCP), send (C-STORE SCU), query/retrieve (C-FIND, C-MOVE), echo
-- Export to DICOM, JPEG, PNG and MP4; anonymisation
+- Export to DICOM, JPEG, PNG and MP4
+- Anonymisation for teaching: allowlist header profile, derived UIDs, shifted dates, ultrasound-region and template pixel masking with review, named teaching cases, sidecar for measurements, independent verification pass (see `docs/anonymiser.md`)
 - Preferences window
 - Import an existing Horos database folder, including albums, comments and key images
 

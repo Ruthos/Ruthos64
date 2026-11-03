@@ -20,6 +20,7 @@ use ruthos_dicom::Frame;
 use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTransform};
 
 use crate::annotations::{self, AnnotationContext, AnnotationLevel};
+use crate::anonymize::AnonymizeState;
 use crate::icons;
 use crate::icons::Bitmap;
 use crate::shared::Shared;
@@ -70,6 +71,7 @@ enum Modal {
 
 #[derive(Debug, Clone)]
 enum Action {
+    Anonymize(i64),
     Select(i64),
     SelectSeries(i64, i64),
     ToggleExpand(i64),
@@ -94,6 +96,9 @@ pub struct BrowserState {
     selected_builtin: Option<usize>,
     /// Studies that have report text, for the Report column.
     reports: HashSet<i64>,
+    /// Source studies (by UID) that have teaching cases; shown only here.
+    teaching_sources: HashSet<String>,
+    anonymize: Option<Box<AnonymizeState>>,
     preview: Preview,
     modalities: Vec<String>,
     dirty: bool,
@@ -123,6 +128,8 @@ impl BrowserState {
             builtin_albums: Vec::new(),
             selected_builtin: None,
             reports: HashSet::new(),
+            teaching_sources: HashSet::new(),
+            anonymize: None,
             preview: Preview::default(),
             modalities: Vec::new(),
             dirty: true,
@@ -213,6 +220,7 @@ impl BrowserState {
         self.modalities = shared.db.modalities().unwrap_or_default();
         self.counts = shared.db.counts().unwrap_or((0, 0, 0));
         self.reports = shared.db.studies_with_reports().unwrap_or_default().into_iter().collect();
+        self.teaching_sources = shared.db.teaching_source_uids().unwrap_or_default().into_iter().collect();
         self.builtin_albums = self.builtin_albums(shared);
         if self.selected_builtin.is_some_and(|i| i >= self.builtin_albums.len()) {
             self.selected_builtin = None;
@@ -380,6 +388,40 @@ impl BrowserState {
             .show(ui, |ui| self.study_table(ui, shared));
 
         self.show_modal(&ctx, shared);
+        if let Some(mut a) = self.anonymize.take() {
+            if a.show(&ctx, shared) {
+                self.dirty = true;
+                self.set_status("Teaching copy written");
+            } else {
+                self.anonymize = Some(a);
+            }
+        }
+    }
+
+    /// Developer aid: open the anonymiser at a step without clicking.
+    pub fn dev_open_anonymize(&mut self, shared: &Shared, study_id: i64, step: &str) {
+        if self.dirty {
+            self.reload(shared);
+        }
+        if let Some(study) = self.studies.iter().find(|s| s.id == study_id).cloned() {
+            let mut a = AnonymizeState::open(shared, study);
+            a.dev_jump(shared, step);
+            self.anonymize = Some(Box::new(a));
+        }
+    }
+
+    /// Open the anonymiser for a study; a teaching copy is re-exported unchanged.
+    fn start_anonymize(&mut self, shared: &Shared, study_id: i64) {
+        let Some(study) = self.studies.iter().find(|s| s.id == study_id).cloned() else { return };
+        if study.teaching_reference.is_some() {
+            let Some(dir) = rfd::FileDialog::new().set_title("Folder for the teaching copy").pick_folder() else { return };
+            match ruthos_core::teaching::reexport_copy(&shared.db, &shared.paths, study.id, &dir) {
+                Ok(p) => self.set_status(format!("Teaching copy written to {}", p.display())),
+                Err(e) => self.set_status(format!("Could not export: {e}")),
+            }
+            return;
+        }
+        self.anonymize = Some(Box::new(AnonymizeState::open(shared, study)));
     }
 
     fn toolbar(&mut self, ui: &mut Ui, shared: &Shared) {
@@ -436,7 +478,11 @@ impl BrowserState {
             }
             ToolbarButton::new(Bitmap::Query, "Query").enabled(false).tooltip("PACS query/retrieve is next on the Tier 1 list").show(ui);
             ToolbarButton::new(Bitmap::Send, "Send").enabled(false).tooltip("Send to PACS is next on the Tier 1 list").show(ui);
-            ToolbarButton::new(Bitmap::Anonymize, "Anonymize").enabled(false).tooltip("Anonymisation is next on the Tier 1 list").show(ui);
+            if ToolbarButton::new(Bitmap::Anonymize, "Anonymize").enabled(has_sel).tooltip("Make a de-identified teaching copy of the selected study").show(ui).clicked() {
+                if let Some(id) = self.selected_study {
+                    self.start_anonymize(shared, id);
+                }
+            }
             if ToolbarButton::new(Bitmap::Trash, "Delete").enabled(has_sel).tooltip("Delete the selected study").show(ui).clicked() {
                 if let Some(id) = self.selected_study {
                     self.modal = Some(Modal::DeleteStudy(id));
@@ -693,6 +739,7 @@ impl BrowserState {
         let selected_album = self.selected_album;
 
         let reports = &self.reports;
+        let teaching_sources = &self.teaching_sources;
         let ctx = ui.ctx().clone();
 
         let text_color = Color32::from_gray(30);
@@ -783,8 +830,21 @@ impl BrowserState {
                                     let mut rt = RichText::new(text).color(if is_sel { Color32::WHITE } else { text_color });
                                     if ci == 0 {
                                         rt = rt.strong();
+                                        if s.teaching_reference.is_some() {
+                                            ui.label(icons::rich(icons::ANONYMIZE, 13.0).color(if is_sel { Color32::WHITE } else { Color32::from_gray(90) }))
+                                                .on_hover_text(format!("Teaching copy {}", s.teaching_reference.clone().unwrap_or_default()));
+                                        }
                                     }
                                     ui.label(rt);
+                                    if ci == 0 && teaching_sources.contains(&s.study_instance_uid) {
+                                        let r = ui.label(icons::rich(icons::ANONYMIZE, 11.0).color(Color32::from_rgb(190, 120, 20)));
+                                        r.on_hover_ui(|ui| {
+                                            ui.label("Teaching copies exist for this study:");
+                                            for c in shared.db.teaching_cases_for_study(&s.study_instance_uid).unwrap_or_default() {
+                                                ui.label(format!("{}  ({})", c.reference, c.name.replace('^', " ")));
+                                            }
+                                        });
+                                    }
                                 });
                             }
                             let r = row.response();
@@ -832,6 +892,10 @@ impl BrowserState {
                                 });
                                 if menu_item(ui, "Report…", false).clicked() {
                                     shared.open_reports.lock().push(s.id);
+                                    ui.close();
+                                }
+                                if menu_item(ui, "Anonymise for teaching…", false).clicked() {
+                                    actions.push(Action::Anonymize(s.id));
                                     ui.close();
                                 }
                                 if menu_item(ui, "Edit comment…", false).clicked() {
@@ -896,6 +960,7 @@ impl BrowserState {
 
         for action in actions {
             match action {
+                Action::Anonymize(id) => self.start_anonymize(shared, id),
                 Action::Select(id) => {
                     self.selected_study = Some(id);
                     self.selected_series = None;

@@ -27,6 +27,8 @@ pub struct Settings {
     /// Named measurements a ROI can be assigned to, grouped by study type.
     /// They are what later goes into a report.
     pub measurement_sets: Vec<MeasurementSet>,
+    /// Prefix of suggested teaching references, e.g. `EQ-CARD-2026`.
+    pub teaching_reference_prefix: String,
 }
 
 /// A named group of measurements, e.g. the M-mode left-ventricle set.
@@ -67,6 +69,7 @@ impl Default for Settings {
             thumbnail_size: 100,
             browser_window_size: None,
             measurement_sets: default_measurement_sets(),
+            teaching_reference_prefix: "RUTHOS-2026".to_string(),
         }
     }
 }

@@ -153,6 +153,14 @@ impl PrefsState {
         Self::hint(ui, "Off links to files where they are, as Horos' \"Link\" mode does. Files received by the listener are always moved in.");
         ui.add_space(16.0);
 
+        Self::heading(ui, "Teaching copies");
+        ui.horizontal(|ui| {
+            ui.label("Reference prefix");
+            ui.add(egui::TextEdit::singleline(&mut self.draft.teaching_reference_prefix).desired_width(180.0).hint_text("RUTHOS-2026"));
+        });
+        Self::hint(ui, "Suggested references are the prefix and a running number, for example EQ-CARD-2026-0014.");
+        ui.add_space(16.0);
+
         Self::heading(ui, "Thumbnails");
         ui.horizontal(|ui| {
             ui.add(egui::Slider::new(&mut self.draft.thumbnail_size, 64..=160).suffix(" px"));

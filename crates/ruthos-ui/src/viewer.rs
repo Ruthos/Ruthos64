@@ -264,6 +264,8 @@ pub struct ViewerState {
     gpu_order: VecDeque<FrameKey>,
 
     pub close_requested: bool,
+    /// Teaching copy with an answer key: measurements hidden until revealed.
+    pub reveal_answers: bool,
     mouse_pixel: Option<(i64, i64)>,
     status: Option<(String, Instant)>,
     wl_drag_anchor: Option<(f32, f32)>,
@@ -344,6 +346,7 @@ impl ViewerState {
             gpu: HashMap::new(),
             gpu_order: VecDeque::new(),
             close_requested: false,
+            reveal_answers: false,
             mouse_pixel: None,
             status: None,
             wl_drag_anchor: None,
@@ -1231,6 +1234,12 @@ impl ViewerState {
             if ToolbarButton::new(Bitmap::ReportCustom, "Report").tooltip("The report for this study: measurements, findings, key images").show(ui).clicked() {
                 shared.open_reports.lock().push(self.study.id);
             }
+            if self.study.teaching_answer_key {
+                let label = if self.reveal_answers { "Hide answers" } else { "Answers" };
+                if ToolbarButton::new(icons::ANONYMIZE, label).selected(self.reveal_answers).tooltip("This teaching copy carries its measurements as an answer key").show(ui).clicked() {
+                    self.reveal_answers = !self.reveal_answers;
+                }
+            }
             toolbar_separator(ui);
 
             let can_play = self.panes[self.active].images.len() > 1 || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);
@@ -1634,7 +1643,8 @@ impl ViewerState {
         if active {
             self.label_hits.retain(|(k, _, _)| *k != key);
         }
-        if let Some(list) = self.rois.get(&key) {
+        let hidden = self.study.teaching_answer_key && !self.reveal_answers;
+        if let Some(list) = self.rois.get(&key).filter(|_| !hidden) {
             for (i, roi) in list.iter().enumerate() {
                 let sel = active && self.selected_roi == Some(i);
                 let label = roi.draw(&painter, &transform, &frame, roi_color(sel), sel);

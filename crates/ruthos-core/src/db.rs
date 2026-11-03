@@ -14,10 +14,11 @@ use serde::{Deserialize, Serialize};
 use ruthos_dicom::meta::{dicom_date_to_iso, dicom_time_to_hms, InstanceMeta};
 
 use crate::model::{AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, SeriesRow, StudyRow};
+use crate::teaching::TeachingCase;
 use crate::paths::DataPaths;
 use crate::Result;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -274,7 +275,8 @@ impl Database {
                     s.referring_physician, s.institution_name, s.modalities, s.date_added,
                     s.date_opened, s.comment, s.state,
                     (SELECT COUNT(*) FROM series se WHERE se.study_id = s.id),
-                    (SELECT COUNT(*) FROM image i JOIN series se ON i.series_id = se.id WHERE se.study_id = s.id)
+                    (SELECT COUNT(*) FROM image i JOIN series se ON i.series_id = se.id WHERE se.study_id = s.id),
+                    s.teaching_reference, s.teaching_answer_key
              FROM study s",
         );
         let mut clauses: Vec<String> = Vec::new();
@@ -349,7 +351,8 @@ impl Database {
                         s.referring_physician, s.institution_name, s.modalities, s.date_added,
                         s.date_opened, s.comment, s.state,
                         (SELECT COUNT(*) FROM series se WHERE se.study_id = s.id),
-                        (SELECT COUNT(*) FROM image i JOIN series se ON i.series_id = se.id WHERE se.study_id = s.id)
+                        (SELECT COUNT(*) FROM image i JOIN series se ON i.series_id = se.id WHERE se.study_id = s.id),
+                    s.teaching_reference, s.teaching_answer_key
                  FROM study s WHERE s.id = ?1",
                 params![id],
                 study_from_row,
@@ -474,6 +477,155 @@ impl Database {
             "UPDATE series SET window_center = ?1, window_width = ?2, rotation_angle = ?3,
                     x_flipped = ?4, y_flipped = ?5 WHERE id = ?6",
             params![window_center, window_width, rotation_angle, x_flipped, y_flipped, id],
+        )?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------- meta
+
+    pub fn meta_get(&self, key: &str) -> Option<String> {
+        self.conn
+            .lock()
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get::<_, String>(0))
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    pub fn meta_set(&self, key: &str, value: &str) -> Result<()> {
+        self.conn
+            .lock()
+            .execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value])?;
+        Ok(())
+    }
+
+    pub fn image_by_sop_uid(&self, sop_instance_uid: &str) -> Result<Option<ImageRow>> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                "SELECT id, series_id, sop_instance_uid, sop_class_uid, instance_number, number_of_frames,
+                        rows, columns, path, stored_in_database_folder, file_size, transfer_syntax,
+                        is_key_image, slice_location, comment, date_added
+                 FROM image WHERE sop_instance_uid = ?1",
+                params![sop_instance_uid],
+                image_from_row,
+            )
+            .optional()?)
+    }
+
+    // --------------------------------------------------------------- teaching
+
+    const TEACHING_COLS: &'static str =
+        "id, reference, name, title, secret, offset_days, preserve_season, note, created";
+
+    pub fn teaching_cases(&self) -> Result<Vec<TeachingCase>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(&format!("SELECT {} FROM teaching_case ORDER BY created DESC, id DESC", Self::TEACHING_COLS))?;
+        let rows = stmt.query_map([], teaching_case_from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn teaching_case(&self, id: i64) -> Result<Option<TeachingCase>> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(&format!("SELECT {} FROM teaching_case WHERE id = ?1", Self::TEACHING_COLS), params![id], teaching_case_from_row)
+            .optional()?)
+    }
+
+    pub fn teaching_case_by_reference(&self, reference: &str) -> Result<Option<TeachingCase>> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                &format!("SELECT {} FROM teaching_case WHERE reference = ?1", Self::TEACHING_COLS),
+                params![reference],
+                teaching_case_from_row,
+            )
+            .optional()?)
+    }
+
+    pub fn create_teaching_case(
+        &self,
+        reference: &str,
+        name: &str,
+        title: &str,
+        secret: &[u8; 32],
+        offset_days: i64,
+        preserve_season: bool,
+    ) -> Result<i64> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO teaching_case (reference, name, title, secret, offset_days, preserve_season, note, created)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', ?7)",
+            params![reference, name, title, secret.to_vec(), offset_days, preserve_season as i64, now_unix()],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn set_teaching_case_note(&self, id: i64, note: &str) -> Result<()> {
+        self.conn.lock().execute("UPDATE teaching_case SET note = ?1 WHERE id = ?2", params![note, id])?;
+        Ok(())
+    }
+
+    pub fn add_teaching_source(&self, case_id: i64, study_instance_uid: &str, study_id: Option<i64>) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT OR REPLACE INTO teaching_source (case_id, study_instance_uid, study_id) VALUES (?1, ?2, ?3)",
+            params![case_id, study_instance_uid, study_id],
+        )?;
+        Ok(())
+    }
+
+    /// Source study UIDs of a case.
+    pub fn teaching_sources(&self, case_id: i64) -> Result<Vec<(String, Option<i64>)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT study_instance_uid, study_id FROM teaching_source WHERE case_id = ?1")?;
+        let rows = stmt.query_map(params![case_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Cases a source study has been exported under (visible only locally).
+    pub fn teaching_cases_for_study(&self, study_instance_uid: &str) -> Result<Vec<TeachingCase>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM teaching_case c JOIN teaching_source s ON s.case_id = c.id WHERE s.study_instance_uid = ?1 ORDER BY c.id",
+            Self::TEACHING_COLS.split(", ").map(|c| format!("c.{c}")).collect::<Vec<_>>().join(", ")
+        ))?;
+        let rows = stmt.query_map(params![study_instance_uid], teaching_case_from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Study Instance UIDs that have at least one teaching case.
+    pub fn teaching_source_uids(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT DISTINCT study_instance_uid FROM teaching_source")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn record_teaching_export(&self, case_id: i64, study_instance_uid: &str, destination: &str, result: &str, series: i64, images: i64) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT INTO teaching_export (case_id, study_instance_uid, time, destination, result, series, images)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![case_id, study_instance_uid, now_unix(), destination, result, series, images],
+        )?;
+        Ok(())
+    }
+
+    pub fn teaching_export_count(&self, case_id: i64) -> Result<i64> {
+        Ok(self.conn.lock().query_row("SELECT COUNT(*) FROM teaching_export WHERE case_id = ?1", params![case_id], |r| r.get(0))?)
+    }
+
+    pub fn delete_teaching_case(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM teaching_export WHERE case_id = ?1", params![id])?;
+        conn.execute("DELETE FROM teaching_source WHERE case_id = ?1", params![id])?;
+        conn.execute("DELETE FROM teaching_case WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn set_study_teaching(&self, study_id: i64, reference: &str, answer_key: bool) -> Result<()> {
+        self.conn.lock().execute(
+            "UPDATE study SET teaching_reference = ?1, teaching_answer_key = ?2 WHERE id = ?3",
+            params![reference, answer_key as i64, study_id],
         )?;
         Ok(())
     }
@@ -810,6 +962,8 @@ fn study_from_row(r: &Row<'_>) -> rusqlite::Result<StudyRow> {
         state: r.get(19)?,
         number_of_series: r.get(20)?,
         number_of_images: r.get(21)?,
+        teaching_reference: r.get::<_, Option<String>>(22)?.filter(|v| !v.is_empty()),
+        teaching_answer_key: r.get::<_, Option<i64>>(23)?.unwrap_or(0) != 0,
     })
 }
 
@@ -856,6 +1010,34 @@ fn image_from_row(r: &Row<'_>) -> rusqlite::Result<ImageRow> {
         slice_location: r.get(13)?,
         comment: r.get(14)?,
         date_added: r.get(15)?,
+    })
+}
+
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let existing: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(1))?.collect::<std::result::Result<_, _>>()?;
+    if !existing.iter().any(|c| c == column) {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+    }
+    Ok(())
+}
+
+fn teaching_case_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TeachingCase> {
+    let blob: Vec<u8> = r.get(4)?;
+    let mut secret = [0u8; 32];
+    for (i, b) in blob.iter().take(32).enumerate() {
+        secret[i] = *b;
+    }
+    Ok(TeachingCase {
+        id: r.get(0)?,
+        reference: r.get(1)?,
+        name: r.get(2)?,
+        title: r.get(3)?,
+        secret,
+        offset_days: r.get(5)?,
+        preserve_season: r.get::<_, i64>(6)? != 0,
+        note: r.get(7)?,
+        created: r.get(8)?,
     })
 }
 
@@ -984,8 +1166,39 @@ fn migrate(conn: &Connection) -> Result<()> {
             findings TEXT NOT NULL DEFAULT '',
             conclusion TEXT NOT NULL DEFAULT '',
             date_modified INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS teaching_case (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reference TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL DEFAULT '',
+            secret BLOB NOT NULL,
+            offset_days INTEGER NOT NULL,
+            preserve_season INTEGER NOT NULL DEFAULT 0,
+            note TEXT NOT NULL DEFAULT '',
+            created INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS teaching_source (
+            case_id INTEGER NOT NULL REFERENCES teaching_case(id) ON DELETE CASCADE,
+            study_instance_uid TEXT NOT NULL,
+            study_id INTEGER,
+            PRIMARY KEY (case_id, study_instance_uid)
+         );
+         CREATE TABLE IF NOT EXISTS teaching_export (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id INTEGER NOT NULL REFERENCES teaching_case(id) ON DELETE CASCADE,
+            study_instance_uid TEXT NOT NULL,
+            time INTEGER NOT NULL,
+            destination TEXT NOT NULL,
+            result TEXT NOT NULL,
+            series INTEGER NOT NULL DEFAULT 0,
+            images INTEGER NOT NULL DEFAULT 0
          );",
     )?;
+    // Columns added after the first schema; SQLite has no IF NOT EXISTS for them.
+    add_column_if_missing(conn, "study", "teaching_reference", "TEXT")?;
+    add_column_if_missing(conn, "study", "teaching_answer_key", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(conn, "roi", "concept_code", "TEXT")?;
     conn.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION.to_string()],

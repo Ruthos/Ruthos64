@@ -119,6 +119,14 @@ impl Importer {
                     summary.not_dicom,
                     summary.errors.len()
                 );
+                // A folder written by the anonymiser carries its measurements in a sidecar.
+                for dir in sidecar_dirs(&sources) {
+                    match crate::teaching::apply_sidecar(&db, &dir) {
+                        Ok(Some(reference)) => tracing::info!("applied teaching sidecar {reference} from {}", dir.display()),
+                        Ok(None) => {}
+                        Err(e) => tracing::warn!("sidecar in {} not applied: {e}", dir.display()),
+                    }
+                }
                 let _ = tx.send(ImportEvent::Finished(summary));
             })
             .expect("spawn import thread")
@@ -250,3 +258,27 @@ mod tests {
         assert!(!is_ignorable(Path::new("x/scan.dcm")));
     }
 }
+
+/// Folders among the sources (or containing the source files) that hold a
+/// `ruthos-case.json` sidecar.
+fn sidecar_dirs(sources: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for src in sources {
+        let dir = if src.is_dir() { src.clone() } else { src.parent().map(Path::to_path_buf).unwrap_or_default() };
+        if dir.join(crate::teaching::SIDECAR_NAME).is_file() && !out.contains(&dir) {
+            out.push(dir.clone());
+        }
+        if src.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(src) {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if p.is_dir() && p.join(crate::teaching::SIDECAR_NAME).is_file() && !out.contains(&p) {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+

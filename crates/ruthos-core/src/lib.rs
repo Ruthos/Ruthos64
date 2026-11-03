@@ -11,6 +11,7 @@ pub mod model;
 pub mod paths;
 pub mod report;
 pub mod settings;
+pub mod teaching;
 pub mod thumbs;
 
 pub use db::{Database, StudyFilter};
@@ -18,6 +19,7 @@ pub use import::{ImportEvent, ImportMode, Importer};
 pub use model::{AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, SeriesRow, StudyRow};
 pub use paths::DataPaths;
 pub use settings::{MeasurementSet, Settings};
+pub use teaching::TeachingCase;
 pub use thumbs::{ThumbnailService, ThumbnailUpdate};
 
 #[derive(Debug, thiserror::Error)]
