@@ -1,6 +1,6 @@
 # Ruthos
 
-**A Horos-inspired DICOM viewer for Windows, written in Rust.**
+**A Horos-inspired DICOM viewer for Windows, written in Rust.** Website: <https://ruthos.github.io/Ruthos64/>
 
 Ruthos is a community project to bring the Horos / OsiriX experience to Windows: the same database window, the same 2D viewer, the same tools, the same corner annotations, built as a single native binary on a modern GPU stack. It is not a port of Horos. Horos is Objective-C and Cocoa to the bone, so Ruthos re-implements its feature set and user interface on top of Rust libraries.
 
@@ -112,6 +112,10 @@ dicom-rs is strict and standards-based, and Ruthos leans on that. Vendor-specifi
 Ruthos is an independent project. It is not affiliated with or endorsed by the Horos Project or Nimble Co LLC. "Horos" and "OsiriX" are trademarks of their respective owners.
 
 Ruthos borrows from Horos under the terms of its licence: icons, colour lookup tables, volume-rendering presets, annotation defaults, window-level presets, and the shape of its database schema. Where Horos logic is translated into Rust, the source file is credited in a comment.
+
+### Uninstalling
+
+Ruthos installs nothing. Quit it and delete the folder you unzipped. To remove the archive as well, delete `%LOCALAPPDATA%\Ruthos` (this deletes every imported study, so export what you need first), and delete `%APPDATA%\Ruthos` for the settings.
 
 ## Code signing policy
 

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for Ruthos on Windows. Paste it into the
+  project's artifact configuration in SignPath.
+
+  The release workflow uploads ruthos.exe with actions/upload-artifact,
+  which GitHub wraps in a zip, so the configuration describes a zip with
+  one PE file. The metadata restrictions make SignPath refuse a binary
+  whose product name is not Ruthos, as the Foundation requires; the
+  workflow separately fails when the product version differs from the tag.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="ruthos.exe" product-name="Ruthos">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
