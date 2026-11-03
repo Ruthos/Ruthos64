@@ -27,7 +27,7 @@ Order of work:
 1. ~~Listener off by default.~~ Done.
 2. ~~Version resource in `ruthos.exe`.~~ Done.
 3. ~~Code signing policy and privacy statement in the README and release notes.~~ Done.
-4. Publish v0.1.0-alpha unsigned from the release workflow, so the project is released in the form to be signed. (Built and attested by the workflow; the draft waits for review and publishing.)
+4. Publish v0.1.0-alpha unsigned from the release workflow, so the project is released in the form to be signed. Done: published 3 November 2026.
 5. Apply at <https://signpath.org/apply> with the answers in `docs/signpath-application.md`, naming the repository `Ruthos/Ruthos64`, the workflow `.github/workflows/release.yml` and Mark Bowen as the approver of signing requests.
 6. Once accepted: add the secret `SIGNPATH_API_TOKEN` to the `release` environment, and the repository variables `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG` and `SIGNPATH_SIGNING_POLICY_SLUG`. In SignPath, configure the artefact as a single PE file (`ruthos.exe`) and link the GitHub trusted build system.
 7. Tag v0.1.1-alpha. The workflow builds, uploads the unsigned executable, and the signing job waits for approval of the `release` environment; SignPath then waits for approval of the signing request. After both, the workflow checks that `Get-AuthenticodeSignature` reports `Valid`, that the signer is SignPath Foundation and that the signature is timestamped, and fails otherwise.

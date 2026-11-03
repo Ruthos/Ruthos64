@@ -11,8 +11,8 @@ Copy them in; adjust anything that is no longer true.
 | OSI-approved licence, no commercial dual licensing | LGPL-3.0-only for all Ruthos code. Bundled Horos artwork is LGPL-3.0, Inter and Phosphor fonts are OFL and MIT. |
 | No proprietary components | None. The codecs (OpenJPEG, CharLS, libjpeg-turbo) are open source and statically linked; no unsigned DLLs ship. |
 | Actively maintained | Commits most days since October 2026. |
-| Already released in the form to be signed | **Publish the v0.1.0-alpha draft first.** It is a zip containing `ruthos.exe`, built by the release workflow. |
-| Functionality described on the download page | The release notes and <https://ruthos.github.io/Ruthos64/> describe it. |
+| Already released in the form to be signed | Done: v0.1.0-alpha, a zip containing `ruthos.exe` built by the release workflow, published 3 November 2026. |
+| Functionality described on the download page | Done: the release notes and <https://ruthos.github.io/Ruthos64/> (live). |
 | Uninstallation instructions | On the site and in the README: delete the folder; optionally the data and settings folders. |
 | Code signing policy on the home page and download page | README, the site (`#signing`) and the release notes. |
 | Team roles | Committers and reviewers: Mark Bowen. Approvers: Mark Bowen. |
