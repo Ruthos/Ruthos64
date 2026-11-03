@@ -47,6 +47,20 @@ pub enum Tool {
     LvMmode,
     /// A closed outline clicked point by point.
     Polygon,
+    /// The Cobb angle between two lines.
+    Cobb,
+    /// The angle between two lines that need not meet.
+    DynamicAngle,
+    /// An open outline clicked point by point: a length along a curve.
+    OpenPolygon,
+    /// A closed outline drawn freehand.
+    Pencil,
+    /// Paint a region; Alt erases.
+    Brush,
+    /// A text note.
+    Text,
+    /// Push the points of outlines to reshape them.
+    Repulsor,
 }
 
 impl Tool {
@@ -54,15 +68,22 @@ impl Tool {
     pub const NAVIGATE: [Tool; 4] = [Tool::WindowLevel, Tool::Move, Tool::Zoom, Tool::Rotate];
 
     /// What Measure draws, chosen in the Measurements menu, in its order.
-    pub const MEASURE: [Tool; 8] = [
+    pub const MEASURE: [Tool; 15] = [
         Tool::Length,
         Tool::LvMmode,
+        Tool::OpenPolygon,
         Tool::Angle,
+        Tool::Cobb,
+        Tool::DynamicAngle,
         Tool::Rectangle,
         Tool::Oval,
         Tool::Polygon,
+        Tool::Pencil,
+        Tool::Brush,
         Tool::Point,
         Tool::Arrow,
+        Tool::Text,
+        Tool::Repulsor,
     ];
 
     pub fn is_measure(self) -> bool {
@@ -72,8 +93,10 @@ impl Tool {
     /// The Measurements menu heading a measuring tool sits under.
     pub fn group(self) -> &'static str {
         match self {
-            Tool::Rectangle | Tool::Oval | Tool::Polygon => "Area",
-            Tool::Point | Tool::Arrow => "Mark",
+            Tool::Rectangle | Tool::Oval | Tool::Polygon | Tool::Pencil | Tool::Brush => "Area",
+            Tool::Angle | Tool::Cobb | Tool::DynamicAngle => "Angle",
+            Tool::Point | Tool::Arrow | Tool::Text => "Mark",
+            Tool::Repulsor => "Edit",
             _ => "Measure",
         }
     }
@@ -89,11 +112,18 @@ impl Tool {
             Tool::Polygon => "Polygon",
             Tool::Point => "Point: value or velocity",
             Tool::Arrow => "Arrow",
+            Tool::OpenPolygon => "Open polygon: length along a curve",
+            Tool::Cobb => "Cobb angle",
+            Tool::DynamicAngle => "Angle between two lines",
+            Tool::Pencil => "Pencil: freehand outline",
+            Tool::Brush => "Brush: paint a region (Alt erases)",
+            Tool::Text => "Text",
+            Tool::Repulsor => "Repulsor: push outline points",
             other => other.label(),
         }
     }
 
-    pub const ALL: [Tool; 12] = [
+    pub const ALL: [Tool; 19] = [
         Tool::WindowLevel,
         Tool::Move,
         Tool::Zoom,
@@ -106,6 +136,13 @@ impl Tool {
         Tool::Point,
         Tool::LvMmode,
         Tool::Polygon,
+        Tool::Cobb,
+        Tool::DynamicAngle,
+        Tool::OpenPolygon,
+        Tool::Pencil,
+        Tool::Brush,
+        Tool::Text,
+        Tool::Repulsor,
     ];
 
     pub fn label(self) -> &'static str {
@@ -122,6 +159,13 @@ impl Tool {
             Tool::Arrow => "Arrow",
             Tool::Point => "Point",
             Tool::LvMmode => "LV dimensions",
+            Tool::Cobb => "Cobb angle",
+            Tool::DynamicAngle => "Dynamic angle",
+            Tool::OpenPolygon => "Open polygon",
+            Tool::Pencil => "Pencil",
+            Tool::Brush => "Brush",
+            Tool::Text => "Text",
+            Tool::Repulsor => "Repulsor",
         }
     }
 
@@ -139,6 +183,10 @@ impl Tool {
             Tool::Arrow => icons::TOOL_ARROW,
             Tool::Point => icons::TOOL_POINT,
             Tool::LvMmode => icons::TOOL_LENGTH,
+            Tool::Cobb | Tool::DynamicAngle => icons::TOOL_ANGLE,
+            Tool::OpenPolygon | Tool::Pencil => icons::TOOL_LENGTH,
+            Tool::Brush | Tool::Repulsor => icons::TOOL_OVAL,
+            Tool::Text => icons::ANNOTATIONS,
         }
     }
 
@@ -158,6 +206,13 @@ impl Tool {
             Tool::Arrow => "N",
             Tool::Point => "P",
             Tool::LvMmode => "K",
+            Tool::Cobb => "Y",
+            Tool::DynamicAngle => "D",
+            Tool::OpenPolygon => "O",
+            Tool::Pencil => "S",
+            Tool::Brush => "U",
+            Tool::Text => "X",
+            Tool::Repulsor => "Q",
         }
     }
 
@@ -175,6 +230,13 @@ impl Tool {
             Key::N => Tool::Arrow,
             Key::P => Tool::Point,
             Key::K => Tool::LvMmode,
+            Key::Y => Tool::Cobb,
+            Key::D => Tool::DynamicAngle,
+            Key::O => Tool::OpenPolygon,
+            Key::S => Tool::Pencil,
+            Key::U => Tool::Brush,
+            Key::X => Tool::Text,
+            Key::Q => Tool::Repulsor,
             _ => return None,
         })
     }
@@ -193,6 +255,12 @@ impl Tool {
             Tool::Arrow => Bitmap::Arrow,
             Tool::Point => Bitmap::Point,
             Tool::LvMmode => Bitmap::Length,
+            Tool::Cobb => Bitmap::Cobb,
+            Tool::DynamicAngle => Bitmap::DynamicAngle,
+            Tool::OpenPolygon => Bitmap::Rois,
+            Tool::Pencil | Tool::Brush => Bitmap::Pencil,
+            Tool::Text => Bitmap::Text,
+            Tool::Repulsor => Bitmap::Revert,
         }
     }
 
@@ -207,8 +275,46 @@ impl Tool {
                 | Tool::Point
                 | Tool::LvMmode
                 | Tool::Polygon
+                | Tool::Cobb
+                | Tool::DynamicAngle
+                | Tool::OpenPolygon
+                | Tool::Pencil
+                | Tool::Brush
+                | Tool::Text
+                | Tool::Repulsor
         )
     }
+}
+
+/// A Cobb or dynamic angle being drawn: two drags.
+#[derive(Debug, Clone, Copy)]
+struct TwoLineDraft {
+    cobb: bool,
+    first: (Vec2, Vec2),
+    second: Option<(Vec2, Vec2)>,
+}
+
+impl TwoLineDraft {
+    fn roi(&self) -> Roi {
+        let (a, b) = self.first;
+        let (c, d) = self.second.unwrap_or((b, b));
+        Roi::new(RoiKind::TwoLines {
+            cobb: self.cobb,
+            p: [a, b, c, d],
+        })
+    }
+}
+
+/// The text box for a text note: where it goes, and the text so far.
+/// `edit` is the note being changed, by index on the frame.
+#[derive(Debug, Clone)]
+struct TextPrompt {
+    key: FrameKey,
+    at: Vec2,
+    screen: Pos2,
+    text: String,
+    edit: Option<usize>,
+    focus: bool,
 }
 
 struct AngleDraft {
@@ -366,6 +472,24 @@ pub struct ViewerState {
     mmode_draft: Option<MmodeDraft>,
     /// A polygon being clicked out, and where the next point would go.
     polygon_draft: Option<(Vec<Vec2>, Option<Vec2>)>,
+    /// The polygon being clicked out stays open (Open polygon).
+    polygon_open: bool,
+    /// Cobb or dynamic angle: the first line, then the second being drawn.
+    two_line_draft: Option<TwoLineDraft>,
+    /// A freehand outline being drawn.
+    pencil_draft: Option<Vec<Vec2>>,
+    /// Brush and Repulsor radius, in screen points.
+    pub brush_radius: f32,
+    /// The brush region being painted (index on this frame) and the last
+    /// point painted, so a fast stroke leaves no gaps.
+    brush_stroke: Option<(usize, Vec2)>,
+    /// The text box for a new or edited text note.
+    text_prompt: Option<TextPrompt>,
+    /// Where the pointer is over the image, for the brush outline.
+    tool_hover: Option<Pos2>,
+    /// The ROI Manager and ROI Info windows.
+    pub show_roi_manager: bool,
+    pub show_roi_info: bool,
     /// What the Measure tool draws, chosen in the Measurements menu.
     measure_tool: Tool,
     /// Per series: (roi id, edit time, LVID mm) of the latest lines.
@@ -504,6 +628,8 @@ pub enum MenuAction {
     AddToReport,
     OpenReport,
     Fit,
+    ToggleRoiManager,
+    ToggleRoiInfo,
 }
 
 /// The popup that assigns a ROI to a named measurement.
@@ -582,6 +708,16 @@ impl ViewerState {
             angle_draft: None,
             mmode_draft: None,
             polygon_draft: None,
+            polygon_open: false,
+            two_line_draft: None,
+            pencil_draft: None,
+            brush_radius: 12.0,
+            brush_stroke: None,
+            text_prompt: None,
+            tool_hover: None,
+            // Developer option: `RUTHOS_ROI_WINDOWS=1` opens ROI Manager and ROI Info.
+            show_roi_manager: std::env::var_os("RUTHOS_ROI_WINDOWS").is_some(),
+            show_roi_info: std::env::var_os("RUTHOS_ROI_WINDOWS").is_some(),
             measure_tool: Tool::Length,
             mmode_latest: HashMap::new(),
             mmode_rows: HashMap::new(),
@@ -926,6 +1062,298 @@ impl ViewerState {
         self.status = Some((text.into(), Instant::now()));
     }
 
+    /// The text box for a text note, at the point clicked.
+    fn text_prompt_window(&mut self, ctx: &egui::Context) {
+        let Some(mut tp) = self.text_prompt.take() else { return };
+        let mut done: Option<bool> = None;
+        egui::Area::new(egui::Id::unique(("ruthos-text-prompt", self.id)))
+            .fixed_pos(tp.screen + Vec2::new(0.0, -28.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(&mut tp.text)
+                                .desired_width(220.0)
+                                .hint_text("Text"),
+                        );
+                        if tp.focus {
+                            edit.request_focus();
+                            tp.focus = false;
+                        }
+                        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        if ui.button(if tp.edit.is_some() { "Change" } else { "Add" }).clicked() || enter {
+                            done = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                            done = Some(false);
+                        }
+                    });
+                });
+            });
+        match done {
+            None => self.text_prompt = Some(tp),
+            Some(false) => {}
+            Some(true) => {
+                let text = tp.text.trim().to_string();
+                let list = self.rois.entry(tp.key).or_default();
+                match tp.edit {
+                    Some(i) if i < list.len() => {
+                        if text.is_empty() {
+                            list.remove(i);
+                            self.selected_roi = None;
+                        } else {
+                            list[i].name = Some(text);
+                        }
+                    }
+                    _ if !text.is_empty() => {
+                        let mut roi = Roi::new(RoiKind::Text { p: tp.at });
+                        roi.name = Some(text);
+                        list.push(roi);
+                        self.selected_roi = Some(list.len() - 1);
+                    }
+                    _ => {}
+                }
+                self.dirty_rois.insert(tp.key);
+            }
+        }
+    }
+
+    /// ROI Manager: every measurement on the current image, to select,
+    /// rename (in ROI Info) or delete.
+    fn roi_manager_window(&mut self, ctx: &egui::Context) {
+        if !self.show_roi_manager {
+            return;
+        }
+        let Some(key) = self.current_key() else { return };
+        let frame = self.frames.get(&key).cloned();
+        let locked = self.active_locked();
+        let mut open = true;
+        let mut select = None;
+        let mut delete = None;
+        let mut delete_all = false;
+        egui::Window::new("ROI Manager")
+            .id(egui::Id::unique(("ruthos-roi-manager", self.id)))
+            .open(&mut open)
+            .default_size([420.0, 260.0])
+            .show(ctx, |ui| {
+                let list = self.rois.get(&key).cloned().unwrap_or_default();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} on this image{}",
+                        match list.len() {
+                            0 => "No measurements".to_string(),
+                            1 => "1 measurement".to_string(),
+                            n => format!("{n} measurements"),
+                        },
+                        if self.current_image().is_some_and(|i| i.number_of_frames > 1) {
+                            format!(", frame {}", key.frame + 1)
+                        } else {
+                            String::new()
+                        }
+                    ))
+                    .color(Color32::from_gray(110)),
+                );
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    egui::Grid::new("roi-manager-grid")
+                        .num_columns(4)
+                        .striped(true)
+                        .spacing([10.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("Type").strong());
+                            ui.label(egui::RichText::new("Name").strong());
+                            ui.label(egui::RichText::new("Value").strong());
+                            ui.label("");
+                            ui.end_row();
+                            for (i, roi) in list.iter().enumerate() {
+                                let selected = self.selected_roi == Some(i);
+                                if ui.selectable_label(selected, kind_label(&roi.kind)).clicked() {
+                                    select = Some(i);
+                                }
+                                ui.label(roi.name.clone().unwrap_or_default());
+                                let value = frame
+                                    .as_ref()
+                                    .map(|f| roi.value_text(f).replace('\n', "  "))
+                                    .unwrap_or_default();
+                                ui.label(value);
+                                if ui.add_enabled(!locked, egui::Button::new("Delete").small()).clicked() {
+                                    delete = Some(i);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!locked && !list.is_empty(), egui::Button::new("Delete all"))
+                        .clicked()
+                    {
+                        delete_all = true;
+                    }
+                    if ui.button("ROI Info").clicked() {
+                        self.show_roi_info = true;
+                    }
+                });
+            });
+        self.show_roi_manager = open;
+        if let Some(i) = select {
+            self.selected_roi = Some(i);
+            self.active_handle = 0;
+            self.show_roi_info = true;
+        }
+        if let Some(i) = delete {
+            if let Some(list) = self.rois.get_mut(&key) {
+                if i < list.len() {
+                    list.remove(i);
+                    self.dirty_rois.insert(key);
+                }
+            }
+            self.selected_roi = None;
+        }
+        if delete_all {
+            self.rois.remove(&key);
+            self.selected_roi = None;
+            self.dirty_rois.insert(key);
+        }
+    }
+
+    /// ROI Info: the selected measurement's name, value and pixel
+    /// statistics (Horos's ROI Info window).
+    fn roi_info_window(&mut self, ctx: &egui::Context, shared: &Shared) {
+        if !self.show_roi_info {
+            return;
+        }
+        let key = self.current_key();
+        let frame = key.and_then(|k| self.frames.get(&k).cloned());
+        let locked = self.active_locked();
+        let selected = key
+            .zip(self.selected_roi)
+            .and_then(|(k, i)| self.rois.get(&k).and_then(|l| l.get(i)).cloned());
+        let mut open = true;
+        let mut new_name: Option<String> = None;
+        let mut delete = false;
+        let mut histogram = false;
+        egui::Window::new("ROI Info")
+            .id(egui::Id::unique(("ruthos-roi-info", self.id)))
+            .open(&mut open)
+            .default_width(300.0)
+            .default_pos([620.0, 90.0])
+            .resizable(false)
+            .show(ctx, |ui| {
+                let (Some(roi), Some(frame)) = (&selected, &frame) else {
+                    ui.label("Select a measurement to see its details.");
+                    return;
+                };
+                egui::Grid::new("roi-info-grid")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Type");
+                        ui.label(kind_label(&roi.kind));
+                        ui.end_row();
+                        ui.label(if matches!(roi.kind, RoiKind::Text { .. }) {
+                            "Text"
+                        } else {
+                            "Name"
+                        });
+                        let mut name = roi.name.clone().unwrap_or_default();
+                        let edit = ui.add_enabled(!locked, egui::TextEdit::singleline(&mut name).desired_width(180.0));
+                        if edit.changed() {
+                            new_name = Some(name);
+                        }
+                        ui.end_row();
+                        let value = roi.value_text(frame);
+                        if !value.is_empty() {
+                            ui.label("Value");
+                            ui.label(value);
+                            ui.end_row();
+                        }
+                        if let Some(st) = roi.stats(frame) {
+                            ui.label("Pixels");
+                            ui.label(st.count.to_string());
+                            ui.end_row();
+                            ui.label("Mean");
+                            ui.label(format!("{:.2}", st.mean));
+                            ui.end_row();
+                            ui.label("SD");
+                            ui.label(format!("{:.2}", st.sd));
+                            ui.end_row();
+                            ui.label("Min / Max");
+                            ui.label(format!("{:.0} / {:.0}", st.min, st.max));
+                            ui.end_row();
+                            if let Some(a) = st.area_mm2 {
+                                ui.label("Area");
+                                ui.label(if a >= 100.0 {
+                                    format!("{:.2} cm\u{b2}", a / 100.0)
+                                } else {
+                                    format!("{a:.1} mm\u{b2}")
+                                });
+                                ui.end_row();
+                            }
+                        }
+                        if let Some(per) = perimeter_mm(roi, frame) {
+                            ui.label("Perimeter");
+                            ui.label(if per >= 10.0 {
+                                format!("{:.2} cm", per / 10.0)
+                            } else {
+                                format!("{per:.1} mm")
+                            });
+                            ui.end_row();
+                        }
+                        let m = roi.measure(frame);
+                        if let Some(b) = m.basis {
+                            ui.label("Scale");
+                            ui.label(b.label());
+                            ui.end_row();
+                        }
+                    });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!locked, egui::Button::new("Delete")).clicked() {
+                        delete = true;
+                    }
+                    let closed = roi.area_px().is_some()
+                        || matches!(roi.kind, RoiKind::Length { .. } | RoiKind::Polyline { .. });
+                    if ui
+                        .add_enabled(closed && !frame.is_color(), egui::Button::new("Histogram and plot"))
+                        .on_hover_text("Pixel values inside an area, or along a line")
+                        .clicked()
+                    {
+                        histogram = true;
+                    }
+                });
+            });
+        self.show_roi_info = open;
+        let (Some(key), Some(sel)) = (key, self.selected_roi) else {
+            return;
+        };
+        if let Some(name) = new_name {
+            if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(sel)) {
+                let name = name.trim().to_string();
+                if !matches!(roi.kind, RoiKind::Text { .. }) {
+                    // A name typed by hand is not a library definition.
+                    roi.def_key = None;
+                    roi.quantity = None;
+                }
+                roi.name = (!name.is_empty()).then_some(name);
+                self.dirty_rois.insert(key);
+            }
+        }
+        if delete {
+            if let Some(list) = self.rois.get_mut(&key) {
+                if sel < list.len() {
+                    list.remove(sel);
+                    self.dirty_rois.insert(key);
+                }
+            }
+            self.selected_roi = None;
+        }
+        if histogram {
+            self.open_histogram(shared, key, sel);
+        }
+    }
+
     /// Whether there is anything to make a movie of: a loop, or a series
     /// of more than one image.
     fn can_export_movie(&self) -> bool {
@@ -1009,6 +1437,8 @@ impl ViewerState {
         self.movie = Some(MovieJob { task, progress, cancel });
         self.set_status("Writing movie…");
     }
+
+    fn open_histogram(&mut self, _shared: &Shared, _key: FrameKey, _index: usize) {}
 
     /// Progress and the end of a movie export.
     fn pump_movie(&mut self) {
@@ -1531,6 +1961,13 @@ impl ViewerState {
             }
         });
         ui.separator();
+        if menu_item(ui, "ROI Manager", self.show_roi_manager).clicked() {
+            pick(ui, MenuAction::ToggleRoiManager);
+        }
+        if menu_item(ui, "ROI Info", self.show_roi_info).clicked() {
+            pick(ui, MenuAction::ToggleRoiInfo);
+        }
+        ui.separator();
         if menu_item(ui, "Show measurements", self.show_rois).clicked() {
             pick(ui, MenuAction::ToggleRois);
         }
@@ -1643,6 +2080,8 @@ impl ViewerState {
                 }
             }
             MenuAction::ToggleBasisPanel => self.basis_panel = !self.basis_panel,
+            MenuAction::ToggleRoiManager => self.show_roi_manager = !self.show_roi_manager,
+            MenuAction::ToggleRoiInfo => self.show_roi_info = !self.show_roi_info,
             MenuAction::ToggleRois => self.show_rois = !self.show_rois,
             MenuAction::ToggleLabels => self.show_labels = !self.show_labels,
             MenuAction::CopyValues => {
@@ -2083,12 +2522,21 @@ impl ViewerState {
             "tool:point" => MenuAction::SetTool(Tool::Point),
             "tool:lvmmode" => MenuAction::SetTool(Tool::LvMmode),
             "tool:polygon" => MenuAction::SetTool(Tool::Polygon),
+            "tool:cobb" => MenuAction::SetTool(Tool::Cobb),
+            "tool:dynangle" => MenuAction::SetTool(Tool::DynamicAngle),
+            "tool:openpolygon" => MenuAction::SetTool(Tool::OpenPolygon),
+            "tool:pencil" => MenuAction::SetTool(Tool::Pencil),
+            "tool:brush" => MenuAction::SetTool(Tool::Brush),
+            "tool:text" => MenuAction::SetTool(Tool::Text),
+            "tool:repulsor" => MenuAction::SetTool(Tool::Repulsor),
             "undo" => MenuAction::Undo,
             "delete" => MenuAction::DeleteSelected,
             "delete-all" => MenuAction::DeleteAll,
             "calibrate" => MenuAction::Calibrate,
             "remove-calibration" => MenuAction::RemoveCalibration,
             "basis" => MenuAction::ToggleBasisPanel,
+            "roi-manager" => MenuAction::ToggleRoiManager,
+            "roi-info" => MenuAction::ToggleRoiInfo,
             "show-rois" => MenuAction::ToggleRois,
             "show-labels" => MenuAction::ToggleLabels,
             "copy" => MenuAction::CopyValues,
@@ -2106,6 +2554,10 @@ impl ViewerState {
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("viewer");
         self.pump_movie();
+        let ctx = ui.ctx().clone();
+        self.text_prompt_window(&ctx);
+        self.roi_manager_window(&ctx);
+        self.roi_info_window(&ctx, shared);
         // Developer option: `RUTHOS_EXPORT_MOVIE=<file.mp4>` writes the
         // current loop or series as a movie once the viewer is showing it.
         if !self.dev_movie_done && self.current_key().is_some_and(|k| self.frames.contains_key(&k)) {
@@ -2858,8 +3310,13 @@ impl ViewerState {
                 }
                 return;
             }
-            if enter && pts.len() >= 3 {
-                let roi = Roi::new(RoiKind::Polygon { points: pts.clone() });
+            let open = self.polygon_open;
+            if enter && pts.len() >= if open { 2 } else { 3 } {
+                let roi = Roi::new(if open {
+                    RoiKind::Polyline { points: pts.clone() }
+                } else {
+                    RoiKind::Polygon { points: pts.clone() }
+                });
                 self.polygon_draft = None;
                 if let (false, Some(key)) = (roi.is_degenerate(), self.current_key()) {
                     let list = self.rois.entry(key).or_default();
@@ -3373,6 +3830,19 @@ impl ViewerState {
             if let Some((pts, hover)) = &self.polygon_draft {
                 draw_polygon_draft(&painter, &transform, pts, *hover, theme::ROI_DRAFT);
             }
+            if let Some(d) = &self.two_line_draft {
+                d.roi().draw(&painter, &transform, &frame, theme::ROI_DRAFT, false);
+            }
+            if let Some(pts) = &self.pencil_draft {
+                let screen: Vec<Pos2> = pts.iter().map(|p| transform.image_to_screen(*p)).collect();
+                painter.line(screen, egui::Stroke::new(1.5, theme::ROI_DRAFT));
+            }
+            // The brush and repulsor outline.
+            if matches!(self.tool, Tool::Brush | Tool::Repulsor) {
+                if let Some(h) = self.tool_hover.filter(|h| transform.rect.contains(*h)) {
+                    painter.circle_stroke(h, self.brush_radius, egui::Stroke::new(1.0, theme::ROI_DRAFT));
+                }
+            }
 
             // The loupe, with the geometry being placed drawn through it.
             if let (true, Some(target), Some(source)) = (self.loupe.enabled, self.loupe_target, loupe_source.as_ref()) {
@@ -3584,6 +4054,25 @@ impl ViewerState {
                     image_point: t.screen_to_image(hp),
                     pointer: hp,
                 });
+            }
+        }
+
+        self.tool_hover = hover;
+        // Drafts of another tool are dropped when the tool changes.
+        if !matches!(self.tool, Tool::Cobb | Tool::DynamicAngle) {
+            self.two_line_draft = None;
+        }
+        if self.tool != Tool::Pencil {
+            self.pencil_draft = None;
+        }
+        // [ and ] size the brush and the repulsor.
+        if matches!(self.tool, Tool::Brush | Tool::Repulsor) && !ui.ctx().memory(|m| m.focused().is_some()) {
+            let (smaller, larger) = ui.input(|i| (i.key_pressed(Key::OpenBracket), i.key_pressed(Key::CloseBracket)));
+            if smaller {
+                self.brush_radius = (self.brush_radius / 1.25).max(2.0);
+            }
+            if larger {
+                self.brush_radius = (self.brush_radius * 1.25).min(200.0);
             }
         }
 
@@ -3812,9 +4301,11 @@ impl ViewerState {
                     }
                 }
             }
-            Tool::Polygon => {
+            Tool::Polygon | Tool::OpenPolygon => {
                 // Click point by point; close with a double-click, a click
-                // on the first point, or Enter.
+                // on the first point, or Enter. An open polygon ends with a
+                // double-click or Enter and is measured along its length.
+                let open = tool == Tool::OpenPolygon;
                 if let (Some(hp), Some((_, hover_pt))) = (hover, &mut self.polygon_draft) {
                     let ip = t.screen_to_image(hp);
                     *hover_pt = Some(ip);
@@ -3826,23 +4317,31 @@ impl ViewerState {
                 let double = response.double_clicked_by(button);
                 if response.clicked_by(button) || double {
                     if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
-                        let close_to_first = self.polygon_draft.as_ref().is_some_and(|(pts, _)| {
-                            pts.len() >= 3 && pos.is_some_and(|sp| (t.image_to_screen(pts[0]) - sp).length() < 8.0)
-                        });
+                        let close_to_first = !open
+                            && self.polygon_draft.as_ref().is_some_and(|(pts, _)| {
+                                pts.len() >= 3 && pos.is_some_and(|sp| (t.image_to_screen(pts[0]) - sp).length() < 8.0)
+                            });
                         match &mut self.polygon_draft {
                             None if !double => {
                                 if !self.try_select_roi(t, key, pos) {
                                     self.polygon_draft = Some((vec![p], None));
-                                    self.set_status(
-                                        "Polygon: click each point; double-click, click the first point or press Enter to close",
-                                    );
+                                    self.polygon_open = open;
+                                    self.set_status(if open {
+                                        "Open polygon: click each point; double-click or press Enter to finish"
+                                    } else {
+                                        "Polygon: click each point; double-click, click the first point or press Enter to close"
+                                    });
                                 }
                             }
                             None => {}
                             Some((pts, _)) => {
                                 if double || close_to_first {
-                                    if pts.len() >= 3 {
-                                        let roi = Roi::new(RoiKind::Polygon { points: pts.clone() });
+                                    if pts.len() >= if open { 2 } else { 3 } {
+                                        let roi = Roi::new(if open {
+                                            RoiKind::Polyline { points: pts.clone() }
+                                        } else {
+                                            RoiKind::Polygon { points: pts.clone() }
+                                        });
                                         self.polygon_draft = None;
                                         if !roi.is_degenerate() {
                                             let list = self.rois.entry(*key).or_default();
@@ -3856,6 +4355,222 @@ impl ViewerState {
                                 }
                             }
                         }
+                    }
+                }
+            }
+            Tool::Cobb | Tool::DynamicAngle => {
+                // Drag the first line, then drag the second.
+                let cobb = tool == Tool::Cobb;
+                if response.drag_started_by(button) {
+                    let origin = press_origin(ui).or(pos);
+                    if let Some(p) = origin.map(|p| t.screen_to_image(p)) {
+                        match &mut self.two_line_draft {
+                            Some(d) if d.cobb == cobb => d.second = Some((p, p)),
+                            _ => {
+                                if !self.try_select_roi(t, key, origin) {
+                                    self.two_line_draft = Some(TwoLineDraft {
+                                        cobb,
+                                        first: (p, p),
+                                        second: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                if response.dragged_by(button) {
+                    if let (Some(d), Some(sp)) = (&mut self.two_line_draft, pos) {
+                        let p = t.screen_to_image(sp);
+                        match &mut d.second {
+                            Some((_, b)) => *b = p,
+                            None => d.first.1 = p,
+                        }
+                        self.loupe_target = Some(LoupeTarget {
+                            image_point: p,
+                            pointer: sp,
+                        });
+                    }
+                }
+                if response.drag_stopped_by(button) {
+                    if let Some(d) = self.two_line_draft {
+                        match d.second {
+                            None if (d.first.1 - d.first.0).length() < 1.0 => self.two_line_draft = None,
+                            None => self.set_status("Now drag the second line"),
+                            Some(_) => {
+                                self.two_line_draft = None;
+                                let roi = d.roi();
+                                if !roi.is_degenerate() {
+                                    let list = self.rois.entry(*key).or_default();
+                                    list.push(roi);
+                                    self.selected_roi = Some(list.len() - 1);
+                                    self.dirty_rois.insert(*key);
+                                }
+                            }
+                        }
+                    }
+                } else if response.clicked_by(button) && self.two_line_draft.is_none() {
+                    self.try_select_roi(t, key, pos);
+                }
+            }
+            Tool::Pencil => {
+                // Drag around the outline; it closes when the button is let go.
+                if response.drag_started_by(button) {
+                    let origin = press_origin(ui).or(pos);
+                    if let Some(p) = origin.map(|p| t.screen_to_image(p)) {
+                        self.pencil_draft = Some(vec![p]);
+                    }
+                }
+                if response.dragged_by(button) {
+                    if let (Some(pts), Some(sp)) = (&mut self.pencil_draft, pos) {
+                        let last = pts.last().map(|l| t.image_to_screen(*l));
+                        if last.is_none_or(|l| (l - sp).length() >= 2.0) {
+                            pts.push(t.screen_to_image(sp));
+                        }
+                    }
+                }
+                if response.drag_stopped_by(button) {
+                    if let Some(pts) = self.pencil_draft.take() {
+                        let roi = Roi::new(RoiKind::Pencil { points: pts });
+                        if !roi.is_degenerate() {
+                            let list = self.rois.entry(*key).or_default();
+                            list.push(roi);
+                            self.selected_roi = Some(list.len() - 1);
+                            self.dirty_rois.insert(*key);
+                        }
+                    }
+                } else if response.clicked_by(button) {
+                    self.try_select_roi(t, key, pos);
+                }
+            }
+            Tool::Brush => {
+                // Paint into the selected brush region, or a new one. Alt
+                // erases. The radius follows the zoom, so the brush is the
+                // same size on screen.
+                let erase = ui.input(|i| i.modifiers.alt);
+                let radius = self.brush_radius / t.state.zoom.max(1e-6);
+                if response.drag_started_by(button) || response.clicked_by(button) {
+                    let origin = press_origin(ui).or(pos);
+                    if let Some(p) = origin.map(|p| t.screen_to_image(p)) {
+                        let list = self.rois.entry(*key).or_default();
+                        let target = self
+                            .selected_roi
+                            .filter(|i| matches!(list.get(*i).map(|r| &r.kind), Some(RoiKind::Brush { .. })));
+                        let index = match target {
+                            Some(i) => i,
+                            None if erase => {
+                                // Erase from whichever region is under the pointer.
+                                match list
+                                    .iter()
+                                    .position(|r| matches!(&r.kind, RoiKind::Brush { mask } if mask.contains(p)))
+                                {
+                                    Some(i) => i,
+                                    None => return,
+                                }
+                            }
+                            None => {
+                                list.push(Roi::new(RoiKind::Brush {
+                                    mask: ruthos_brush_mask(),
+                                }));
+                                list.len() - 1
+                            }
+                        };
+                        if let Some(RoiKind::Brush { mask }) = list.get_mut(index).map(|r| &mut r.kind) {
+                            mask.paint(p, radius, erase);
+                        }
+                        self.selected_roi = Some(index);
+                        self.brush_stroke = Some((index, p));
+                        self.dirty_rois.insert(*key);
+                    }
+                }
+                if response.dragged_by(button) {
+                    if let (Some((index, last)), Some(sp)) = (self.brush_stroke, pos) {
+                        let p = t.screen_to_image(sp);
+                        if let Some(RoiKind::Brush { mask }) = self
+                            .rois
+                            .get_mut(key)
+                            .and_then(|l| l.get_mut(index))
+                            .map(|r| &mut r.kind)
+                        {
+                            // Dabs at most half a radius apart along the stroke.
+                            let steps = ((p - last).length() / (radius * 0.5).max(0.5)).ceil().max(1.0) as usize;
+                            for k in 1..=steps {
+                                mask.paint(last + (p - last) * (k as f32 / steps as f32), radius, erase);
+                            }
+                        }
+                        self.brush_stroke = Some((index, p));
+                        self.dirty_rois.insert(*key);
+                    }
+                }
+                if response.drag_stopped_by(button) || response.clicked_by(button) {
+                    if let Some((index, _)) = self.brush_stroke.take() {
+                        // A region erased to nothing goes.
+                        let empty = self
+                            .rois
+                            .get(key)
+                            .and_then(|l| l.get(index))
+                            .is_some_and(|r| r.is_degenerate());
+                        if empty {
+                            if let Some(list) = self.rois.get_mut(key) {
+                                list.remove(index);
+                            }
+                            self.selected_roi = None;
+                        }
+                    }
+                }
+            }
+            Tool::Repulsor => {
+                // Points of outlines inside the circle are pushed to its
+                // edge; where points spread apart, new ones are added so
+                // the outline stays smooth.
+                if response.dragged_by(button) {
+                    if let Some(sp) = pos {
+                        let c = t.screen_to_image(sp);
+                        let radius = self.brush_radius / t.state.zoom.max(1e-6);
+                        let mut changed = false;
+                        if let Some(list) = self.rois.get_mut(key) {
+                            for roi in list.iter_mut() {
+                                let closed = matches!(roi.kind, RoiKind::Polygon { .. } | RoiKind::Pencil { .. });
+                                let points = match &mut roi.kind {
+                                    RoiKind::Polygon { points }
+                                    | RoiKind::Pencil { points }
+                                    | RoiKind::Polyline { points } => points,
+                                    _ => continue,
+                                };
+                                changed |= repulse(points, c, radius, closed);
+                            }
+                        }
+                        if changed {
+                            self.dirty_rois.insert(*key);
+                        }
+                    }
+                }
+            }
+            Tool::Text => {
+                if response.clicked_by(button) || response.double_clicked_by(button) {
+                    if self.try_select_roi(t, key, pos) {
+                        // A second click on a selected note edits it.
+                        let index = self.selected_roi.unwrap_or(0);
+                        if let Some(roi) = self.rois.get(key).and_then(|l| l.get(index)) {
+                            if let (RoiKind::Text { p }, true) = (&roi.kind, response.double_clicked_by(button)) {
+                                self.text_prompt = Some(TextPrompt {
+                                    key: *key,
+                                    at: *p,
+                                    screen: t.image_to_screen(*p),
+                                    text: roi.name.clone().unwrap_or_default(),
+                                    edit: Some(index),
+                                    focus: true,
+                                });
+                            }
+                        }
+                    } else if let Some(sp) = pos {
+                        self.text_prompt = Some(TextPrompt {
+                            key: *key,
+                            at: t.screen_to_image(sp),
+                            screen: sp,
+                            text: String::new(),
+                            edit: None,
+                            focus: true,
+                        });
                     }
                 }
             }
@@ -4042,7 +4757,104 @@ fn kind_label(kind: &RoiKind) -> &'static str {
         RoiKind::Oval { .. } => "Ellipse",
         RoiKind::Arrow { .. } => "Arrow",
         RoiKind::Point { .. } => "Point",
+        RoiKind::TwoLines { cobb: true, .. } => "Cobb angle",
+        RoiKind::TwoLines { cobb: false, .. } => "Dynamic angle",
+        RoiKind::Polyline { .. } => "Open polygon",
+        RoiKind::Pencil { .. } => "Pencil",
+        RoiKind::Brush { .. } => "Brush",
+        RoiKind::Text { .. } => "Text",
     }
+}
+
+/// The outline length of a closed measurement, in millimetres, when the
+/// image is calibrated.
+fn perimeter_mm(roi: &Roi, frame: &Frame) -> Option<f64> {
+    let outline: Vec<Vec2> = match &roi.kind {
+        RoiKind::Polygon { points } | RoiKind::Pencil { points } => points.clone(),
+        RoiKind::Rect { a, b } => vec![*a, Vec2::new(b.x, a.y), *b, Vec2::new(a.x, b.y)],
+        RoiKind::Oval { a, b } => {
+            let c = (*a + *b) / 2.0;
+            let (rx, ry) = (((b.x - a.x) / 2.0).abs(), ((b.y - a.y) / 2.0).abs());
+            (0..96)
+                .map(|i| {
+                    let t = i as f32 / 96.0 * std::f32::consts::TAU;
+                    c + Vec2::new(rx * t.cos(), ry * t.sin())
+                })
+                .collect()
+        }
+        _ => return None,
+    };
+    if outline.len() < 3 {
+        return None;
+    }
+    let mut total = 0.0;
+    for i in 0..outline.len() {
+        let (p, q) = (outline[i], outline[(i + 1) % outline.len()]);
+        total += frame
+            .meta
+            .length([p.x as f64, p.y as f64], [q.x as f64, q.y as f64])
+            .ok()?
+            .mm;
+    }
+    Some(total)
+}
+
+fn ruthos_brush_mask() -> crate::roi::BrushMask {
+    crate::roi::BrushMask::default()
+}
+
+/// Push the points of an outline that lie within `radius` of `c` out to
+/// the circle, and add points where neighbours have spread more than half
+/// a radius apart. Returns whether anything moved.
+fn repulse(points: &mut Vec<Vec2>, c: Vec2, radius: f32, closed: bool) -> bool {
+    let push = |points: &mut Vec<Vec2>| {
+        let mut moved = false;
+        for q in points.iter_mut() {
+            let d = *q - c;
+            let len = d.length();
+            if len < radius - 1e-4 {
+                let dir = if len > 1e-4 { d / len } else { Vec2::X };
+                *q = c + dir * radius;
+                moved = true;
+            }
+        }
+        moved
+    };
+    if !push(points) {
+        return false;
+    }
+    // Fill the gaps the push opened, then push the new points out too;
+    // a few rounds settle the outline around the circle.
+    let gap = (radius * 0.5).max(1.0);
+    for _ in 0..12 {
+        let n = points.len();
+        let mut out = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let a = points[i];
+            out.push(a);
+            let next = if i + 1 < n {
+                Some(points[i + 1])
+            } else if closed {
+                points.first().copied()
+            } else {
+                None
+            };
+            if let Some(b) = next {
+                let len = (b - a).length();
+                if len > gap {
+                    let k = (len / gap).ceil() as usize;
+                    for j in 1..k {
+                        out.push(a + (b - a) * (j as f32 / k as f32));
+                    }
+                }
+            }
+        }
+        *points = out;
+        if !push(points) {
+            break;
+        }
+    }
+    true
 }
 
 fn steps_nonzero(steps: f32) -> bool {
@@ -4062,4 +4874,22 @@ fn draft_kind(tool: Tool, a: Vec2, b: Vec2) -> Option<RoiKind> {
 #[allow(dead_code)]
 fn rect_from_points(a: Pos2, b: Pos2) -> Rect {
     Rect::from_two_pos(a, b)
+}
+
+#[cfg(test)]
+mod repulsor_tests {
+    use super::*;
+
+    #[test]
+    fn the_repulsor_pushes_points_out_and_keeps_the_outline_smooth() {
+        let mut pts = vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)];
+        assert!(!repulse(&mut pts, Vec2::new(50.0, 50.0), 5.0, true), "nothing near");
+        // A circle pressed into the bottom edge, a little off its line.
+        let c = Vec2::new(8.0, -1.0);
+        assert!(repulse(&mut pts, c, 4.0, true));
+        assert!(pts.iter().all(|p| (*p - c).length() >= 4.0 - 1e-3));
+        // Points were added where the gaps opened up.
+        assert!(pts.len() > 3);
+        assert!(pts.windows(2).all(|w| (w[1] - w[0]).length() <= 4.0 + 1e-3));
+    }
 }

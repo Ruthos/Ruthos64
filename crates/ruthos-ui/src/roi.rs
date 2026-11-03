@@ -54,6 +54,196 @@ pub enum RoiKind {
     Point {
         p: Vec2,
     },
+    /// Two lines, `p[0]-p[1]` and `p[2]-p[3]`, and the angle between them.
+    /// Cobb: the acute angle (spine curvature, limb axes), drawn with the
+    /// perpendiculars that meet at it. Otherwise the dynamic angle, 0 to
+    /// 180 degrees as the lines were drawn, with both lines extended to
+    /// where they cross.
+    TwoLines {
+        cobb: bool,
+        p: [Vec2; 4],
+    },
+    /// An open outline clicked point by point: its length.
+    Polyline {
+        points: Vec<Vec2>,
+    },
+    /// A closed outline drawn freehand (Pencil).
+    Pencil {
+        points: Vec<Vec2>,
+    },
+    /// A painted region (Brush).
+    Brush {
+        mask: BrushMask,
+    },
+    /// A text note at a point; the text is the measurement's name.
+    Text {
+        p: Vec2,
+    },
+}
+
+/// A painted region, row by row: for each row `y`, sorted half-open runs
+/// of columns `[x0, x1)`, relative to `origin` so the region can be moved
+/// by fractions of a pixel while it is dragged.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BrushMask {
+    pub origin: Vec2,
+    pub rows: std::collections::BTreeMap<i32, Vec<(i32, i32)>>,
+}
+
+impl BrushMask {
+    /// Paint (or erase) a disc of `radius` image pixels at `centre`.
+    pub fn paint(&mut self, centre: Vec2, radius: f32, erase: bool) {
+        let local = centre - self.origin;
+        let r = radius.max(0.5);
+        let y0 = (local.y - r).floor() as i32;
+        let y1 = (local.y + r).ceil() as i32;
+        for y in y0..=y1 {
+            let dy = y as f32 + 0.5 - local.y;
+            if dy.abs() > r {
+                continue;
+            }
+            let w = (r * r - dy * dy).sqrt();
+            let (x0, x1) = ((local.x - w).round() as i32, (local.x + w).round() as i32);
+            if x1 <= x0 {
+                continue;
+            }
+            let row = self.rows.entry(y).or_default();
+            if erase {
+                let mut out = Vec::with_capacity(row.len() + 1);
+                for &(a, b) in row.iter() {
+                    if b <= x0 || a >= x1 {
+                        out.push((a, b));
+                        continue;
+                    }
+                    if a < x0 {
+                        out.push((a, x0));
+                    }
+                    if b > x1 {
+                        out.push((x1, b));
+                    }
+                }
+                *row = out;
+            } else {
+                row.push((x0, x1));
+                row.sort_unstable();
+                let mut merged: Vec<(i32, i32)> = Vec::with_capacity(row.len());
+                for &(a, b) in row.iter() {
+                    match merged.last_mut() {
+                        Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                        _ => merged.push((a, b)),
+                    }
+                }
+                *row = merged;
+            }
+        }
+        self.rows.retain(|_, v| !v.is_empty());
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Painted pixels.
+    pub fn area(&self) -> f64 {
+        self.rows
+            .values()
+            .flat_map(|v| v.iter())
+            .map(|(a, b)| (b - a) as f64)
+            .sum()
+    }
+
+    /// The centre of the painted pixels, in image coordinates.
+    pub fn centre(&self) -> Vec2 {
+        let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
+        for (y, runs) in &self.rows {
+            for (a, b) in runs {
+                let len = (b - a) as f64;
+                sx += (*a as f64 + *b as f64) / 2.0 * len;
+                sy += (*y as f64 + 0.5) * len;
+                n += len;
+            }
+        }
+        if n == 0.0 {
+            return self.origin;
+        }
+        self.origin + Vec2::new((sx / n) as f32, (sy / n) as f32)
+    }
+
+    pub fn contains(&self, p: Vec2) -> bool {
+        let l = p - self.origin;
+        let (x, y) = (l.x.floor() as i32, l.y.floor() as i32);
+        self.rows
+            .get(&y)
+            .is_some_and(|runs| runs.iter().any(|(a, b)| x >= *a && x < *b))
+    }
+
+    /// The image pixels painted, as (column, row) of each pixel's
+    /// top-left corner.
+    pub fn pixels(&self) -> impl Iterator<Item = (i64, i64)> + '_ {
+        let (ox, oy) = (self.origin.x.round() as i64, self.origin.y.round() as i64);
+        self.rows.iter().flat_map(move |(y, runs)| {
+            runs.iter()
+                .flat_map(move |(a, b)| (*a..*b).map(move |x| (ox + x as i64, oy + *y as i64)))
+        })
+    }
+
+    /// Storage form: each run as two points, its left and right ends.
+    pub fn to_points(&self) -> Vec<Vec2> {
+        let o = Vec2::new(self.origin.x.round(), self.origin.y.round());
+        let mut out = Vec::new();
+        for (y, runs) in &self.rows {
+            for (a, b) in runs {
+                out.push(o + Vec2::new(*a as f32, *y as f32));
+                out.push(o + Vec2::new(*b as f32, *y as f32));
+            }
+        }
+        out
+    }
+
+    pub fn from_points(points: &[Vec2]) -> Self {
+        let mut m = BrushMask::default();
+        for pair in points.chunks_exact(2) {
+            let y = pair[0].y.round() as i32;
+            let (a, b) = (pair[0].x.round() as i32, pair[1].x.round() as i32);
+            if b > a {
+                m.rows.entry(y).or_default().push((a, b));
+            }
+        }
+        for runs in m.rows.values_mut() {
+            runs.sort_unstable();
+        }
+        m
+    }
+}
+
+/// Where two lines cross, if they are not parallel.
+pub fn line_intersection(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<Vec2> {
+    let r = b - a;
+    let s = d - c;
+    let denom = r.x * s.y - r.y * s.x;
+    if denom.abs() < 1e-6 {
+        return None;
+    }
+    let t = ((c - a).x * s.y - (c - a).y * s.x) / denom;
+    Some(a + r * t)
+}
+
+/// The angle between two lines in degrees, corrected for anisotropic
+/// pixel spacing: 0 to 180 by direction, or 0 to 90 for a Cobb angle.
+pub fn two_line_angle(p: &[Vec2; 4], cobb: bool, spacing: Option<[f64; 2]>) -> f32 {
+    let [row, col] = spacing.unwrap_or([1.0, 1.0]);
+    let to_mm = |v: Vec2| Vec2::new(v.x * col as f32, v.y * row as f32);
+    let (u, v) = (to_mm(p[1] - p[0]), to_mm(p[3] - p[2]));
+    let denom = u.length() * v.length();
+    if denom < 1e-6 {
+        return 0.0;
+    }
+    let deg = (u.dot(v) / denom).clamp(-1.0, 1.0).acos().to_degrees();
+    if cobb {
+        deg.min(180.0 - deg)
+    } else {
+        deg
+    }
 }
 
 /// Diastole or systole, for an LV M-mode line.
@@ -259,6 +449,12 @@ impl Roi {
             RoiKind::Oval { .. } => "oval",
             RoiKind::Arrow { .. } => "arrow",
             RoiKind::Point { .. } => "point",
+            RoiKind::TwoLines { cobb: true, .. } => "cobb",
+            RoiKind::TwoLines { cobb: false, .. } => "dynangle",
+            RoiKind::Polyline { .. } => "openpolygon",
+            RoiKind::Pencil { .. } => "pencil",
+            RoiKind::Brush { .. } => "brush",
+            RoiKind::Text { .. } => "text",
         };
         let m = frame.map(|f| self.measure(f));
         RoiRecord {
@@ -288,6 +484,20 @@ impl Roi {
             "oval" => RoiKind::Oval { a: p(0)?, b: p(1)? },
             "arrow" => RoiKind::Arrow { a: p(0)?, b: p(1)? },
             "point" => RoiKind::Point { p: p(0)? },
+            "text" => RoiKind::Text { p: p(0)? },
+            "cobb" | "dynangle" => RoiKind::TwoLines {
+                cobb: r.kind == "cobb",
+                p: [p(0)?, p(1)?, p(2)?, p(3)?],
+            },
+            "openpolygon" if r.points.len() >= 2 => RoiKind::Polyline {
+                points: r.points.iter().map(|q| Vec2::new(q[0], q[1])).collect(),
+            },
+            "pencil" if r.points.len() >= 3 => RoiKind::Pencil {
+                points: r.points.iter().map(|q| Vec2::new(q[0], q[1])).collect(),
+            },
+            "brush" if r.points.len() >= 2 => RoiKind::Brush {
+                mask: BrushMask::from_points(&r.points.iter().map(|q| Vec2::new(q[0], q[1])).collect::<Vec<_>>()),
+            },
             "polygon" if r.points.len() >= 3 => RoiKind::Polygon {
                 points: r.points.iter().map(|q| Vec2::new(q[0], q[1])).collect(),
             },
@@ -378,7 +588,59 @@ impl Roi {
                     issue: None,
                 }
             }
-            RoiKind::Rect { .. } | RoiKind::Oval { .. } | RoiKind::Polygon { .. } => {
+            RoiKind::TwoLines { cobb, p } => {
+                let mid = (p[0] + p[3]) / 2.0;
+                if !frame.meta.allows_geometry_at(mid.x as f64, mid.y as f64) {
+                    return none(Some(MeasureIssue::TimeAxis));
+                }
+                let scale = frame.meta.scale_at(mid.x as f64, mid.y as f64);
+                let spacing = scale
+                    .filter(|s| s.basis != SpacingBasis::Uncalibrated)
+                    .map(|s| s.spacing);
+                Measurement {
+                    value: Some(two_line_angle(p, *cobb, spacing) as f64),
+                    unit: "deg",
+                    basis: scale.map(|s| s.basis),
+                    issue: None,
+                }
+            }
+            RoiKind::Polyline { points } => {
+                let mut total = 0.0;
+                let mut basis = None;
+                for w in points.windows(2) {
+                    match frame
+                        .meta
+                        .length([w[0].x as f64, w[0].y as f64], [w[1].x as f64, w[1].y as f64])
+                    {
+                        Ok(l) => {
+                            total += l.mm;
+                            basis = Some(l.basis);
+                        }
+                        Err(MeasureIssue::Uncalibrated) => {
+                            let px: f64 = points.windows(2).map(|w| (w[1] - w[0]).length() as f64).sum();
+                            return Measurement {
+                                value: Some(px),
+                                unit: "px",
+                                basis: Some(SpacingBasis::Uncalibrated),
+                                issue: Some(MeasureIssue::Uncalibrated),
+                            };
+                        }
+                        Err(e) => return none(Some(e)),
+                    }
+                }
+                Measurement {
+                    value: Some(total),
+                    unit: "mm",
+                    basis,
+                    issue: None,
+                }
+            }
+            RoiKind::Text { .. } => none(None),
+            RoiKind::Rect { .. }
+            | RoiKind::Oval { .. }
+            | RoiKind::Polygon { .. }
+            | RoiKind::Pencil { .. }
+            | RoiKind::Brush { .. } => {
                 let Some((area_px, centre)) = self.area_px() else {
                     return none(None);
                 };
@@ -544,7 +806,8 @@ impl Roi {
                 std::f64::consts::PI * ((b.x - a.x) / 2.0).abs() as f64 * ((b.y - a.y) / 2.0).abs() as f64,
                 (*a + *b) / 2.0,
             )),
-            RoiKind::Polygon { points } if points.len() >= 3 => {
+            RoiKind::Brush { mask } if !mask.is_empty() => Some((mask.area(), mask.centre())),
+            RoiKind::Polygon { points } | RoiKind::Pencil { points } if points.len() >= 3 => {
                 let n = points.len();
                 let mut twice = 0.0f64;
                 for i in 0..n {
@@ -579,8 +842,10 @@ impl Roi {
             }
             RoiKind::Angle { a, b, c } => vec![*a, *b, *c],
             RoiKind::Point { p } => vec![*p],
-            RoiKind::Lv { p, .. } => p.to_vec(),
-            RoiKind::Polygon { points } => points.clone(),
+            RoiKind::Lv { p, .. } | RoiKind::TwoLines { p, .. } => p.to_vec(),
+            RoiKind::Polygon { points } | RoiKind::Polyline { points } | RoiKind::Pencil { points } => points.clone(),
+            RoiKind::Brush { mask } => mask.to_points(),
+            RoiKind::Text { p } => vec![*p],
         }
     }
 
@@ -596,6 +861,10 @@ impl Roi {
                     Vec2::new(a.x, b.y),
                 ]
             }
+            // Freehand outlines and painted regions have too many points
+            // to grab one by one: they move as a whole (and the Repulsor
+            // reshapes outlines).
+            RoiKind::Pencil { .. } | RoiKind::Brush { .. } => Vec::new(),
             _ => self.points(),
         }
     }
@@ -628,12 +897,18 @@ impl Roi {
                 2 => *c = p,
                 _ => {}
             },
-            RoiKind::Point { p: q } => *q = p,
-            RoiKind::Polygon { points } => {
+            RoiKind::Point { p: q } | RoiKind::Text { p: q } => *q = p,
+            RoiKind::TwoLines { p: pts, .. } => {
+                if let Some(q) = pts.get_mut(i) {
+                    *q = p;
+                }
+            }
+            RoiKind::Polygon { points } | RoiKind::Polyline { points } => {
                 if let Some(q) = points.get_mut(i) {
                     *q = p;
                 }
             }
+            RoiKind::Pencil { .. } | RoiKind::Brush { .. } => {}
             RoiKind::Lv { p: pts, .. } => {
                 let (a, b) = (pts[0], pts[3]);
                 let dir = b - a;
@@ -699,9 +974,12 @@ impl Roi {
                 *b += d;
                 *c += d;
             }
-            RoiKind::Point { p } => *p += d,
-            RoiKind::Lv { p, .. } => p.iter_mut().for_each(|q| *q += d),
-            RoiKind::Polygon { points } => points.iter_mut().for_each(|q| *q += d),
+            RoiKind::Point { p } | RoiKind::Text { p } => *p += d,
+            RoiKind::Lv { p, .. } | RoiKind::TwoLines { p, .. } => p.iter_mut().for_each(|q| *q += d),
+            RoiKind::Polygon { points } | RoiKind::Polyline { points } | RoiKind::Pencil { points } => {
+                points.iter_mut().for_each(|q| *q += d)
+            }
+            RoiKind::Brush { mask } => mask.origin += d,
         }
     }
 
@@ -713,8 +991,16 @@ impl Roi {
             }
             RoiKind::Angle { a, b, c } => (*b - *a).length() < 1.0 || (*c - *b).length() < 1.0,
             RoiKind::Point { .. } => false,
+            RoiKind::Text { .. } => self.name.as_deref().is_none_or(|t| t.trim().is_empty()),
             RoiKind::Lv { p, .. } => p.windows(2).any(|w| (w[1] - w[0]).length() < 1.0),
-            RoiKind::Polygon { points } => points.len() < 3 || self.area_px().is_none_or(|(a, _)| a < 1.0),
+            RoiKind::TwoLines { p, .. } => (p[1] - p[0]).length() < 1.0 || (p[3] - p[2]).length() < 1.0,
+            RoiKind::Polyline { points } => {
+                points.len() < 2 || points.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f32>() < 1.0
+            }
+            RoiKind::Polygon { points } | RoiKind::Pencil { points } => {
+                points.len() < 3 || self.area_px().is_none_or(|(a, _)| a < 1.0)
+            }
+            RoiKind::Brush { mask } => mask.is_empty(),
         }
     }
 
@@ -746,9 +1032,33 @@ impl Roi {
             }
             RoiKind::Point { .. } => (pts[0] - screen).length(),
             RoiKind::Lv { .. } => segment_distance(pts[0], pts[3], screen),
-            RoiKind::Polygon { .. } => (0..pts.len())
+            RoiKind::TwoLines { .. } => {
+                segment_distance(pts[0], pts[1], screen).min(segment_distance(pts[2], pts[3], screen))
+            }
+            RoiKind::Polygon { .. } | RoiKind::Pencil { .. } => (0..pts.len())
                 .map(|i| segment_distance(pts[i], pts[(i + 1) % pts.len()], screen))
                 .fold(f32::INFINITY, f32::min),
+            RoiKind::Polyline { .. } => pts
+                .windows(2)
+                .map(|w| segment_distance(w[0], w[1], screen))
+                .fold(f32::INFINITY, f32::min),
+            RoiKind::Brush { mask } => {
+                if mask.contains(t.screen_to_image(screen)) {
+                    0.0
+                } else {
+                    f32::INFINITY
+                }
+            }
+            RoiKind::Text { .. } => {
+                // The text runs right from its point; count the whole line.
+                let width = self.name.as_deref().map(|n| n.chars().count()).unwrap_or(0) as f32 * 8.0;
+                let r = Rect::from_min_max(pts[0] + Vec2::new(0.0, -16.0), pts[0] + Vec2::new(width.max(8.0), 4.0));
+                if r.contains(screen) {
+                    0.0
+                } else {
+                    (pts[0] - screen).length()
+                }
+            }
         }
     }
 
@@ -815,7 +1125,40 @@ impl Roi {
                 let deg = angle_deg(*a, *b, *c, spacing_for(frame, *b));
                 format!("{deg:.1}°")
             }
-            RoiKind::Rect { .. } | RoiKind::Oval { .. } | RoiKind::Polygon { .. } => {
+            RoiKind::TwoLines { cobb, p } => {
+                let mid = (p[0] + p[3]) / 2.0;
+                if !frame.meta.allows_geometry_at(mid.x as f64, mid.y as f64) {
+                    return MeasureIssue::TimeAxis.label().to_string();
+                }
+                let deg = two_line_angle(p, *cobb, spacing_for(frame, mid));
+                if *cobb {
+                    format!("Cobb {deg:.1}°")
+                } else {
+                    format!("{deg:.1}°")
+                }
+            }
+            RoiKind::Polyline { .. } => {
+                let m = self.measure(frame);
+                match (m.value, m.unit, m.issue) {
+                    (Some(mm), "mm", _) if mm >= 10.0 => {
+                        format!(
+                            "Length {:.2} cm{}",
+                            mm / 10.0,
+                            m.basis.map(|b| b.marker()).unwrap_or("")
+                        )
+                    }
+                    (Some(mm), "mm", _) => format!("Length {mm:.2} mm{}", m.basis.map(|b| b.marker()).unwrap_or("")),
+                    (Some(px), "px", _) => format!("Length {px:.1} px  (not calibrated)"),
+                    (_, _, Some(issue)) => issue.label().to_string(),
+                    _ => String::new(),
+                }
+            }
+            RoiKind::Text { .. } => String::new(),
+            RoiKind::Rect { .. }
+            | RoiKind::Oval { .. }
+            | RoiKind::Polygon { .. }
+            | RoiKind::Pencil { .. }
+            | RoiKind::Brush { .. } => {
                 let m = self.measure(frame);
                 let area = match (m.value, m.unit, m.issue) {
                     (Some(a), "mm2", _) if a >= 100.0 => {
@@ -872,14 +1215,20 @@ impl Roi {
 
     /// Statistics for closed ROIs on grayscale frames.
     pub fn stats(&self, frame: &Frame) -> Option<RoiStats> {
+        if let RoiKind::Brush { mask } = &self.kind {
+            if frame.is_color() {
+                return None;
+            }
+            return stats_of(frame, mask.pixels(), mask.centre());
+        }
         let polygon: Option<&Vec<Vec2>> = match &self.kind {
-            RoiKind::Polygon { points } => Some(points),
+            RoiKind::Polygon { points } | RoiKind::Pencil { points } => Some(points),
             _ => None,
         };
         let (a, b, oval) = match &self.kind {
             RoiKind::Rect { a, b } => (*a, *b, false),
             RoiKind::Oval { a, b } => (*a, *b, true),
-            RoiKind::Polygon { points } => {
+            RoiKind::Polygon { points } | RoiKind::Pencil { points } => {
                 let (lo, hi) = points.iter().fold(
                     (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
                     |(lo, hi), p| (lo.min(*p), hi.max(*p)),
@@ -1075,6 +1424,144 @@ impl Roi {
                 );
                 return Some(r);
             }
+            RoiKind::TwoLines { cobb, .. } => {
+                painter.line_segment([pts[0], pts[1]], stroke);
+                painter.line_segment([pts[2], pts[3]], stroke);
+                for p in &pts {
+                    painter.circle_filled(*p, 2.5, color);
+                }
+                let thin = Stroke::new(1.0, color.gamma_multiply(0.7));
+                let mut anchor = Pos2::new((pts[0].x + pts[3].x) / 2.0, (pts[0].y + pts[3].y) / 2.0);
+                if *cobb {
+                    // Perpendiculars from the middle of each line, to where
+                    // they meet: the classic Cobb construction.
+                    let (m1, m2) = (pts[0] + (pts[1] - pts[0]) / 2.0, pts[2] + (pts[3] - pts[2]) / 2.0);
+                    let (d1, d2) = (pts[1] - pts[0], pts[3] - pts[2]);
+                    let (n1, n2) = (Vec2::new(-d1.y, d1.x), Vec2::new(-d2.y, d2.x));
+                    let meet = line_intersection(
+                        Vec2::new(m1.x, m1.y),
+                        Vec2::new(m1.x, m1.y) + n1,
+                        Vec2::new(m2.x, m2.y),
+                        Vec2::new(m2.x, m2.y) + n2,
+                    )
+                    .map(|v| Pos2::new(v.x, v.y))
+                    .filter(|m| (*m - m1).length() < 4000.0);
+                    if let Some(m) = meet {
+                        painter.line_segment([m1, m], thin);
+                        painter.line_segment([m2, m], thin);
+                        anchor = m;
+                    }
+                } else {
+                    // Both lines extended to where they cross.
+                    let v = |p: Pos2| Vec2::new(p.x, p.y);
+                    if let Some(x) = line_intersection(v(pts[0]), v(pts[1]), v(pts[2]), v(pts[3])) {
+                        let x = Pos2::new(x.x, x.y);
+                        if (x - pts[0]).length() < 4000.0 {
+                            for (a, b) in [(pts[0], pts[1]), (pts[2], pts[3])] {
+                                let near = if (a - x).length() < (b - x).length() { a } else { b };
+                                dashed(painter, near, x, thin);
+                            }
+                            anchor = x;
+                        }
+                    }
+                }
+                let r = shadow_text(
+                    painter,
+                    anchor + Vec2::new(10.0, 10.0),
+                    Align2::LEFT_TOP,
+                    &self.label(frame),
+                    label_font,
+                    color,
+                );
+                return Some(r);
+            }
+            RoiKind::Polyline { .. } => {
+                painter.line(pts.clone(), stroke);
+                for p in &pts {
+                    painter.circle_filled(*p, 2.0, color);
+                }
+                let end = *pts.last().unwrap_or(&Pos2::ZERO);
+                let r = shadow_text(
+                    painter,
+                    end + Vec2::new(8.0, -4.0),
+                    Align2::LEFT_BOTTOM,
+                    &self.label(frame),
+                    label_font,
+                    color,
+                );
+                return Some(r);
+            }
+            RoiKind::Pencil { .. } => {
+                let mut closed = pts.clone();
+                if let Some(first) = pts.first() {
+                    closed.push(*first);
+                }
+                painter.line(closed, stroke);
+                let anchor = pts
+                    .iter()
+                    .fold(Pos2::new(f32::NEG_INFINITY, f32::NEG_INFINITY), |m, p| {
+                        Pos2::new(m.x.max(p.x), m.y.max(p.y))
+                    });
+                let r = shadow_text(
+                    painter,
+                    anchor + Vec2::new(6.0, 0.0),
+                    Align2::LEFT_BOTTOM,
+                    &self.label(frame),
+                    label_font,
+                    color,
+                );
+                return Some(r);
+            }
+            RoiKind::Brush { mask } => {
+                // Each run is a thin quad, so the region follows rotation
+                // and flips like any other measurement.
+                let fill = color.gamma_multiply(if selected { 0.45 } else { 0.3 });
+                let o = Vec2::new(mask.origin.x.round(), mask.origin.y.round());
+                let mut far = Pos2::new(f32::NEG_INFINITY, f32::NEG_INFINITY);
+                for (y, runs) in &mask.rows {
+                    for (a, b) in runs {
+                        let q = [
+                            o + Vec2::new(*a as f32, *y as f32),
+                            o + Vec2::new(*b as f32, *y as f32),
+                            o + Vec2::new(*b as f32, *y as f32 + 1.0),
+                            o + Vec2::new(*a as f32, *y as f32 + 1.0),
+                        ]
+                        .map(|p| t.image_to_screen(p));
+                        for p in &q {
+                            far = Pos2::new(far.x.max(p.x), far.y.max(p.y));
+                        }
+                        painter.add(egui::Shape::convex_polygon(q.to_vec(), fill, Stroke::NONE));
+                    }
+                }
+                if mask.is_empty() {
+                    return None;
+                }
+                let r = shadow_text(
+                    painter,
+                    far + Vec2::new(6.0, 0.0),
+                    Align2::LEFT_BOTTOM,
+                    &self.label(frame),
+                    label_font,
+                    color,
+                );
+                return Some(r);
+            }
+            RoiKind::Text { .. } => {
+                let text = self.name.clone().unwrap_or_default();
+                let r = crate::widgets::shadow_text(
+                    painter,
+                    pts[0],
+                    Align2::LEFT_BOTTOM,
+                    &text,
+                    FontId::proportional(15.0),
+                    color,
+                );
+                if selected {
+                    painter.rect_stroke(r.expand(2.0), 2.0, Stroke::new(1.0, color), egui::StrokeKind::Outside);
+                }
+                // Not a measurement name to assign: no click target.
+                return None;
+            }
             RoiKind::Oval { .. } => {
                 let poly = oval_polygon(t, self, 64);
                 let mut closed = poly.clone();
@@ -1166,6 +1653,54 @@ impl Roi {
         }
         None
     }
+}
+
+/// A dashed line from `a` to `b`.
+fn dashed(painter: &Painter, a: Pos2, b: Pos2, stroke: Stroke) {
+    let d = b - a;
+    let len = d.length();
+    if len < 1.0 {
+        return;
+    }
+    let step = d / len;
+    let mut s = 0.0;
+    while s < len {
+        let e = (s + 5.0).min(len);
+        painter.line_segment([a + step * s, a + step * e], stroke);
+        s += 9.0;
+    }
+}
+
+/// Pixel statistics over the listed pixels.
+fn stats_of(frame: &Frame, pixels: impl Iterator<Item = (i64, i64)>, centre: Vec2) -> Option<RoiStats> {
+    let mut n = 0usize;
+    let mut sum = 0.0f64;
+    let mut sum_sq = 0.0f64;
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    for (x, y) in pixels {
+        if let Some(v) = frame.value_at(x, y) {
+            n += 1;
+            sum += v as f64;
+            sum_sq += (v as f64) * (v as f64);
+            min = min.min(v);
+            max = max.max(v);
+        }
+    }
+    if n == 0 {
+        return None;
+    }
+    let mean = sum / n as f64;
+    let var = (sum_sq / n as f64 - mean * mean).max(0.0);
+    let area_mm2 = spacing_for(frame, centre).map(|[r, c]| n as f64 * r * c);
+    Some(RoiStats {
+        count: n,
+        mean,
+        sd: var.sqrt(),
+        min,
+        max,
+        area_mm2,
+    })
 }
 
 /// Even-odd test: is `p` inside the closed outline `poly`?
@@ -1306,6 +1841,88 @@ mod tests {
             max: 99.0,
             inverted: false,
             meta,
+        }
+    }
+
+    #[test]
+    fn cobb_and_dynamic_angles() {
+        // Two lines 30 degrees apart, the second drawn backwards.
+        let p = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0 * 30f32.to_radians().tan()),
+            Vec2::new(0.0, 0.0),
+        ];
+        // As drawn the directions are 150 degrees apart; Cobb takes the acute angle.
+        assert!((two_line_angle(&p, false, None) - 150.0).abs() < 1e-3);
+        assert!((two_line_angle(&p, true, None) - 30.0).abs() < 1e-3);
+        let x = line_intersection(p[0], p[1], Vec2::new(5.0, -5.0), Vec2::new(5.0, 5.0)).unwrap();
+        assert!((x - Vec2::new(5.0, 0.0)).length() < 1e-4);
+        assert!(line_intersection(p[0], p[1], Vec2::new(0.0, 1.0), Vec2::new(10.0, 1.0)).is_none());
+    }
+
+    #[test]
+    fn open_polygon_length_is_along_the_points() {
+        let f = frame();
+        let roi = Roi::new(RoiKind::Polyline {
+            points: vec![Vec2::new(0.0, 0.0), Vec2::new(4.0, 0.0), Vec2::new(4.0, 3.0)],
+        });
+        let m = roi.measure(&f);
+        assert_eq!(m.unit, "mm");
+        assert!((m.value.unwrap() - 3.5).abs() < 1e-9, "{m:?}"); // (4 + 3) px at 0.5 mm
+    }
+
+    #[test]
+    fn brush_paints_erases_and_stores() {
+        let mut m = BrushMask::default();
+        m.paint(Vec2::new(5.0, 5.0), 2.0, false);
+        let painted = m.area();
+        assert!((10.0..=16.0).contains(&painted), "{painted}");
+        assert!(m.contains(Vec2::new(5.2, 5.2)));
+        // A second dab overlapping the first adds only the new pixels.
+        m.paint(Vec2::new(6.0, 5.0), 2.0, false);
+        assert!(m.area() > painted && m.area() < painted * 2.0);
+        m.paint(Vec2::new(5.0, 5.0), 1.0, true);
+        assert!(!m.contains(Vec2::new(5.2, 5.2)));
+        let back = BrushMask::from_points(&m.to_points());
+        assert_eq!(back.area(), m.area());
+        // Statistics cover exactly the painted pixels.
+        let f = frame();
+        let mut one = BrushMask::default();
+        one.paint(Vec2::new(3.5, 2.5), 0.5, false);
+        let roi = Roi::new(RoiKind::Brush { mask: one });
+        let st = roi.stats(&f).unwrap();
+        assert_eq!(st.count, 1);
+        assert_eq!(st.mean, 23.0); // row 2, column 3
+    }
+
+    #[test]
+    fn new_kinds_survive_storage() {
+        let mut text = Roi::new(RoiKind::Text { p: Vec2::new(3.0, 4.0) });
+        text.name = Some("Effusion".into());
+        let mut mask = BrushMask::default();
+        mask.paint(Vec2::new(5.0, 5.0), 2.0, false);
+        for roi in [
+            Roi::new(RoiKind::TwoLines {
+                cobb: true,
+                p: [Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ONE],
+            }),
+            Roi::new(RoiKind::TwoLines {
+                cobb: false,
+                p: [Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ONE],
+            }),
+            Roi::new(RoiKind::Polyline {
+                points: vec![Vec2::ZERO, Vec2::X, Vec2::ONE],
+            }),
+            Roi::new(RoiKind::Pencil {
+                points: vec![Vec2::ZERO, Vec2::new(4.0, 0.0), Vec2::new(4.0, 4.0)],
+            }),
+            Roi::new(RoiKind::Brush { mask }),
+            text,
+        ] {
+            let back = Roi::from_record(&roi.to_record(1, 0, None)).expect("reads back");
+            assert_eq!(back.kind, roi.kind);
+            assert_eq!(back.name, roi.name);
         }
     }
 

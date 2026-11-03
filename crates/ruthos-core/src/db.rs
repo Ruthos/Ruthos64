@@ -757,7 +757,7 @@ impl Database {
             "SELECT r.id, r.image_id, r.frame, r.kind, r.points, r.name, r.value, r.unit, r.basis,
                     i.series_id, s.modality, s.series_number, s.series_description, i.instance_number, r.def_key
              FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
-             WHERE s.study_id = ?1 AND r.name IS NOT NULL ORDER BY s.series_number, i.instance_number, r.id",
+             WHERE s.study_id = ?1 AND r.name IS NOT NULL AND r.kind <> 'text' ORDER BY s.series_number, i.instance_number, r.id",
         )?;
         let rows = stmt.query_map(params![study_id], |row| {
             let modality: String = row.get(10)?;
