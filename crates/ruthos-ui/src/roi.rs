@@ -407,6 +407,15 @@ pub struct Measurement {
     pub issue: Option<MeasureIssue>,
 }
 
+/// Values sampled along a line, with their distance from its start.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Profile {
+    pub distance: Vec<f64>,
+    pub values: Vec<f32>,
+    /// `mm`, or `px` when the image is not calibrated.
+    pub unit: &'static str,
+}
+
 /// Pixel statistics inside a closed ROI.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RoiStats {
@@ -440,22 +449,7 @@ impl Roi {
 
     /// The storage form, with the value as measured on `frame`.
     pub fn to_record(&self, image_id: i64, frame_index: u32, frame: Option<&Frame>) -> RoiRecord {
-        let kind = match &self.kind {
-            RoiKind::Length { .. } => "length",
-            RoiKind::Polygon { .. } => "polygon",
-            RoiKind::Lv { phase, mmode, .. } => phase.kind_key(*mmode),
-            RoiKind::Angle { .. } => "angle",
-            RoiKind::Rect { .. } => "rect",
-            RoiKind::Oval { .. } => "oval",
-            RoiKind::Arrow { .. } => "arrow",
-            RoiKind::Point { .. } => "point",
-            RoiKind::TwoLines { cobb: true, .. } => "cobb",
-            RoiKind::TwoLines { cobb: false, .. } => "dynangle",
-            RoiKind::Polyline { .. } => "openpolygon",
-            RoiKind::Pencil { .. } => "pencil",
-            RoiKind::Brush { .. } => "brush",
-            RoiKind::Text { .. } => "text",
-        };
+        let kind = kind_key(&self.kind);
         let m = frame.map(|f| self.measure(f));
         RoiRecord {
             id: self.id.unwrap_or(0),
@@ -1213,13 +1207,16 @@ impl Roi {
         }
     }
 
-    /// Statistics for closed ROIs on grayscale frames.
-    pub fn stats(&self, frame: &Frame) -> Option<RoiStats> {
+    /// The image pixels inside a closed ROI, as (column, row). `None` for
+    /// lines, points and text.
+    pub fn area_pixels(&self, frame: &Frame) -> Option<Vec<(i64, i64)>> {
         if let RoiKind::Brush { mask } = &self.kind {
-            if frame.is_color() {
-                return None;
-            }
-            return stats_of(frame, mask.pixels(), mask.centre());
+            let (w, h) = (frame.width as i64, frame.height as i64);
+            return Some(
+                mask.pixels()
+                    .filter(|(x, y)| *x >= 0 && *y >= 0 && *x < w && *y < h)
+                    .collect(),
+            );
         }
         let polygon: Option<&Vec<Vec2>> = match &self.kind {
             RoiKind::Polygon { points } | RoiKind::Pencil { points } => Some(points),
@@ -1237,26 +1234,15 @@ impl Roi {
             }
             _ => return None,
         };
-        if frame.is_color() {
-            return None;
-        }
         let min_x = a.x.min(b.x).floor().max(0.0) as i64;
         let max_x = a.x.max(b.x).ceil().min(frame.width as f32) as i64;
         let min_y = a.y.min(b.y).floor().max(0.0) as i64;
         let max_y = a.y.max(b.y).ceil().min(frame.height as f32) as i64;
-        if max_x <= min_x || max_y <= min_y {
-            return None;
-        }
         let cx = (a.x + b.x) / 2.0;
         let cy = (a.y + b.y) / 2.0;
         let rx = ((b.x - a.x) / 2.0).abs().max(0.5);
         let ry = ((b.y - a.y) / 2.0).abs().max(0.5);
-
-        let mut n = 0usize;
-        let mut sum = 0.0f64;
-        let mut sum_sq = 0.0f64;
-        let mut min = f32::INFINITY;
-        let mut max = f32::NEG_INFINITY;
+        let mut out = Vec::new();
         for y in min_y..max_y {
             for x in min_x..max_x {
                 if oval {
@@ -1271,30 +1257,87 @@ impl Roi {
                         continue;
                     }
                 }
-                if let Some(v) = frame.value_at(x, y) {
-                    n += 1;
-                    sum += v as f64;
-                    sum_sq += (v as f64) * (v as f64);
-                    min = min.min(v);
-                    max = max.max(v);
-                }
+                out.push((x, y));
             }
         }
-        if n == 0 {
+        Some(out)
+    }
+
+    /// The modality values inside a closed ROI on a grayscale frame.
+    pub fn pixel_values(&self, frame: &Frame) -> Option<Vec<f32>> {
+        if frame.is_color() {
             return None;
         }
-        let mean = sum / n as f64;
-        let var = (sum_sq / n as f64 - mean * mean).max(0.0);
-        let centre = self.area_px().map(|(_, c)| c).unwrap_or((a + b) / 2.0);
-        let area_mm2 = spacing_for(frame, centre).map(|[r, c]| n as f64 * r * c);
-        Some(RoiStats {
-            count: n,
-            mean,
-            sd: var.sqrt(),
-            min,
-            max,
-            area_mm2,
+        Some(
+            self.area_pixels(frame)?
+                .into_iter()
+                .filter_map(|(x, y)| frame.value_at(x, y))
+                .collect(),
+        )
+    }
+
+    /// Values along a caliper line or an open polygon, one sample per
+    /// image pixel of length, with the distance from the start: in mm when
+    /// the image is calibrated, otherwise in pixels.
+    pub fn profile(&self, frame: &Frame) -> Option<Profile> {
+        if frame.is_color() {
+            return None;
+        }
+        let points: Vec<Vec2> = match &self.kind {
+            RoiKind::Length { a, b } => vec![*a, *b],
+            RoiKind::Polyline { points } => points.clone(),
+            _ => return None,
+        };
+        let calibrated = points.windows(2).all(|w| {
+            frame
+                .meta
+                .length([w[0].x as f64, w[0].y as f64], [w[1].x as f64, w[1].y as f64])
+                .is_ok()
+        });
+        let mut distance = Vec::new();
+        let mut values = Vec::new();
+        let mut start = 0.0f64;
+        for w in points.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let px = (b - a).length() as f64;
+            let seg = if calibrated {
+                frame
+                    .meta
+                    .length([a.x as f64, a.y as f64], [b.x as f64, b.y as f64])
+                    .map(|l| l.mm)
+                    .unwrap_or(px)
+            } else {
+                px
+            };
+            let n = px.ceil().max(1.0) as usize;
+            for k in 0..=n {
+                if k == 0 && !values.is_empty() {
+                    continue;
+                }
+                let t = k as f32 / n as f32;
+                let q = a + (b - a) * t;
+                if let Some(v) = frame.value_at(q.x.floor() as i64, q.y.floor() as i64) {
+                    distance.push(start + seg * t as f64);
+                    values.push(v);
+                }
+            }
+            start += seg;
+        }
+        (values.len() >= 2).then_some(Profile {
+            distance,
+            values,
+            unit: if calibrated { "mm" } else { "px" },
         })
+    }
+
+    /// Statistics for closed ROIs on grayscale frames.
+    pub fn stats(&self, frame: &Frame) -> Option<RoiStats> {
+        if frame.is_color() {
+            return None;
+        }
+        let pixels = self.area_pixels(frame)?;
+        let centre = self.area_px().map(|(_, c)| c).unwrap_or_default();
+        stats_of(frame, pixels.into_iter(), centre)
     }
 
     /// Draw the ROI and its label. Returns the label's screen rectangle, the
@@ -1703,6 +1746,26 @@ fn stats_of(frame: &Frame, pixels: impl Iterator<Item = (i64, i64)>, centre: Vec
     })
 }
 
+/// The storage name of a kind (`length`, `polygon`, `cobb`).
+pub fn kind_key(kind: &RoiKind) -> &'static str {
+    match kind {
+        RoiKind::Length { .. } => "length",
+        RoiKind::Polygon { .. } => "polygon",
+        RoiKind::Lv { phase, mmode, .. } => phase.kind_key(*mmode),
+        RoiKind::Angle { .. } => "angle",
+        RoiKind::Rect { .. } => "rect",
+        RoiKind::Oval { .. } => "oval",
+        RoiKind::Arrow { .. } => "arrow",
+        RoiKind::Point { .. } => "point",
+        RoiKind::TwoLines { cobb: true, .. } => "cobb",
+        RoiKind::TwoLines { cobb: false, .. } => "dynangle",
+        RoiKind::Polyline { .. } => "openpolygon",
+        RoiKind::Pencil { .. } => "pencil",
+        RoiKind::Brush { .. } => "brush",
+        RoiKind::Text { .. } => "text",
+    }
+}
+
 /// Even-odd test: is `p` inside the closed outline `poly`?
 pub fn point_in_polygon(p: Vec2, poly: &[Vec2]) -> bool {
     let mut inside = false;
@@ -1924,6 +1987,26 @@ mod tests {
             assert_eq!(back.kind, roi.kind);
             assert_eq!(back.name, roi.name);
         }
+    }
+
+    #[test]
+    fn a_line_profile_samples_each_pixel() {
+        let f = frame();
+        let roi = Roi::new(RoiKind::Length {
+            a: Vec2::new(0.5, 2.5),
+            b: Vec2::new(4.5, 2.5),
+        });
+        let p = roi.profile(&f).unwrap();
+        assert_eq!(p.unit, "mm");
+        assert_eq!(p.values, vec![20.0, 21.0, 22.0, 23.0, 24.0]);
+        assert!((p.distance.last().unwrap() - 2.0).abs() < 1e-9); // 4 px at 0.5 mm
+        let area = Roi::new(RoiKind::Rect {
+            a: Vec2::new(0.0, 0.0),
+            b: Vec2::new(2.0, 2.0),
+        });
+        let mut v = area.pixel_values(&f).unwrap();
+        v.sort_by(f32::total_cmp);
+        assert_eq!(v, vec![0.0, 1.0, 10.0, 11.0]);
     }
 
     #[test]

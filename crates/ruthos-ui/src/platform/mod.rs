@@ -262,6 +262,12 @@ pub const MENU_BAR: &[MenuDef] = &[
                 AppAction::Viewer("roi-manager"),
             ),
             item("viewer:roi-info", "ROI Info", None, AppAction::Viewer("roi-info")),
+            item(
+                "viewer:histogram",
+                "Histogram and Plot",
+                None,
+                AppAction::Viewer("histogram"),
+            ),
             Entry::Separator,
             item("viewer:undo", "Undo Edit", Some("Ctrl+Z"), AppAction::Viewer("undo")),
             item("viewer:delete", "Delete Selected", None, AppAction::Viewer("delete")),

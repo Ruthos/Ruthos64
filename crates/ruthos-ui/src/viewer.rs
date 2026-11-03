@@ -490,6 +490,8 @@ pub struct ViewerState {
     /// The ROI Manager and ROI Info windows.
     pub show_roi_manager: bool,
     pub show_roi_info: bool,
+    /// The Histogram and plot window, when open.
+    histogram: Option<crate::histogram::HistogramWindow>,
     /// What the Measure tool draws, chosen in the Measurements menu.
     measure_tool: Tool,
     /// Per series: (roi id, edit time, LVID mm) of the latest lines.
@@ -630,6 +632,7 @@ pub enum MenuAction {
     Fit,
     ToggleRoiManager,
     ToggleRoiInfo,
+    ToggleHistogram,
 }
 
 /// The popup that assigns a ROI to a named measurement.
@@ -718,6 +721,8 @@ impl ViewerState {
             // Developer option: `RUTHOS_ROI_WINDOWS=1` opens ROI Manager and ROI Info.
             show_roi_manager: std::env::var_os("RUTHOS_ROI_WINDOWS").is_some(),
             show_roi_info: std::env::var_os("RUTHOS_ROI_WINDOWS").is_some(),
+            // Developer option: `RUTHOS_HISTOGRAM=1` opens Histogram and plot.
+            histogram: std::env::var_os("RUTHOS_HISTOGRAM").map(|_| Default::default()),
             measure_tool: Tool::Length,
             mmode_latest: HashMap::new(),
             mmode_rows: HashMap::new(),
@@ -1438,7 +1443,64 @@ impl ViewerState {
         self.set_status("Writing movie…");
     }
 
-    fn open_histogram(&mut self, _shared: &Shared, _key: FrameKey, _index: usize) {}
+    fn open_histogram(&mut self, _shared: &Shared, _key: FrameKey, index: usize) {
+        self.selected_roi = Some(index);
+        if self.histogram.is_none() {
+            self.histogram = Some(Default::default());
+        }
+    }
+
+    /// Histogram and plot: the selected measurement's values, or the whole
+    /// image's when nothing is selected.
+    fn histogram_window(&mut self, ctx: &egui::Context) {
+        let Some(mut h) = self.histogram.take() else { return };
+        let Some(key) = self.current_key() else {
+            self.histogram = Some(h);
+            return;
+        };
+        let Some(frame) = self.frames.get(&key).cloned() else {
+            self.histogram = Some(h);
+            return;
+        };
+        let roi = self
+            .selected_roi
+            .and_then(|i| self.rois.get(&key).and_then(|l| l.get(i)))
+            .cloned();
+        h.update(key, &frame, roi.as_ref());
+        let title = match (&roi, h.data()) {
+            (_, crate::histogram::PlotData::Profile(_)) => "Plot along the line".to_string(),
+            (Some(r), _) => format!(
+                "Histogram: {}",
+                r.name.clone().unwrap_or_else(|| kind_label(&r.kind).to_string())
+            ),
+            (None, _) => "Histogram: whole image".to_string(),
+        };
+        let mut open = true;
+        egui::Window::new("Histogram and plot")
+            .id(egui::Id::unique(("ruthos-histogram", self.id)))
+            .open(&mut open)
+            .resizable(false)
+            .default_pos([40.0, 290.0])
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new(title).strong());
+                h.ui(ui);
+                ui.horizontal(|ui| {
+                    if ui.button("Copy values").clicked() {
+                        ui.ctx().copy_text(h.csv());
+                    }
+                    ui.label(
+                        egui::RichText::new(
+                            "Select an area or a line to plot it; nothing selected shows the whole image.",
+                        )
+                        .size(11.5)
+                        .color(Color32::from_gray(110)),
+                    );
+                });
+            });
+        if open {
+            self.histogram = Some(h);
+        }
+    }
 
     /// Progress and the end of a movie export.
     fn pump_movie(&mut self) {
@@ -1967,6 +2029,9 @@ impl ViewerState {
         if menu_item(ui, "ROI Info", self.show_roi_info).clicked() {
             pick(ui, MenuAction::ToggleRoiInfo);
         }
+        if menu_item(ui, "Histogram and plot", self.histogram.is_some()).clicked() {
+            pick(ui, MenuAction::ToggleHistogram);
+        }
         ui.separator();
         if menu_item(ui, "Show measurements", self.show_rois).clicked() {
             pick(ui, MenuAction::ToggleRois);
@@ -2082,6 +2147,12 @@ impl ViewerState {
             MenuAction::ToggleBasisPanel => self.basis_panel = !self.basis_panel,
             MenuAction::ToggleRoiManager => self.show_roi_manager = !self.show_roi_manager,
             MenuAction::ToggleRoiInfo => self.show_roi_info = !self.show_roi_info,
+            MenuAction::ToggleHistogram => {
+                self.histogram = match self.histogram.take() {
+                    Some(_) => None,
+                    None => Some(Default::default()),
+                }
+            }
             MenuAction::ToggleRois => self.show_rois = !self.show_rois,
             MenuAction::ToggleLabels => self.show_labels = !self.show_labels,
             MenuAction::CopyValues => {
@@ -2537,6 +2608,7 @@ impl ViewerState {
             "basis" => MenuAction::ToggleBasisPanel,
             "roi-manager" => MenuAction::ToggleRoiManager,
             "roi-info" => MenuAction::ToggleRoiInfo,
+            "histogram" => MenuAction::ToggleHistogram,
             "show-rois" => MenuAction::ToggleRois,
             "show-labels" => MenuAction::ToggleLabels,
             "copy" => MenuAction::CopyValues,
@@ -2558,6 +2630,7 @@ impl ViewerState {
         self.text_prompt_window(&ctx);
         self.roi_manager_window(&ctx);
         self.roi_info_window(&ctx, shared);
+        self.histogram_window(&ctx);
         // Developer option: `RUTHOS_EXPORT_MOVIE=<file.mp4>` writes the
         // current loop or series as a movie once the viewer is showing it.
         if !self.dev_movie_done && self.current_key().is_some_and(|k| self.frames.contains_key(&k)) {
