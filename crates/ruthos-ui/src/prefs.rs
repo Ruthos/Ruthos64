@@ -217,6 +217,33 @@ impl PrefsState {
     }
 
     fn measurements(&mut self, ui: &mut Ui) {
+        Self::heading(ui, "Zoom loupe");
+        ui.checkbox(&mut self.draft.loupe_enabled, "Show a magnified view beside the pointer while placing a point");
+        ui.horizontal(|ui| {
+            ui.label("Magnification");
+            egui::ComboBox::from_id_salt("prefs-loupe-mag")
+                .selected_text(format!("{}×", self.draft.loupe_magnification))
+                .width(70.0)
+                .show_ui(ui, |ui| {
+                    for m in crate::loupe::MAGNIFICATIONS {
+                        ui.selectable_value(&mut self.draft.loupe_magnification, m, format!("{m}×"));
+                    }
+                });
+            ui.add_space(12.0);
+            ui.label("Size");
+            egui::ComboBox::from_id_salt("prefs-loupe-size")
+                .selected_text(format!("{} px", self.draft.loupe_size))
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    for v in crate::loupe::SIZES {
+                        ui.selectable_value(&mut self.draft.loupe_size, v, format!("{v} px"));
+                    }
+                });
+        });
+        ui.checkbox(&mut self.draft.loupe_fine_movement, "Shift slows the pointer for fine placement");
+        Self::hint(ui, "Hold Alt over the image with a measuring tool to preview the loupe. With Shift held, the point moves by the pointer's movement divided by the magnification.");
+        ui.add_space(16.0);
+
         Self::heading(ui, "Measurement sets");
         Self::hint(ui, "Clicking a measurement's number in the viewer offers these names. One name per line.");
         ui.add_space(8.0);

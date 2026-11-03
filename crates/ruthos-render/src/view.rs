@@ -117,6 +117,20 @@ impl ViewTransform {
         r + self.centre()
     }
 
+    /// The transform of a loupe: this view magnified `magnification` times,
+    /// drawn into `rect` with `centre` (an image point) at its middle.
+    /// Rotation, flips and aspect are kept so the loupe shows the image the
+    /// way the cell does.
+    pub fn loupe(&self, centre: Vec2, rect: Rect, magnification: f32) -> ViewTransform {
+        let mut t = *self;
+        t.rect = rect;
+        t.state.zoom = self.state.zoom * magnification.max(1.0);
+        t.state.pan = Vec2::ZERO;
+        let at_zero_pan = t.image_to_screen(centre);
+        t.state.pan = rect.center() - at_zero_pan;
+        t
+    }
+
     /// Integer pixel under a screen point, if inside the image.
     pub fn pixel_at(&self, p: Pos2) -> Option<(i64, i64)> {
         let v = self.screen_to_image(p);
@@ -166,6 +180,27 @@ impl ViewTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loupe_centres_the_point_and_scales() {
+        let rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(400.0, 300.0));
+        let mut state = ViewState::default();
+        state.zoom = 1.5;
+        state.pan = Vec2::new(7.0, -3.0);
+        state.rotation_deg = 90.0;
+        state.flip_horizontal = true;
+        let t = ViewTransform::new(rect, 512, 512, 1.0, state);
+        let loupe_rect = Rect::from_min_size(Pos2::new(600.0, 100.0), Vec2::splat(160.0));
+        let centre = Vec2::new(123.25, 400.5);
+        let l = t.loupe(centre, loupe_rect, 4.0);
+        let c = l.image_to_screen(centre);
+        assert!((c - loupe_rect.center()).length() < 1e-3);
+        // One image pixel is zoom × magnification screen points.
+        let d = l.image_to_screen(centre + Vec2::new(1.0, 0.0)) - c;
+        assert!((d.length() - 6.0).abs() < 1e-3);
+        assert_eq!(l.state.rotation_deg, 90.0);
+        assert!(l.state.flip_horizontal);
+    }
 
     fn t() -> ViewTransform {
         let rect = Rect::from_min_size(Pos2::new(100.0, 50.0), Vec2::new(800.0, 600.0));

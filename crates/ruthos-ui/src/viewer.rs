@@ -15,6 +15,8 @@ use ruthos_core::{ImageRow, SeriesRow, StudyRow};
 use ruthos_dicom::Frame;
 use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTransform};
 
+use crate::loupe::{self, LoupeSettings, LoupeSource, LoupeTarget};
+
 use crate::annotations::{self, AnnotationContext, AnnotationLevel};
 use crate::loader::FrameKey;
 use crate::roi::{roi_color, Roi, RoiKind};
@@ -258,6 +260,10 @@ pub struct ViewerState {
     handle_drag: Option<HandleDrag>,
     move_drag: Option<MoveDrag>,
     dev_selected: bool,
+    /// Loupe settings, refreshed from Preferences each frame.
+    loupe: LoupeSettings,
+    /// Where the loupe shows this frame, set by input handling.
+    loupe_target: Option<LoupeTarget>,
     /// Previous geometry of edited measurements, newest last.
     undo: Vec<UndoEntry>,
 
@@ -378,6 +384,8 @@ impl ViewerState {
             handle_drag: None,
             move_drag: None,
             dev_selected: false,
+            loupe: LoupeSettings::default(),
+            loupe_target: None,
             undo: Vec::new(),
             playing: false,
             fps: 10.0,
@@ -756,8 +764,8 @@ impl ViewerState {
     /// Handle and whole-measurement drags on the selected measurement. They
     /// take priority over every tool, so a crowded image does not steal the
     /// drag. Returns true while such a drag is in progress.
-    fn edit_input(&mut self, ui: &Ui, response: &egui::Response, t: &ViewTransform, key: &FrameKey, settings: (bool, f32)) -> bool {
-        let (fine_enabled, magnification) = settings;
+    fn edit_input(&mut self, ui: &Ui, response: &egui::Response, t: &ViewTransform, key: &FrameKey) -> bool {
+        let (fine_enabled, magnification) = (self.loupe.fine_movement, self.loupe.magnification);
         let pos = response.interact_pointer_pos();
         if response.drag_started_by(PointerButton::Primary) {
             if let Some(p) = pos {
@@ -819,6 +827,7 @@ impl ViewerState {
                     if let Some(roi) = self.rois.get_mut(&drag.key).and_then(|l| l.get_mut(drag.index)) {
                         roi.set_handle(drag.handle, target);
                     }
+                    self.loupe_target = Some(LoupeTarget { image_point: target, pointer: p });
                 }
             }
             if response.drag_stopped_by(PointerButton::Primary) {
@@ -1037,10 +1046,7 @@ impl ViewerState {
 
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("viewer");
-        {
-            let st = shared.settings.lock();
-            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("ruthos-fine-move"), (st.loupe_fine_movement, st.loupe_magnification as f32)));
-        }
+        self.loupe = LoupeSettings::from(&*shared.settings.lock());
         ui.style_mut().visuals = theme::viewer_visuals();
         if ui.input(|i| i.viewport().close_requested()) {
             self.persist_series_display(shared);
@@ -1888,6 +1894,7 @@ impl ViewerState {
         let transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.panes[k].view);
 
         // The image itself.
+        let mut loupe_source = None;
         if let Some(gpu) = self.gpu_for(shared, key) {
             let clut = Arc::new(
                 shared
@@ -1900,13 +1907,15 @@ impl ViewerState {
                 rect,
                 ImageCallback {
                     key: self.id * 64 + k as u64,
-                    image: gpu,
-                    clut,
+                    image: gpu.clone(),
+                    clut: clut.clone(),
                     transform,
                     inverted: frame.inverted,
                     interpolation: if self.bilinear { Interpolation::Bilinear } else { Interpolation::Nearest },
                 },
             ));
+            // The loupe draws the same image with its own key (cells use 0..32).
+            loupe_source = Some(LoupeSource { key: self.id * 64 + 32 + k as u64, image: gpu, clut, inverted: frame.inverted });
         }
 
         // ROIs and drafts.
@@ -1949,6 +1958,22 @@ impl ViewerState {
             if let Some(d) = &self.angle_draft {
                 let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c });
                 roi.draw(&painter, &transform, &frame, theme::ROI_DRAFT, false);
+            }
+
+            // The loupe, with the geometry being placed drawn through it.
+            if let (true, Some(target), Some(source)) = (self.loupe.enabled, self.loupe_target, loupe_source.as_ref()) {
+                let draft = self.drag_draft.and_then(|(a, b)| draft_kind(self.tool, a, b)).map(Roi::new);
+                let angle = self.angle_draft.as_ref().map(|d| Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c }));
+                let selected = self.selected_roi.and_then(|i| self.rois.get(&key).and_then(|l| l.get(i))).cloned();
+                let overlay = |p: &egui::Painter, lt: &ViewTransform| {
+                    for roi in draft.iter().chain(angle.iter()) {
+                        roi.draw(p, lt, &frame, theme::ROI_DRAFT, false);
+                    }
+                    if let Some(roi) = &selected {
+                        roi.draw(p, lt, &frame, roi_color(true), false);
+                    }
+                };
+                loupe::draw(ui, &painter, rect, &transform, target, &self.loupe, source, &overlay);
             }
         }
 
@@ -2015,6 +2040,15 @@ impl ViewerState {
     fn handle_input(&mut self, ui: &mut Ui, response: &egui::Response, t: &mut ViewTransform, frame: &Frame, key: &FrameKey) {
         let hover = response.hover_pos();
         self.mouse_pixel = hover.and_then(|p| t.pixel_at(p));
+        self.loupe_target = None;
+        // Developer option: `RUTHOS_LOUPE_AT=x,y` shows the loupe at an image point.
+        if let Some((x, y)) = std::env::var("RUTHOS_LOUPE_AT").ok().and_then(|v| {
+            let (a, b) = v.split_once(',')?;
+            Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?))
+        }) {
+            let image_point = Vec2::new(x, y);
+            self.loupe_target = Some(LoupeTarget { image_point, pointer: t.image_to_screen(image_point) });
+        }
 
         // The lock control in the bottom-right corner.
         let chip = lock_chip_rect(t.rect);
@@ -2066,12 +2100,15 @@ impl ViewerState {
         }
 
         // Editing a selected measurement comes before any tool.
-        let fine = {
-            let st = shared_settings_snapshot(ui);
-            (st.0, st.1)
-        };
-        if self.edit_input(ui, response, t, key, fine) {
+        if self.edit_input(ui, response, t, key) {
             return;
+        }
+
+        // Alt while hovering with a measuring tool previews the loupe.
+        if self.tool.is_roi() && self.drag_draft.is_none() && self.angle_draft.is_none() {
+            if let Some(hp) = hover.filter(|_| ui.input(|i| i.modifiers.alt)) {
+                self.loupe_target = Some(LoupeTarget { image_point: t.screen_to_image(hp), pointer: hp });
+            }
         }
 
         // Each mouse button drives the tool assigned to it (Tools menu).
@@ -2186,10 +2223,13 @@ impl ViewerState {
             }
             Tool::Angle => {
                 let img_pos = pos.map(|p| t.screen_to_image(p));
+                let fine = ui.input(|i| i.modifiers.shift) && self.loupe.fine_movement;
+                let fine_step = ui.input(|i| i.pointer.delta()) / (self.loupe.magnification.max(1.0) * t.state.zoom.max(1e-6));
                 if let Some(d) = &mut self.angle_draft {
                     if d.b_fixed {
                         if let Some(hp) = hover {
-                            d.c = t.screen_to_image(hp);
+                            d.c = if fine { d.c + fine_step } else { t.screen_to_image(hp) };
+                            self.loupe_target = Some(LoupeTarget { image_point: d.c, pointer: hp });
                         }
                         if response.clicked_by(button) {
                             let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c });
@@ -2201,8 +2241,11 @@ impl ViewerState {
                         }
                     } else {
                         if let Some(p) = img_pos {
-                            d.b = p;
-                            d.c = p;
+                            d.b = if fine { d.b + fine_step } else { p };
+                            d.c = d.b;
+                            if let Some(sp) = pos {
+                                self.loupe_target = Some(LoupeTarget { image_point: d.b, pointer: sp });
+                            }
                         }
                         if response.drag_stopped_by(button) {
                             if (d.b - d.a).length() < 1.0 {
@@ -2241,15 +2284,16 @@ impl ViewerState {
                     }
                 }
                 if response.dragged_by(button) {
-                    if let (Some((a, _)), Some(p)) = (self.drag_draft, pos) {
-                        let mut b = t.screen_to_image(p);
-                        if ui.input(|i| i.modifiers.shift) && matches!(tool, Tool::Rectangle | Tool::Oval) {
-                            // Shift constrains to a square / circle.
-                            let d = b - a;
-                            let m = d.x.abs().max(d.y.abs());
-                            b = a + Vec2::new(m * d.x.signum(), m * d.y.signum());
-                        }
+                    if let (Some((a, prev_b)), Some(p)) = (self.drag_draft, pos) {
+                        // Shift: fine placement, pointer movement scaled by
+                        // the reciprocal of the loupe magnification.
+                        let b = if ui.input(|i| i.modifiers.shift) && self.loupe.fine_movement {
+                            prev_b + response.drag_delta() / (self.loupe.magnification.max(1.0) * t.state.zoom.max(1e-6))
+                        } else {
+                            t.screen_to_image(p)
+                        };
                         self.drag_draft = Some((a, b));
+                        self.loupe_target = Some(LoupeTarget { image_point: b, pointer: p });
                     }
                 }
                 if response.drag_stopped_by(button) {
@@ -2319,14 +2363,6 @@ fn parse_tiling(v: &str) -> Option<Tiling> {
     };
     let (r, c) = grid.split_once('x')?;
     Some(Tiling { mode, rows: r.parse().ok()?, cols: c.parse().ok()? })
-}
-
-/// Fine-movement settings the editing code needs, stored in the egui
-/// context by `show` so `handle_input` can read them without `Shared`.
-fn shared_settings_snapshot(ui: &Ui) -> (bool, f32) {
-    ui.ctx()
-        .data(|d| d.get_temp::<(bool, f32)>(egui::Id::unique("ruthos-fine-move")))
-        .unwrap_or((true, 4.0))
 }
 
 fn steps_nonzero(steps: f32) -> bool {
