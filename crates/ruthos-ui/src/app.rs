@@ -164,6 +164,11 @@ impl RuthosApp {
             browser.selected_study = id;
         }
 
+        // Developer option: `RUTHOS_IMPORT_HOROS=<folder>` opens the Horos import on that folder.
+        if let Some(v) = std::env::var("RUTHOS_IMPORT_HOROS").ok().filter(|v| !v.is_empty()) {
+            browser.request_horos_import(Some(std::path::PathBuf::from(v)));
+        }
+
         // Developer option: `RUTHOS_OPEN_ANON=<study>[:pixels|verify]` opens the anonymiser.
         if let Some(v) = std::env::var("RUTHOS_OPEN_ANON").ok().filter(|v| !v.is_empty()) {
             let (who, step) = v
@@ -252,6 +257,7 @@ impl RuthosApp {
             Some(AppAction::Preferences) => self.shared.open_prefs.store(true, Ordering::Relaxed),
             Some(AppAction::ImportFolder) => self.browser.import_folder_dialog(&self.shared),
             Some(AppAction::ImportFiles) => self.browser.import_files_dialog(&self.shared),
+            Some(AppAction::ImportHoros) => self.browser.request_horos_import(None),
             Some(AppAction::DatabaseWindow) => self.shared.focus_browser.store(true, Ordering::Relaxed),
             Some(AppAction::Url(url)) => crate::platform::open_url(url),
             Some(AppAction::Viewer(item)) => {

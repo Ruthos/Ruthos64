@@ -380,6 +380,29 @@ impl Database {
         Ok(())
     }
 
+    /// Set the dates a study was added and last opened (Unix seconds), as
+    /// recorded by another archive. `None` leaves a date as it is.
+    pub fn set_study_dates(&self, id: i64, added: Option<i64>, opened: Option<i64>) -> Result<()> {
+        let conn = self.conn.lock();
+        if let Some(a) = added {
+            conn.execute("UPDATE study SET date_added = ?1 WHERE id = ?2", params![a, id])?;
+        }
+        if let Some(o) = opened {
+            conn.execute("UPDATE study SET date_opened = ?1 WHERE id = ?2", params![o, id])?;
+        }
+        Ok(())
+    }
+
+    /// Set an image's comment unless it already has one. Returns whether
+    /// it was set.
+    pub fn set_image_comment_if_empty(&self, image_id: i64, comment: &str) -> Result<bool> {
+        let n = self.conn.lock().execute(
+            "UPDATE image SET comment = ?1 WHERE id = ?2 AND TRIM(comment) = ''",
+            params![comment, image_id],
+        )?;
+        Ok(n > 0)
+    }
+
     pub fn mark_study_opened(&self, id: i64) -> Result<()> {
         self.conn.lock().execute(
             "UPDATE study SET date_opened = ?1 WHERE id = ?2",

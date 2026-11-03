@@ -93,6 +93,7 @@ pub enum AppAction {
     Preferences,
     ImportFolder,
     ImportFiles,
+    ImportHoros,
     DatabaseWindow,
     /// Open a web page.
     Url(&'static str),
@@ -155,6 +156,12 @@ pub const MENU_BAR: &[MenuDef] = &[
                 "Import Files…",
                 Some("Ctrl+Shift+O"),
                 AppAction::ImportFiles,
+            ),
+            item(
+                "file:import-horos",
+                "Import Horos Database…",
+                None,
+                AppAction::ImportHoros,
             ),
             Entry::Separator,
             item(

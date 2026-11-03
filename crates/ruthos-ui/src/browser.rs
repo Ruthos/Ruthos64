@@ -115,6 +115,11 @@ pub struct BrowserState {
     /// Source studies (by UID) that have teaching cases; shown only here.
     teaching_sources: HashSet<String>,
     anonymize: Option<Box<AnonymizeState>>,
+    /// File > Import Horos Database.
+    horos: Option<Box<crate::horos_import::HorosImport>>,
+    /// Asked for from the menu: `Some(None)` to ask for the folder,
+    /// `Some(Some(dir))` to use that folder.
+    horos_request: Option<Option<PathBuf>>,
     send: Option<SendDialog>,
     preview: Preview,
     modalities: Vec<String>,
@@ -147,6 +152,8 @@ impl BrowserState {
             reports: HashSet::new(),
             teaching_sources: HashSet::new(),
             anonymize: None,
+            horos: None,
+            horos_request: None,
             send: None,
             preview: Preview::default(),
             modalities: Vec::new(),
@@ -172,6 +179,47 @@ impl BrowserState {
     pub fn import_folder_dialog(&mut self, shared: &Shared) {
         if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM folder").pick_folders() {
             self.start_import(shared, paths);
+        }
+    }
+
+    /// File > Import Horos Database; `dir` skips the folder dialog.
+    pub fn request_horos_import(&mut self, dir: Option<PathBuf>) {
+        self.horos_request = Some(dir);
+    }
+
+    fn horos_window(&mut self, ctx: &egui::Context, shared: &Shared) {
+        if let Some(req) = self.horos_request.take() {
+            if self.horos.is_none() {
+                let opened = match req {
+                    // Developer option: a folder ending in "::go" also starts the import.
+                    Some(dir) => {
+                        let text = dir.to_string_lossy().to_string();
+                        let go = text.ends_with("::go");
+                        let dir = PathBuf::from(text.trim_end_matches("::go"));
+                        Some(crate::horos_import::HorosImport::open(ctx, shared, dir).map(|mut h| {
+                            h.auto_start = go;
+                            h
+                        }))
+                    }
+                    None => crate::horos_import::HorosImport::pick(ctx, shared),
+                };
+                match opened {
+                    Some(Ok(h)) => self.horos = Some(Box::new(h)),
+                    Some(Err(e)) => self.set_status(e),
+                    None => {}
+                }
+            }
+        }
+        if let Some(mut h) = self.horos.take() {
+            match h.show(ctx, shared) {
+                Some(changed) => {
+                    if changed {
+                        self.dirty = true;
+                        self.set_status("Horos database imported");
+                    }
+                }
+                None => self.horos = Some(h),
+            }
         }
     }
 
@@ -493,6 +541,7 @@ impl BrowserState {
 
         self.show_modal(&ctx, shared);
         self.send_dialog(&ctx, shared);
+        self.horos_window(&ctx, shared);
         if let Some(mut a) = self.anonymize.take() {
             if a.show(&ctx, shared) {
                 self.dirty = true;
