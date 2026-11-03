@@ -306,6 +306,12 @@ fn check_dataset(obj: &InMemDicomObject, prefix: &str, file: &str, ctx: &VerifyC
             Value::PixelSequence(_) => {}
             Value::Primitive(_) => {
                 let vr = e.vr();
+                // Only text, UIDs and dates are checked. Converting anything
+                // else would turn native pixel data (tens of megabytes in an
+                // echo loop) into millions of strings for nothing.
+                if !(vr == VR::UI || vr == VR::DA || vr == VR::DT || STRING_VRS.contains(&vr)) {
+                    continue;
+                }
                 let values: Vec<String> = e.value().to_multi_str().map(|v| v.to_vec()).unwrap_or_default();
                 if vr == VR::UI {
                     for u in &values {
@@ -401,6 +407,37 @@ mod tests {
         let mut out = Vec::new();
         check_dataset(&leak, "", "f", &ctx, &mut out);
         assert_eq!(dates(&out), 1, "an unshifted series date is still a leak");
+    }
+
+    /// Verifying a large native image is quick: pixel data is skipped.
+    #[test]
+    fn pixel_data_is_not_turned_into_text() {
+        use dicom_core::{DataElement, PrimitiveValue};
+        let mut obj = InMemDicomObject::new_empty();
+        obj.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PrimitiveValue::U8(vec![7u8; 40_000_000].into()),
+        ));
+        obj.put(DataElement::new(
+            tags::PATIENT_NAME,
+            VR::PN,
+            PrimitiveValue::from("ASHBY^REX"),
+        ));
+        let mut ctx = VerifyContext::default();
+        ctx.tokens.push("Ashby".into());
+        let start = std::time::Instant::now();
+        let mut out = Vec::new();
+        check_dataset(&obj, "", "f", &ctx, &mut out);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "took {:?}",
+            start.elapsed()
+        );
+        assert!(
+            out.iter().any(|f| f.matched == "Ashby"),
+            "names are still checked: {out:?}"
+        );
     }
 
     #[test]

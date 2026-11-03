@@ -519,6 +519,19 @@ pub fn prepare(
     request: ExportRequest,
     progress: &dyn Fn(usize, usize, &str),
 ) -> Result<Prepared> {
+    prepare_cancellable(db, paths, request, progress, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// `prepare`, stopping between images when `cancel` is set. A cancelled run
+/// leaves nothing behind.
+pub fn prepare_cancellable(
+    db: &Database,
+    paths: &DataPaths,
+    request: ExportRequest,
+    progress: &dyn Fn(usize, usize, &str),
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Prepared> {
+    let cancelled = || cancel.load(std::sync::atomic::Ordering::Relaxed);
     let study = db
         .study(request.study_id)?
         .ok_or_else(|| CoreError::Other("study not found".into()))?;
@@ -636,6 +649,9 @@ pub fn prepare(
     let total = images.len();
     let result: Result<()> = (|| {
         for (i, (series, img)) in images.iter().enumerate() {
+            if cancelled() {
+                return Err(CoreError::Other("cancelled".into()));
+            }
             progress(i, total, &series.display_name());
             let src_path = paths.resolve(&img.path);
             let obj = open_any(&src_path, None)?;
@@ -754,11 +770,16 @@ pub fn prepare(
     // correctly shifted date that coincides with another original date of
     // the study is not taken for a leak.
     ctx.date_shift = Some(dates);
-    progress(total, total, "verifying");
     let mut findings = Vec::new();
-    for f in &files {
+    for (i, f) in files.iter().enumerate() {
+        if cancelled() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err(CoreError::Other("cancelled".into()));
+        }
+        progress(i, files.len(), &format!("verifying image {} of {}", i + 1, files.len()));
         findings.extend(verify_file(f, &ctx));
     }
+    progress(files.len(), files.len(), "verified");
     let sidecar_text = std::fs::read_to_string(temp_dir.join(SIDECAR_NAME)).unwrap_or_default();
     findings.extend(verify_text(SIDECAR_NAME, &sidecar_text, &ctx, false));
     findings.extend(verify_text("teaching name", &name, &ctx, false));

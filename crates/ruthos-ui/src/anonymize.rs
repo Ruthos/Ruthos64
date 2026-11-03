@@ -78,6 +78,12 @@ pub struct AnonymizeState {
     rx: Option<Receiver<Job>>,
     progress: (usize, usize, String),
     prepared: Option<Prepared>,
+    /// Set by Cancel; the preparing thread stops between images.
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The final write is running (it cannot be cancelled).
+    writing: bool,
+    /// Cancel was pressed while busy: close once the thread has stopped.
+    close_when_stopped: bool,
     overrides: HashMap<String, String>,
     blank: Vec<String>,
     result: Option<ExportResult>,
@@ -170,6 +176,9 @@ impl AnonymizeState {
             rx: None,
             progress: (0, 0, String::new()),
             prepared: None,
+            cancel: Default::default(),
+            writing: false,
+            close_when_stopped: false,
             overrides: HashMap::new(),
             blank: Vec::new(),
             result: None,
@@ -181,7 +190,12 @@ impl AnonymizeState {
     /// Returns true when the dialog is finished and should be dropped.
     pub fn show(&mut self, ctx: &Context, shared: &Shared) -> bool {
         self.pump();
-        let mut close = false;
+        // Cancelled while working: close once the thread has stopped and
+        // cleaned up after itself.
+        let mut close = self.close_when_stopped && !self.busy;
+        if self.busy {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
         egui::Modal::new(egui::Id::unique("anonymize-modal")).show(ctx, |ui| {
             ui.set_width(880.0);
             ui.set_max_height(620.0);
@@ -211,11 +225,19 @@ impl AnonymizeState {
                     }
                     return;
                 }
-                if ui.add_enabled(!self.busy, egui::Button::new("Cancel")).clicked() {
-                    if let Some(p) = self.prepared.take() {
-                        teaching::abandon(p);
+                // While a copy is being prepared Cancel stops it; it cannot
+                // interrupt the final write, which is quick and atomic.
+                let can_cancel = !self.busy || !self.writing;
+                if ui.add_enabled(can_cancel, egui::Button::new("Cancel")).clicked() {
+                    if self.busy {
+                        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                        self.close_when_stopped = true;
+                    } else {
+                        if let Some(p) = self.prepared.take() {
+                            teaching::abandon(p);
+                        }
+                        close = true;
                     }
-                    close = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match self.step {
                     Step::Case => {
@@ -812,16 +834,30 @@ impl AnonymizeState {
         let db = shared.db.clone();
         let paths = shared.paths.clone();
         let request = self.request();
+        self.cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel = self.cancel.clone();
         self.busy = true;
+        self.writing = false;
         self.rx = Some(rx);
         std::thread::Builder::new()
             .name("ruthos-anonymise".into())
             .spawn(move || {
                 let ptx = tx.clone();
-                let result = teaching::prepare(&db, &paths, request, &|done, total, what| {
-                    let _ = ptx.send(Job::Progress(done, total, what.to_string()));
-                })
-                .map_err(|e| e.to_string());
+                // A fault on this thread must reach the dialog, or it would
+                // wait for ever.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    teaching::prepare_cancellable(
+                        &db,
+                        &paths,
+                        request,
+                        &|done, total, what| {
+                            let _ = ptx.send(Job::Progress(done, total, what.to_string()));
+                        },
+                        &cancel,
+                    )
+                    .map_err(|e| e.to_string())
+                }))
+                .unwrap_or_else(|_| Err("an internal error stopped the copy; see crash.log".into()));
                 let _ = tx.send(Job::Prepared(result));
             })
             .ok();
@@ -833,11 +869,15 @@ impl AnonymizeState {
         let db = shared.db.clone();
         let paths = shared.paths.clone();
         self.busy = true;
+        self.writing = true;
         self.rx = Some(rx);
         std::thread::Builder::new()
             .name("ruthos-anonymise-write".into())
             .spawn(move || {
-                let result = teaching::commit(&db, &paths, prepared).map_err(|e| e.to_string());
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    teaching::commit(&db, &paths, prepared).map_err(|e| e.to_string())
+                }))
+                .unwrap_or_else(|_| Err("an internal error stopped the write; see crash.log".into()));
                 let _ = tx.send(Job::Committed(result));
             })
             .ok();
@@ -855,7 +895,9 @@ impl AnonymizeState {
                     done = true;
                 }
                 Job::Prepared(Err(e)) => {
-                    self.error = Some(e);
+                    if e != "cancelled" {
+                        self.error = Some(e);
+                    }
                     self.busy = false;
                     done = true;
                 }
