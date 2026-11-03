@@ -287,6 +287,9 @@ struct CalibrateDraft {
     pixel_length: f32,
     known_mm: String,
     apply_to_series: bool,
+    /// Midpoint of the reference length: scopes the calibration to the
+    /// ultrasound region under it, when the image has regions.
+    scope: Option<(f64, f64)>,
 }
 
 const FRAME_CACHE: usize = 24;
@@ -743,10 +746,11 @@ impl ViewerState {
             match loaded.result {
                 Ok(frame) => {
                     // A user calibration overrides whatever the header says.
-                    let frame = match shared.db.calibration(loaded.key.image_id) {
-                        Ok(Some(spacing)) => {
+                    let frame = match shared.db.calibration_scoped(loaded.key.image_id) {
+                        Ok(Some((spacing, scope))) => {
                             let mut f = Arc::try_unwrap(frame).unwrap_or_else(|a| (*a).clone());
-                            f.meta.pixel_spacing = Some(spacing);
+                            let region = scope.and_then(|(x, y)| f.meta.us_region_index_at(x, y));
+                            f.meta.hand_calibration = Some(ruthos_dicom::HandCalibration { spacing, region });
                             f.meta.pixel_spacing_is_calibrated = true;
                             f.meta.user_calibrated = true;
                             Arc::new(f)
@@ -893,11 +897,29 @@ impl ViewerState {
 
     /// Pixel length of the selected Length ROI on the current frame, if any.
     fn selected_length_px(&self) -> Option<f32> {
+        self.selected_length().map(|(px, _)| px)
+    }
+
+    /// Pixel length and midpoint of the selected Length ROI.
+    fn selected_length(&self) -> Option<(f32, (f64, f64))> {
         let key = self.current_key()?;
         let roi = self.rois.get(&key)?.get(self.selected_roi?)?;
         match &roi.kind {
-            RoiKind::Length { a, b } => Some((*b - *a).length()),
+            RoiKind::Length { a, b } => Some(((*b - *a).length(), (((a.x + b.x) / 2.0) as f64, ((a.y + b.y) / 2.0) as f64))),
             _ => None,
+        }
+    }
+
+    /// Scope for a calibration taken from the selected length: the region
+    /// under it, when the image has ultrasound regions.
+    fn calibration_scope(&self) -> Option<(f64, f64)> {
+        let (_, mid) = self.selected_length()?;
+        let key = self.current_key()?;
+        let frame = self.frames.get(&key)?;
+        if frame.meta.us_regions.is_empty() {
+            None
+        } else {
+            Some(mid)
         }
     }
 
@@ -945,11 +967,12 @@ impl ViewerState {
         if let Some((mm, to_series)) = apply {
             let spacing = mm / pixel_length as f64;
             let image_id = draft.image_id;
+            let scope = draft.scope;
             let series_id = self.current_series().id;
             let result = if to_series {
-                shared.db.set_series_calibration(series_id, spacing, spacing, "user length").map(|_| ())
+                shared.db.set_series_calibration_scoped(series_id, spacing, spacing, "user length", scope).map(|_| ())
             } else {
-                shared.db.set_calibration(image_id, spacing, spacing, "user length")
+                shared.db.set_calibration_scoped(image_id, spacing, spacing, "user length", scope)
             };
             match result {
                 Ok(()) => {
@@ -1225,6 +1248,7 @@ impl ViewerState {
                         pixel_length: px,
                         known_mm: String::new(),
                         apply_to_series: self.panes[self.active].images.len() > 1,
+                        scope: self.calibration_scope(),
                     });
                 }
             }
@@ -1829,6 +1853,7 @@ impl ViewerState {
                     pixel_length: px,
                     known_mm: String::new(),
                     apply_to_series: self.panes[self.active].images.len() > 1,
+                    scope: self.calibration_scope(),
                 });
             }
         }

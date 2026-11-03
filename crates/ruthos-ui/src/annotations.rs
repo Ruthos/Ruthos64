@@ -70,13 +70,16 @@ pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
         tl.push(format!("View size: {} x {}", rect.width().round() as i64, rect.height().round() as i64));
     }
     tl.push(format!("WL: {}  WW: {}", s.window_center.round() as i64, s.window_width.round() as i64));
+    // The scale every measurement on this image is computed from.
+    let scale = m.image_scale();
+    tl.push(format!("Scale: {}", scale.basis.label()));
     if full {
         if let Some((x, y)) = ctx.mouse_pixel {
             match ctx.frame.value_at(x, y) {
                 Some(v) => tl.push(format!("X: {x} px  Y: {y} px  Value: {}", fmt_value(v))),
                 None => tl.push(format!("X: {x} px  Y: {y} px")),
             }
-            if let Some([row_mm, col_mm]) = m.pixel_spacing {
+            if let Some([row_mm, col_mm]) = m.spacing_at(x as f64, y as f64) {
                 tl.push(format!("X: {:.1} mm  Y: {:.1} mm", x as f64 * col_mm, y as f64 * row_mm));
             }
         }

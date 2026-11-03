@@ -6,7 +6,7 @@
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
 use ruthos_core::RoiRecord;
-use ruthos_dicom::Frame;
+use ruthos_dicom::{Frame, MeasureIssue, SpacingBasis};
 use ruthos_render::ViewTransform;
 
 use crate::theme;
@@ -28,6 +28,17 @@ pub struct Roi {
     pub kind: RoiKind,
     /// The named measurement this ROI stands for, e.g. `LVIDd`.
     pub name: Option<String>,
+    /// Archive row id once stored; edits keep it.
+    pub id: Option<i64>,
+}
+
+/// The outcome of measuring a ROI on a frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Measurement {
+    pub value: Option<f64>,
+    pub unit: &'static str,
+    pub basis: Option<SpacingBasis>,
+    pub issue: Option<MeasureIssue>,
 }
 
 /// Pixel statistics inside a closed ROI.
@@ -43,7 +54,7 @@ pub struct RoiStats {
 
 impl Roi {
     pub fn new(kind: RoiKind) -> Self {
-        Self { kind, name: None }
+        Self { kind, name: None, id: None }
     }
 
     /// The storage form, with the value as measured on `frame`.
@@ -56,16 +67,17 @@ impl Roi {
             RoiKind::Arrow { .. } => "arrow",
             RoiKind::Point { .. } => "point",
         };
-        let (value, unit) = frame.map(|f| self.measurement(f)).unwrap_or((None, ""));
+        let m = frame.map(|f| self.measure(f));
         RoiRecord {
-            id: 0,
+            id: self.id.unwrap_or(0),
             image_id,
             frame: frame_index as i64,
             kind: kind.to_string(),
             points: self.points().iter().map(|p| [p.x, p.y]).collect(),
             name: self.name.clone(),
-            value,
-            unit: unit.to_string(),
+            value: m.as_ref().and_then(|m| m.value),
+            unit: m.as_ref().map(|m| m.unit.to_string()).unwrap_or_default(),
+            basis: m.as_ref().and_then(|m| m.basis).map(|b| b.key().to_string()),
         }
     }
 
@@ -80,27 +92,61 @@ impl Roi {
             "point" => RoiKind::Point { p: p(0)? },
             _ => return None,
         };
-        Some(Self { kind, name: r.name.clone() })
+        Some(Self { kind, name: r.name.clone(), id: if r.id > 0 { Some(r.id) } else { None } })
     }
 
-    /// The headline number and its unit, for storage and reports.
-    pub fn measurement(&self, frame: &Frame) -> (Option<f64>, &'static str) {
+    /// The headline number, unit and scale basis, for storage and reports.
+    pub fn measure(&self, frame: &Frame) -> Measurement {
+        let none = |issue: Option<MeasureIssue>| Measurement { value: None, unit: "", basis: None, issue };
         match &self.kind {
-            RoiKind::Length { a, b } => match length_mm(frame, *a, *b) {
-                Some(mm) => (Some(mm), "mm"),
-                None => (Some((*b - *a).length() as f64), "px"),
-            },
-            RoiKind::Angle { a, b, c } => (Some(angle_deg(*a, *b, *c, spacing_for(frame, *b)) as f64), "deg"),
-            RoiKind::Rect { .. } | RoiKind::Oval { .. } => match self.stats(frame) {
-                Some(s) => match s.area_mm2 {
-                    Some(a) => (Some(a), "mm2"),
-                    None => (Some(s.count as f64), "px"),
+            RoiKind::Length { a, b } => match frame.meta.length([a.x as f64, a.y as f64], [b.x as f64, b.y as f64]) {
+                Ok(l) => Measurement { value: Some(l.mm), unit: "mm", basis: Some(l.basis), issue: None },
+                Err(MeasureIssue::Uncalibrated) => Measurement {
+                    value: Some((*b - *a).length() as f64),
+                    unit: "px",
+                    basis: Some(SpacingBasis::Uncalibrated),
+                    issue: Some(MeasureIssue::Uncalibrated),
                 },
-                None => (None, ""),
+                Err(e) => none(Some(e)),
             },
-            RoiKind::Point { p } => (frame.value_at(p.x.floor() as i64, p.y.floor() as i64).map(|v| v as f64), ""),
-            RoiKind::Arrow { .. } => (None, ""),
+            RoiKind::Angle { a, b, c } => {
+                if !frame.meta.allows_geometry_at(b.x as f64, b.y as f64) {
+                    return none(Some(MeasureIssue::TimeAxis));
+                }
+                let scale = frame.meta.scale_at(b.x as f64, b.y as f64);
+                let spacing = scale.filter(|s| s.basis != SpacingBasis::Uncalibrated).map(|s| s.spacing);
+                Measurement { value: Some(angle_deg(*a, *b, *c, spacing) as f64), unit: "deg", basis: scale.map(|s| s.basis), issue: None }
+            }
+            RoiKind::Rect { a, b } | RoiKind::Oval { a, b } => {
+                let centre = Vec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+                if !frame.meta.allows_geometry_at(centre.x as f64, centre.y as f64) {
+                    return none(Some(MeasureIssue::TimeAxis));
+                }
+                match self.stats(frame) {
+                    Some(st) => {
+                        let scale = frame.meta.scale_at(centre.x as f64, centre.y as f64);
+                        match (st.area_mm2, scale) {
+                            (Some(area), Some(sc)) => Measurement { value: Some(area), unit: "mm2", basis: Some(sc.basis), issue: None },
+                            _ => Measurement { value: Some(st.count as f64), unit: "px", basis: Some(SpacingBasis::Uncalibrated), issue: Some(MeasureIssue::Uncalibrated) },
+                        }
+                    }
+                    None => none(None),
+                }
+            }
+            RoiKind::Point { p } => Measurement {
+                value: frame.value_at(p.x.floor() as i64, p.y.floor() as i64).map(|v| v as f64),
+                unit: "",
+                basis: None,
+                issue: None,
+            },
+            RoiKind::Arrow { .. } => none(None),
         }
+    }
+
+    /// Value and unit only, for callers that do not show the basis.
+    pub fn measurement(&self, frame: &Frame) -> (Option<f64>, &'static str) {
+        let m = self.measure(frame);
+        (m.value, m.unit)
     }
 
     pub fn points(&self) -> Vec<Vec2> {
@@ -180,19 +226,28 @@ impl Roi {
     /// The measured value as text.
     pub fn value_text(&self, frame: &Frame) -> String {
         match &self.kind {
-            RoiKind::Length { a, b } | RoiKind::Arrow { a, b } => {
+            RoiKind::Length { .. } | RoiKind::Arrow { .. } => {
                 if matches!(self.kind, RoiKind::Arrow { .. }) {
                     return String::new();
                 }
-                match length_mm(frame, *a, *b) {
-                    Some(mm) if mm >= 10.0 => format!("{:.2} cm", mm / 10.0),
-                    Some(mm) => format!("{mm:.2} mm"),
-                    None => format!("{:.1} px  (not calibrated)", (*b - *a).length()),
+                let m = self.measure(frame);
+                match (m.value, m.unit, m.issue) {
+                    (Some(mm), "mm", _) if mm >= 10.0 => format!("{:.2} cm{}", mm / 10.0, m.basis.map(|b| b.marker()).unwrap_or("")),
+                    (Some(mm), "mm", _) => format!("{mm:.2} mm{}", m.basis.map(|b| b.marker()).unwrap_or("")),
+                    (Some(px), "px", _) => format!("{px:.1} px  (not calibrated)"),
+                    (_, _, Some(issue)) => issue.label().to_string(),
+                    _ => String::new(),
                 }
             }
             RoiKind::Angle { a, b, c } => {
+                if !frame.meta.allows_geometry_at(b.x as f64, b.y as f64) {
+                    return MeasureIssue::TimeAxis.label().to_string();
+                }
                 let deg = angle_deg(*a, *b, *c, spacing_for(frame, *b));
                 format!("{deg:.1}°")
+            }
+            RoiKind::Rect { a, b } | RoiKind::Oval { a, b } if !frame.meta.allows_geometry_at(((a.x + b.x) / 2.0) as f64, ((a.y + b.y) / 2.0) as f64) => {
+                MeasureIssue::TimeAxis.label().to_string()
             }
             RoiKind::Rect { .. } | RoiKind::Oval { .. } => match self.stats(frame) {
                 Some(s) => {
@@ -435,6 +490,7 @@ mod tests {
         }
         let mut meta = InstanceMeta::default();
         meta.pixel_spacing = Some([0.5, 0.5]);
+        meta.pixel_spacing_tag = Some([0.5, 0.5]);
         Frame {
             width: 10,
             height: 10,
@@ -475,6 +531,7 @@ mod tests {
         let rec = roi.to_record(7, 0, Some(&f));
         assert_eq!((rec.kind.as_str(), rec.unit.as_str()), ("length", "mm"));
         assert!((rec.value.unwrap() - 2.0).abs() < 1e-6);
+        assert_eq!(rec.basis.as_deref(), Some("calibrated-unstated"));
         assert_eq!(Roi::from_record(&rec).unwrap(), roi);
     }
 }

@@ -283,6 +283,8 @@ pub struct RoiRecord {
     /// The measured value at the time it was stored, in `unit`.
     pub value: Option<f64>,
     pub unit: String,
+    /// The scale basis the value was computed from (`SpacingBasis::key`).
+    pub basis: Option<String>,
 }
 
 /// A named measurement with where it was taken, for reports.

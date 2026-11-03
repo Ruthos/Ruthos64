@@ -131,6 +131,16 @@ pub struct InstanceMeta {
     pub photometric_interpretation: String,
     /// Row spacing, column spacing in mm (Pixel Spacing, else Imager Pixel Spacing).
     pub pixel_spacing: Option<[f64; 2]>,
+    /// Pixel Spacing (0028,0030) as written, before any resolution.
+    pub pixel_spacing_tag: Option<[f64; 2]>,
+    /// Imager Pixel Spacing (0018,1164): spacing at the detector.
+    pub imager_pixel_spacing: Option<[f64; 2]>,
+    /// Estimated Radiographic Magnification Factor (0018,1114).
+    pub magnification_factor: Option<f64>,
+    /// Pixel Spacing Calibration Type (0028,0A02): GEOMETRY, FIDUCIAL or empty.
+    pub pixel_spacing_calibration_type: String,
+    /// A hand calibration applied by the viewer, possibly scoped to a region.
+    pub hand_calibration: Option<crate::scale::HandCalibration>,
     /// Ultrasound calibration regions (0018,6011): each gives its own scale,
     /// and an M-mode region has time across and distance down.
     pub us_regions: Vec<UsRegion>,
@@ -297,6 +307,11 @@ pub fn meta_from_object(obj: &Obj) -> InstanceMeta {
         samples_per_pixel: g.int(tags::SAMPLES_PER_PIXEL).unwrap_or(1) as u16,
         photometric_interpretation: g.str(tags::PHOTOMETRIC_INTERPRETATION),
         pixel_spacing: None,
+        pixel_spacing_tag: g.f64s(tags::PIXEL_SPACING).filter(|v| v.len() >= 2).map(|v| [v[0], v[1]]),
+        imager_pixel_spacing: g.f64s(tags::IMAGER_PIXEL_SPACING).filter(|v| v.len() >= 2).map(|v| [v[0], v[1]]),
+        magnification_factor: g.f64(tags::ESTIMATED_RADIOGRAPHIC_MAGNIFICATION_FACTOR).filter(|f| *f > 0.0),
+        pixel_spacing_calibration_type: g.str(tags::PIXEL_SPACING_CALIBRATION_TYPE),
+        hand_calibration: None,
         us_regions: read_us_regions(obj),
         user_calibrated: false,
         pixel_spacing_is_calibrated: false,
@@ -440,45 +455,6 @@ fn read_us_regions(obj: &Obj) -> Vec<UsRegion> {
         .collect()
 }
 
-impl InstanceMeta {
-    /// The ultrasound region under an image point, if any.
-    pub fn us_region_at(&self, x: f64, y: f64) -> Option<&UsRegion> {
-        self.us_regions.iter().find(|r| r.contains(x, y))
-    }
-
-    /// Pixel spacing (`[row, column]` mm) that applies at an image point: a
-    /// hand calibration first, then the ultrasound region under the point
-    /// when it is a 2D region, then the image's spacing.
-    pub fn spacing_at(&self, x: f64, y: f64) -> Option<[f64; 2]> {
-        if self.user_calibrated {
-            return self.pixel_spacing;
-        }
-        if let Some(r) = self.us_region_at(x, y) {
-            if let Some(s) = r.mm_per_pixel() {
-                return Some(s);
-            }
-        }
-        self.pixel_spacing
-    }
-
-    /// Length in millimetres between two image points. Inside an M-mode or
-    /// spectral strip only the vertical distance counts, since x is time.
-    pub fn length_mm(&self, a: [f64; 2], b: [f64; 2]) -> Option<f64> {
-        let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
-        if !self.user_calibrated {
-            if let Some(r) = self.us_region_at(mid[0], mid[1]) {
-                if r.is_time_across() {
-                    let row_mm = r.row_mm()?;
-                    return Some((b[1] - a[1]).abs() * row_mm);
-                }
-            }
-        }
-        let [row, col] = self.spacing_at(mid[0], mid[1])?;
-        let dx = (b[0] - a[0]) * col;
-        let dy = (b[1] - a[1]) * row;
-        Some((dx * dx + dy * dy).sqrt())
-    }
-}
 
 struct Getter<'a> {
     obj: &'a Obj,

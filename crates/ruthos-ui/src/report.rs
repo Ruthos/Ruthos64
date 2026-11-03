@@ -71,8 +71,9 @@ impl ReportState {
                 .or_insert_with(|| {
                     let path = shared.db.image(m.roi.image_id).ok().flatten().map(|i| shared.resolve(&i.path))?;
                     let mut frame = ruthos_dicom::decode_frame(&path, m.roi.frame as u32).ok()?;
-                    if let Ok(Some(spacing)) = shared.db.calibration(m.roi.image_id) {
-                        frame.meta.pixel_spacing = Some(spacing);
+                    if let Ok(Some((spacing, scope))) = shared.db.calibration_scoped(m.roi.image_id) {
+                        let region = scope.and_then(|(x, y)| frame.meta.us_region_index_at(x, y));
+                        frame.meta.hand_calibration = Some(ruthos_dicom::HandCalibration { spacing, region });
                         frame.meta.pixel_spacing_is_calibrated = true;
                         frame.meta.user_calibrated = true;
                     }
@@ -80,9 +81,10 @@ impl ReportState {
                 })
                 .clone();
             if let (Some(frame), Some(roi)) = (frame, crate::roi::Roi::from_record(&m.roi)) {
-                let (value, unit) = roi.measurement(&frame);
-                m.roi.value = value;
-                m.roi.unit = unit.to_string();
+                let mm = roi.measure(&frame);
+                m.roi.value = mm.value;
+                m.roi.unit = mm.unit.to_string();
+                m.roi.basis = mm.basis.map(|b| b.key().to_string());
             }
         }
         self.measurements = measurements;
@@ -187,18 +189,24 @@ impl ReportState {
             );
         } else {
             egui::Grid::new(("report-measurements", self.id))
-                .num_columns(3)
+                .num_columns(4)
                 .striped(true)
                 .spacing([18.0, 4.0])
                 .min_col_width(90.0)
                 .show(ui, |ui| {
                     ui.label(RichText::new("Measurement").strong());
                     ui.label(RichText::new("Value").strong());
+                    ui.label(RichText::new("Basis").strong());
                     ui.label(RichText::new("Image").strong());
                     ui.end_row();
                     for m in &self.measurements {
                         ui.label(m.roi.name.clone().unwrap_or_default());
                         ui.label(format_value(m.roi.value, &m.roi.unit));
+                        let basis = m.roi.basis.as_deref().and_then(ruthos_dicom::SpacingBasis::from_key);
+                        let r = ui.label(RichText::new(basis.map(|b| b.label()).unwrap_or("")).color(if basis.is_some_and(|b| !b.is_patient_scale()) { Color32::from_rgb(190, 90, 0) } else { Color32::from_gray(90) }));
+                        if let Some(b) = basis {
+                            r.on_hover_text(b.explanation());
+                        }
                         ui.label(RichText::new(m.location()).color(Color32::from_gray(90)));
                         ui.end_row();
                     }
@@ -308,6 +316,8 @@ impl ReportState {
                     name: m.roi.name.clone().unwrap_or_default(),
                     value: format_value(m.roi.value, &m.roi.unit),
                     location: m.location(),
+                    basis: m.roi.basis.as_deref().and_then(ruthos_dicom::SpacingBasis::from_key).map(|b| b.label().to_string()).unwrap_or_default(),
+                    patient_scale: m.roi.basis.as_deref().and_then(ruthos_dicom::SpacingBasis::from_key).map(|b| b.is_patient_scale()).unwrap_or(true),
                 })
                 .collect(),
             findings: self.findings.clone(),

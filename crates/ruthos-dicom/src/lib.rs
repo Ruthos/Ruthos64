@@ -16,12 +16,14 @@ pub mod open;
 pub mod pixels;
 pub mod presets;
 pub mod quirks;
+pub mod scale;
 pub mod sc;
 
 pub use clut::{Clut, ClutLibrary};
 pub use meta::{UsRegion, read_meta, InstanceMeta, PatientName};
 pub use pixels::{decode_all_frames, decode_frame, Frame, FramePixels};
 pub use presets::{WindowPreset, WindowPresets};
+pub use scale::{HandCalibration, Length, MeasureIssue, Scale, SpacingBasis};
 
 /// Errors produced while reading or decoding DICOM data.
 #[derive(Debug, thiserror::Error)]

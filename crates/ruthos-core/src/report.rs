@@ -20,6 +20,10 @@ pub struct ReportMeasurement {
     pub value: String,
     /// Where it was taken: series and image.
     pub location: String,
+    /// The scale basis in words; empty when not applicable.
+    pub basis: String,
+    /// False for detector-plane and uncalibrated values, which get a footnote.
+    pub patient_scale: bool,
 }
 
 /// A rendered key image, 8-bit RGB.
@@ -252,10 +256,17 @@ pub fn write_pdf(report: &ReportDocument, path: &Path) -> std::io::Result<()> {
 
     if !report.measurements.is_empty() {
         w.heading("Measurements");
-        w.columns(&[("Measurement", 70.0), ("Value", 44.0), ("Image", TEXT_W - 114.0)], 9.5, true);
+        w.columns(&[("Measurement", 56.0), ("Value", 36.0), ("Basis", 44.0), ("Image", TEXT_W - 136.0)], 9.5, true);
         w.gap(0.5);
+        let mut flagged = false;
         for m in &report.measurements {
-            w.columns(&[(m.name.as_str(), 70.0), (m.value.as_str(), 44.0), (m.location.as_str(), TEXT_W - 114.0)], 10.0, false);
+            let value = if m.patient_scale { m.value.clone() } else { format!("{} *", m.value) };
+            flagged |= !m.patient_scale;
+            w.columns(&[(m.name.as_str(), 56.0), (value.as_str(), 36.0), (m.basis.as_str(), 44.0), (m.location.as_str(), TEXT_W - 136.0)], 10.0, false);
+        }
+        if flagged {
+            w.gap(1.0);
+            w.text("* Measured at the detector plane or uncalibrated: the value is not the size of the structure in the patient. Detector-plane values overstate it by the radiographic magnification. Ratios of such values are unaffected.", 8.5, false);
         }
     }
 
@@ -328,6 +339,8 @@ mod tests {
                 name: "VHS long axis".into(),
                 value: "7.80 cm".into(),
                 location: "DX 1, image 2".into(),
+                basis: "Detector plane".into(),
+                patient_scale: false,
             }],
             findings: "Normal thorax. ".repeat(60),
             conclusion: "No abnormality detected.".into(),

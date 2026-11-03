@@ -636,33 +636,49 @@ impl Database {
     pub fn rois(&self, image_id: i64, frame: i64) -> Result<Vec<RoiRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, image_id, frame, kind, points, name, value, unit FROM roi
+            "SELECT id, image_id, frame, kind, points, name, value, unit, basis FROM roi
              WHERE image_id = ?1 AND frame = ?2 ORDER BY id",
         )?;
         let rows = stmt.query_map(params![image_id, frame], roi_from_row)?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
-    /// Replace every ROI of one frame with `rois`.
+    /// Replace every ROI of one frame with `rois`. Rows whose record carries
+    /// an id are updated in place, keeping the id, name and creation time;
+    /// new ones are inserted and the record's id is filled in; rows no longer
+    /// present are deleted.
     pub fn replace_rois(&self, image_id: i64, frame: i64, rois: &[RoiRecord]) -> Result<()> {
+        let mut copy: Vec<RoiRecord> = rois.to_vec();
+        self.sync_rois(image_id, frame, &mut copy)
+    }
+
+    pub fn sync_rois(&self, image_id: i64, frame: i64, rois: &mut [RoiRecord]) -> Result<()> {
         let mut conn = self.conn.lock();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM roi WHERE image_id = ?1 AND frame = ?2", params![image_id, frame])?;
-        for r in rois {
-            tx.execute(
-                "INSERT INTO roi (image_id, frame, kind, points, name, value, unit, date_created)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    image_id,
-                    frame,
-                    r.kind,
-                    serde_json::to_string(&r.points).unwrap_or_else(|_| "[]".into()),
-                    r.name,
-                    r.value,
-                    r.unit,
-                    now_unix()
-                ],
-            )?;
+        let existing: Vec<i64> = {
+            let mut stmt = tx.prepare("SELECT id FROM roi WHERE image_id = ?1 AND frame = ?2")?;
+            let ids = stmt.query_map(params![image_id, frame], |r| r.get::<_, i64>(0))?;
+            ids.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        let keep: Vec<i64> = rois.iter().map(|r| r.id).filter(|id| *id > 0).collect();
+        for id in existing.iter().filter(|id| !keep.contains(id)) {
+            tx.execute("DELETE FROM roi WHERE id = ?1", params![id])?;
+        }
+        for r in rois.iter_mut() {
+            let points = serde_json::to_string(&r.points).unwrap_or_else(|_| "[]".into());
+            if r.id > 0 && existing.contains(&r.id) {
+                tx.execute(
+                    "UPDATE roi SET kind = ?1, points = ?2, name = ?3, value = ?4, unit = ?5, basis = ?6, date_modified = ?7 WHERE id = ?8",
+                    params![r.kind, points, r.name, r.value, r.unit, r.basis, now_unix(), r.id],
+                )?;
+            } else {
+                tx.execute(
+                    "INSERT INTO roi (image_id, frame, kind, points, name, value, unit, basis, date_created, date_modified)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                    params![image_id, frame, r.kind, points, r.name, r.value, r.unit, r.basis, now_unix()],
+                )?;
+                r.id = tx.last_insert_rowid();
+            }
         }
         tx.commit()?;
         Ok(())
@@ -672,15 +688,15 @@ impl Database {
     pub fn named_measurements_for_study(&self, study_id: i64) -> Result<Vec<MeasurementRow>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT r.id, r.image_id, r.frame, r.kind, r.points, r.name, r.value, r.unit,
+            "SELECT r.id, r.image_id, r.frame, r.kind, r.points, r.name, r.value, r.unit, r.basis,
                     i.series_id, s.modality, s.series_number, s.series_description, i.instance_number
              FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
              WHERE s.study_id = ?1 AND r.name IS NOT NULL ORDER BY s.series_number, i.instance_number, r.id",
         )?;
         let rows = stmt.query_map(params![study_id], |row| {
-            let modality: String = row.get(9)?;
-            let number: Option<i64> = row.get(10)?;
-            let description: String = row.get(11)?;
+            let modality: String = row.get(10)?;
+            let number: Option<i64> = row.get(11)?;
+            let description: String = row.get(12)?;
             let mut label = modality;
             if let Some(n) = number {
                 label.push_str(&format!(" {n}"));
@@ -690,9 +706,9 @@ impl Database {
             }
             Ok(MeasurementRow {
                 roi: roi_from_row(row)?,
-                series_id: row.get(8)?,
+                series_id: row.get(9)?,
                 series_label: label,
-                instance_number: row.get(12)?,
+                instance_number: row.get(13)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -807,30 +823,51 @@ impl Database {
 
     /// User calibration (row mm, column mm) for an image, overriding the header.
     pub fn calibration(&self, image_id: i64) -> Result<Option<[f64; 2]>> {
+        Ok(self.calibration_scoped(image_id)?.map(|(s, _)| s))
+    }
+
+    /// The calibration with the image point it was set from, when scoped.
+    pub fn calibration_scoped(&self, image_id: i64) -> Result<Option<([f64; 2], Option<(f64, f64)>)>> {
         let conn = self.conn.lock();
         Ok(conn
             .query_row(
-                "SELECT row_mm, col_mm FROM calibration WHERE image_id = ?1",
+                "SELECT row_mm, col_mm, scope_x, scope_y FROM calibration WHERE image_id = ?1",
                 params![image_id],
-                |r| Ok([r.get::<_, f64>(0)?, r.get::<_, f64>(1)?]),
+                |r| {
+                    let scope = match (r.get::<_, Option<f64>>(2)?, r.get::<_, Option<f64>>(3)?) {
+                        (Some(x), Some(y)) => Some((x, y)),
+                        _ => None,
+                    };
+                    Ok(([r.get::<_, f64>(0)?, r.get::<_, f64>(1)?], scope))
+                },
             )
             .optional()?)
     }
 
     pub fn set_calibration(&self, image_id: i64, row_mm: f64, col_mm: f64, description: &str) -> Result<()> {
+        self.set_calibration_scoped(image_id, row_mm, col_mm, description, None)
+    }
+
+    /// Store a calibration, optionally scoped to the ultrasound region under
+    /// the point it was set from.
+    pub fn set_calibration_scoped(&self, image_id: i64, row_mm: f64, col_mm: f64, description: &str, scope: Option<(f64, f64)>) -> Result<()> {
         self.conn.lock().execute(
-            "INSERT OR REPLACE INTO calibration (image_id, row_mm, col_mm, description, date_set)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![image_id, row_mm, col_mm, description, now_unix()],
+            "INSERT OR REPLACE INTO calibration (image_id, row_mm, col_mm, description, date_set, scope_x, scope_y)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![image_id, row_mm, col_mm, description, now_unix(), scope.map(|s| s.0), scope.map(|s| s.1)],
         )?;
         Ok(())
     }
 
     /// Apply one calibration to every image of a series.
     pub fn set_series_calibration(&self, series_id: i64, row_mm: f64, col_mm: f64, description: &str) -> Result<usize> {
+        self.set_series_calibration_scoped(series_id, row_mm, col_mm, description, None)
+    }
+
+    pub fn set_series_calibration_scoped(&self, series_id: i64, row_mm: f64, col_mm: f64, description: &str, scope: Option<(f64, f64)>) -> Result<usize> {
         let images = self.images_for_series(series_id)?;
         for img in &images {
-            self.set_calibration(img.id, row_mm, col_mm, description)?;
+            self.set_calibration_scoped(img.id, row_mm, col_mm, description, scope)?;
         }
         Ok(images.len())
     }
@@ -1052,6 +1089,7 @@ fn roi_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoiRecord> {
         name: row.get(5)?,
         value: row.get(6)?,
         unit: row.get(7)?,
+        basis: row.get::<_, Option<String>>(8)?,
     })
 }
 
@@ -1199,6 +1237,21 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "study", "teaching_reference", "TEXT")?;
     add_column_if_missing(conn, "study", "teaching_answer_key", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(conn, "roi", "concept_code", "TEXT")?;
+    add_column_if_missing(conn, "roi", "basis", "TEXT")?;
+    add_column_if_missing(conn, "roi", "def_key", "TEXT")?;
+    add_column_if_missing(conn, "roi", "date_modified", "INTEGER")?;
+    add_column_if_missing(conn, "calibration", "scope_x", "REAL")?;
+    add_column_if_missing(conn, "calibration", "scope_y", "REAL")?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS roi_value (
+            roi_id INTEGER NOT NULL REFERENCES roi(id) ON DELETE CASCADE,
+            def_key TEXT NOT NULL,
+            value REAL,
+            unit TEXT NOT NULL DEFAULT '',
+            basis TEXT,
+            PRIMARY KEY (roi_id, def_key)
+         );",
+    )?;
     conn.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION.to_string()],
@@ -1323,6 +1376,7 @@ mod tests {
             name: Some("VHS long axis".into()),
             value: Some(50.0),
             unit: "mm".into(),
+            basis: None,
         };
         db.replace_rois(image_id, 0, &[rec]).unwrap();
         let named = db.named_measurements_for_study(study_id).unwrap();
@@ -1351,6 +1405,7 @@ mod tests {
             name: Some("LVIDd".into()),
             value: Some(42.0),
             unit: "mm".into(),
+            basis: None,
         };
         db.replace_rois(image_id, 0, &[rec.clone()]).unwrap();
         let got = db.rois(image_id, 0).unwrap();

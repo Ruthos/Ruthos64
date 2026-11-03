@@ -176,6 +176,8 @@ pub struct SidecarMeasurement {
     pub name: Option<String>,
     pub value: Option<f64>,
     pub unit: String,
+    #[serde(default)]
+    pub basis: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -529,6 +531,7 @@ pub fn prepare(db: &Database, paths: &DataPaths, request: ExportRequest, progres
                             name: r.name,
                             value: r.value,
                             unit: r.unit,
+                            basis: r.basis,
                         });
                     }
                 }
@@ -789,6 +792,7 @@ fn apply_sidecar_data(db: &Database, sidecar: &Sidecar, known_studies: &[i64]) -
                 name: m.name.clone(),
                 value: m.value,
                 unit: m.unit.clone(),
+                basis: m.basis.clone(),
             });
         }
     }
@@ -873,6 +877,7 @@ pub fn reexport_copy(db: &Database, paths: &DataPaths, study_id: i64, dest: &Pat
                         name: r.name,
                         value: r.value,
                         unit: r.unit,
+                        basis: r.basis,
                     });
                 }
             }

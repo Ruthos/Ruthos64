@@ -185,3 +185,52 @@ fn dump_regions_of_file_from_env() {
     println!("vertical 120px at x=300 in M-mode: {:?} mm", meta.length_mm([300.0, 180.0], [300.0, 300.0]));
     println!("diagonal (260,20)-(360,100): {:?} mm", meta.length_mm([260.0, 20.0], [360.0, 100.0]));
 }
+
+#[test]
+fn projection_image_scale_attributes_are_read() {
+    use dicom_core::value::PrimitiveValue;
+    use dicom_core::{dicom_value, DataElement, VR};
+    use dicom_dictionary_std::{tags, uids};
+    use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
+    use ruthos_dicom::SpacingBasis;
+
+    let mut o = InMemDicomObject::new_empty();
+    let mut put = |tag, vr, v: &str| o.put(DataElement::new(tag, vr, dicom_value!(Str, v)));
+    put(tags::SOP_CLASS_UID, VR::UI, uids::DIGITAL_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION);
+    put(tags::SOP_INSTANCE_UID, VR::UI, "1.2.3.9");
+    put(tags::STUDY_INSTANCE_UID, VR::UI, "1.2.3");
+    put(tags::SERIES_INSTANCE_UID, VR::UI, "1.2.3.1");
+    put(tags::MODALITY, VR::CS, "DX");
+    put(tags::PATIENT_NAME, VR::PN, "DX^TEST");
+    put(tags::PATIENT_ID, VR::LO, "D1");
+    put(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "MONOCHROME2");
+    put(tags::ESTIMATED_RADIOGRAPHIC_MAGNIFICATION_FACTOR, VR::DS, "1.1");
+    o.put(DataElement::new(tags::IMAGER_PIXEL_SPACING, VR::DS, dicom_value!(Strs, ["0.1", "0.1"])));
+    o.put(DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, dicom_value!(U16, [1])));
+    o.put(DataElement::new(tags::ROWS, VR::US, dicom_value!(U16, [4])));
+    o.put(DataElement::new(tags::COLUMNS, VR::US, dicom_value!(U16, [4])));
+    o.put(DataElement::new(tags::BITS_ALLOCATED, VR::US, dicom_value!(U16, [8])));
+    o.put(DataElement::new(tags::BITS_STORED, VR::US, dicom_value!(U16, [8])));
+    o.put(DataElement::new(tags::HIGH_BIT, VR::US, dicom_value!(U16, [7])));
+    o.put(DataElement::new(tags::PIXEL_REPRESENTATION, VR::US, dicom_value!(U16, [0])));
+    o.put(DataElement::new(tags::PIXEL_DATA, VR::OB, PrimitiveValue::from(vec![0u8; 16])));
+    let meta = FileMetaTableBuilder::new()
+        .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+        .media_storage_sop_class_uid(uids::DIGITAL_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION)
+        .media_storage_sop_instance_uid("1.2.3.9")
+        .implementation_class_uid("1.2.826.0.1.3680043.10.1465.1")
+        .build()
+        .unwrap();
+    let dir = std::env::temp_dir().join(format!("ruthos-dx-scale-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dx.dcm");
+    o.with_exact_meta(meta).write_to_file(&path).unwrap();
+    let m = read_meta(&path).unwrap();
+    assert_eq!(m.imager_pixel_spacing, Some([0.1, 0.1]));
+    assert_eq!(m.magnification_factor, Some(1.1));
+    let l = m.length([0.0, 0.0], [100.0, 0.0]).unwrap();
+    assert!((l.mm - 9.0909).abs() < 1e-3, "{}", l.mm);
+    assert_eq!(l.basis, SpacingBasis::MagnificationEstimated);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
