@@ -26,6 +26,7 @@ pub struct RuthosApp {
     shared: Arc<Shared>,
     browser: BrowserState,
     viewers: Vec<Arc<Mutex<ViewerState>>>,
+    mprs: Vec<Arc<Mutex<crate::mpr::MprState>>>,
     reports: Vec<Arc<Mutex<ReportState>>>,
     scp: Option<StoreScp>,
     incoming_stop: Arc<AtomicBool>,
@@ -173,6 +174,16 @@ impl RuthosApp {
             browser.selected_study = id;
         }
 
+        // Developer option: `RUTHOS_OPEN_MPR=<study>:<series>` opens an MPR window.
+        if let Some((st, se)) = std::env::var("RUTHOS_OPEN_MPR").ok().and_then(|v| {
+            v.split_once(':')
+                .map(|(a, b)| (a.trim().parse::<i64>(), b.trim().parse::<i64>()))
+        }) {
+            if let (Ok(st), Ok(se)) = (st, se) {
+                shared.open_mpr.lock().push((st, se));
+            }
+        }
+
         // Developer option: `RUTHOS_IMPORT_HOROS=<folder>` opens the Horos import on that folder.
         if let Some(v) = std::env::var("RUTHOS_IMPORT_HOROS").ok().filter(|v| !v.is_empty()) {
             browser.request_horos_import(Some(std::path::PathBuf::from(v)));
@@ -217,6 +228,7 @@ impl RuthosApp {
             shared,
             browser,
             viewers: Vec::new(),
+            mprs: Vec::new(),
             reports: Vec::new(),
             scp,
             incoming_stop,
@@ -518,6 +530,46 @@ impl eframe::App for RuthosApp {
         for study in viewer_requests {
             self.open_viewer(study, None);
         }
+        // MPR windows asked for by a viewer (or the developer option).
+        let mpr_requests: Vec<(i64, i64)> = std::mem::take(&mut *self.shared.open_mpr.lock());
+        for (study_id, series_id) in mpr_requests {
+            if let Some(existing) = self.mprs.iter().find(|m| m.lock().series_id == series_id) {
+                self.pending_focus = Some(existing.lock().viewport_id);
+                continue;
+            }
+            let study = self.shared.db.study(study_id).ok().flatten();
+            let series = self.shared.db.series(series_id).ok().flatten();
+            if let (Some(study), Some(series)) = (study, series) {
+                let m = crate::mpr::MprState::open(&self.shared, study, series, &ctx);
+                self.mprs.push(Arc::new(Mutex::new(m)));
+            }
+        }
+        self.mprs.retain(|m| !m.lock().close_requested);
+        for m in &self.mprs {
+            let (id, title) = {
+                let g = m.lock();
+                (g.viewport_id, g.title())
+            };
+            let m = m.clone();
+            let shared = self.shared.clone();
+            ctx.show_viewport_deferred(
+                id,
+                ViewportBuilder::default()
+                    .with_title(title)
+                    .with_inner_size([1500.0, 640.0])
+                    .with_min_inner_size([800.0, 360.0]),
+                move |ui, _class| {
+                    if let Err(msg) = crate::crash::guarded(|| m.lock().show(ui, &shared)) {
+                        m.lock().close_requested = true;
+                        shared
+                            .errors
+                            .lock()
+                            .push(format!("An MPR window was closed after an internal error: {msg}"));
+                    }
+                },
+            );
+        }
+
         let report_requests: Vec<i64> = std::mem::take(&mut *self.shared.open_reports.lock());
         for study in report_requests {
             self.open_report(study);

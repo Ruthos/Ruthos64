@@ -66,7 +66,7 @@ Work is organised in tiers. Each tier is usable on its own.
 
 ### Tier 2: MPR, data and integration
 
-- Orthogonal and oblique MPR, curved MPR, thick slab, MIP and MinIP, with reference lines and 3D position across series
+- Orthogonal and oblique MPR with linked crosshairs, thick slab MIP, MinIP and mean (done, see `docs/mpr.md`); curved MPR; reference lines and 3D position across series in the 2D viewer
 - Measurements, calculations and findings saved as DICOM Structured Reports (measurement reports, TID 1500) and read back in, so they travel with the study to a PACS and other viewers; key object selection documents for key images
 - Measurements and reports exported as data (CSV and JSON) for research, audit and teaching
 - API ready for practice management systems (PMS). Comments, measurements, reports and annotated still images are produced through one documented, versioned interface, so a PMS can be told when a study is reported and receive its findings, values and key images with their annotations. No particular PMS integration is promised yet; the principle is that connecting one needs a small connector, not changes to Ruthos

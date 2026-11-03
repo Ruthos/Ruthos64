@@ -74,6 +74,8 @@ pub struct Shared {
     pub focused_viewer: AtomicU64,
     /// Studies whose report window should open.
     pub open_reports: Mutex<Vec<i64>>,
+    /// Series to open in an MPR window: (study, series).
+    pub open_mpr: Mutex<Vec<(i64, i64)>>,
 }
 
 impl Shared {
@@ -114,6 +116,7 @@ impl Shared {
             watch: Arc::new(Default::default()),
             focused_viewer: AtomicU64::new(0),
             open_reports: Mutex::new(Vec::new()),
+            open_mpr: Mutex::new(Vec::new()),
         })
     }
 

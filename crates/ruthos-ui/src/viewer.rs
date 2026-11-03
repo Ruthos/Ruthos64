@@ -3121,10 +3121,20 @@ impl ViewerState {
                 toolbar_caption(ui, &clut_caption);
             });
 
-            ToolbarButton::new(Bitmap::ThreeD, "3D")
-                .enabled(false)
-                .tooltip("MPR and volume rendering arrive in Tier 2")
-                .show(ui);
+            let mpr_ok = crate::mpr::series_suits_mpr(&self.panes[self.active].images);
+            if ToolbarButton::new(Bitmap::Mpr, "MPR")
+                .enabled(mpr_ok)
+                .tooltip(if mpr_ok {
+                    "Multiplanar reconstruction: axial, coronal, sagittal and oblique planes through this series"
+                } else {
+                    "MPR needs a series of at least three slices, such as a CT or MR"
+                })
+                .show(ui)
+                .clicked()
+            {
+                let series = self.current_series().id;
+                shared.open_mpr.lock().push((self.study.id, series));
+            }
 
             // Orientation menu
             ui.vertical(|ui| {
