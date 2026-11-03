@@ -38,6 +38,7 @@ pub struct RuthosApp {
     error_dialog: Vec<String>,
     prefs: Option<PrefsState>,
     query: Option<QueryState>,
+    router: crate::routing::Router,
 }
 
 impl RuthosApp {
@@ -211,6 +212,7 @@ impl RuthosApp {
             error_dialog: Vec::new(),
             prefs: None,
             query: None,
+            router: Default::default(),
         })
     }
 
@@ -534,6 +536,7 @@ impl eframe::App for RuthosApp {
 
         self.preferences(&ctx);
         self.query_window(&ctx);
+        self.router.pump(&ctx, &self.shared);
 
         let caught = std::mem::take(&mut *self.shared.errors.lock());
         for msg in caught {

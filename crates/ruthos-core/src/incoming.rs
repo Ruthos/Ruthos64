@@ -34,13 +34,20 @@ impl IncomingScanner {
                 while !stop.load(Ordering::Relaxed) {
                     let files = settled_files(&paths.incoming_dir(), Duration::from_secs(1));
                     if !files.is_empty() {
-                        let mut summary = ImportSummary::default();
+                        let mut summary = ImportSummary {
+                            from_network: true,
+                            ..Default::default()
+                        };
                         for file in files {
                             match import_file(&db, &paths, &file, ImportMode::Move) {
                                 Ok(FileOutcome::Imported {
-                                    study_id, new_study, ..
+                                    study_id,
+                                    new_study,
+                                    image_id,
+                                    ..
                                 }) => {
                                     summary.imported += 1;
+                                    summary.image_ids.push(image_id);
                                     if new_study && !summary.new_study_ids.contains(&study_id) {
                                         summary.new_study_ids.push(study_id);
                                     }

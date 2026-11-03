@@ -19,6 +19,8 @@ use ruthos_net::{
 };
 
 const STUDY: &str = "1.2.826.0.1.3680043.10.1465.99.1";
+const SERIES_A: &str = "1.2.826.0.1.3680043.10.1465.99.2";
+const SERIES_B: &str = "1.2.826.0.1.3680043.10.1465.99.5";
 
 fn image(sop: &str) -> InMemDicomObject {
     let mut o = InMemDicomObject::new_empty();
@@ -112,6 +114,26 @@ fn serve(assoc: &mut dicom_ul::association::server::ServerAssociation<std::net::
             }
             dimse::C_FIND_RQ => {
                 let q = decode(m.data.as_deref().unwrap(), &ts).unwrap();
+                if str_of(&q, tags::QUERY_RETRIEVE_LEVEL) == "SERIES" {
+                    for (n, (uid, modality)) in [(SERIES_B, "SR"), (SERIES_A, "CT")].iter().enumerate() {
+                        let mut r = InMemDicomObject::new_empty();
+                        for (tag, vr, v) in [
+                            (tags::QUERY_RETRIEVE_LEVEL, VR::CS, "SERIES"),
+                            (tags::STUDY_INSTANCE_UID, VR::UI, STUDY),
+                            (tags::SERIES_INSTANCE_UID, VR::UI, *uid),
+                            (tags::MODALITY, VR::CS, *modality),
+                            (tags::SERIES_NUMBER, VR::IS, if n == 0 { "2" } else { "1" }),
+                            (tags::NUMBER_OF_SERIES_RELATED_INSTANCES, VR::IS, "2"),
+                        ] {
+                            r.put(DataElement::new(tag, vr, PrimitiveValue::from(v)));
+                        }
+                        let rsp = command(dimse::C_FIND_RSP, id, &sop_class, true, vec![status_element(0xFF00)]);
+                        send_message(assoc, m.pc_id, &rsp, Some(&encode(&r, &ts).unwrap())).unwrap();
+                    }
+                    let done = command(dimse::C_FIND_RSP, id, &sop_class, false, vec![status_element(0)]);
+                    send_message(assoc, m.pc_id, &done, None).unwrap();
+                    continue;
+                }
                 let name = str_of(&q, tags::PATIENT_NAME);
                 let pid = str_of(&q, tags::PATIENT_ID);
                 // One study for PONY or P123, none otherwise.
@@ -135,11 +157,17 @@ fn serve(assoc: &mut dicom_ul::association::server::ServerAssociation<std::net::
                 send_message(assoc, m.pc_id, &done, None).unwrap();
             }
             dimse::C_GET_RQ => {
+                let q = decode(m.data.as_deref().unwrap(), &ts).unwrap();
+                let series_only = str_of(&q, tags::QUERY_RETRIEVE_LEVEL) == "SERIES";
+                assert!(!series_only || str_of(&q, tags::SERIES_INSTANCE_UID) == SERIES_A);
                 let (store_pc, store_ts) = context_for(assoc, uids::CT_IMAGE_STORAGE).unwrap();
-                for (n, sop) in ["1.2.826.0.1.3680043.10.1465.99.3", "1.2.826.0.1.3680043.10.1465.99.4"]
-                    .iter()
-                    .enumerate()
-                {
+                let sops: &[&str] = if series_only {
+                    &["1.2.826.0.1.3680043.10.1465.99.3"]
+                } else {
+                    &["1.2.826.0.1.3680043.10.1465.99.3", "1.2.826.0.1.3680043.10.1465.99.4"]
+                };
+                let last = sops.len() as u16 - 1;
+                for (n, sop) in sops.iter().enumerate() {
                     let rq = command(
                         dimse::C_STORE_RQ,
                         100 + n as u16,
@@ -166,7 +194,7 @@ fn serve(assoc: &mut dicom_ul::association::server::ServerAssociation<std::net::
                             DataElement::new(
                                 tags::NUMBER_OF_REMAINING_SUBOPERATIONS,
                                 VR::US,
-                                PrimitiveValue::from(1 - n as u16),
+                                PrimitiveValue::from(last - n as u16),
                             ),
                             DataElement::new(
                                 tags::NUMBER_OF_COMPLETED_SUBOPERATIONS,
@@ -289,6 +317,33 @@ fn c_get_brings_the_images_into_the_folder() {
         assert_eq!(str_of(&obj, tags::STUDY_INSTANCE_UID), STUDY);
     }
     assert!(seen.lock().unwrap().iter().any(|p| p.total() == Some(2)));
+}
+
+#[test]
+fn a_study_lists_its_series_and_one_series_can_be_retrieved() {
+    let (port, _) = start_pacs();
+    let never = AtomicBool::new(false);
+    let series = ruthos_net::find_series(&node(port), "RUTHOS", STUDY, &never).unwrap();
+    assert_eq!(series.len(), 2);
+    assert_eq!(
+        (series[0].number, series[0].modality.as_str()),
+        (Some(1), "CT"),
+        "in series order"
+    );
+    assert_eq!(series[0].instances, Some(2));
+    let out = temp("series");
+    let r = ruthos_net::retrieve_series(
+        &node(port),
+        "RUTHOS",
+        STUDY,
+        SERIES_A,
+        RetrieveMethod::Get,
+        &out,
+        &|_| {},
+        &never,
+    )
+    .unwrap();
+    assert_eq!(r.files.len(), 1, "only that series");
 }
 
 #[test]

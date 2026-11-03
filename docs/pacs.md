@@ -58,6 +58,13 @@ shows progress, and *In database* with an *Open* button once the images
 have been imported. Retrieved images land in the incoming folder and are
 imported exactly as images sent to the listener are.
 
+**Browse by series.** The arrow beside a study asks the PACS for its
+series and lists them underneath, each with its number, modality,
+description and image count, and its own *Retrieve*, so one loop or one
+view can be brought in without the whole study. Many PACS leave a study's
+modalities and image count blank; once its series are listed, Ruthos fills
+them in.
+
 ## Sending
 
 Select a study in the database window and click **Send**. Choose the PACS
@@ -66,10 +73,28 @@ format it is stored in when the PACS accepts it; when the PACS accepts
 only uncompressed images, compressed ones are converted first. Images the
 PACS refuses are listed with the reason, and the rest are still sent.
 
+## Routing
+
+Preferences > Routing sends images on to a PACS as they arrive, as Horos's
+auto-routing does. A rule reads as a sentence, *Send US and CR images
+received over the network to Clinic PACS*, and has three choices:
+
+- **When images arrive** over the network (from modalities through the
+  listener, and studies retrieved from a PACS), or from any import (also
+  folders, files and pictures).
+- **Modalities**, such as `US, CR`; empty for all.
+- **Send to** one of the PACS set up under PACS.
+
+Ruthos collects a study's images and sends them in one go once no new image
+of that study has arrived for five seconds. A send that fails is tried again
+three times, a minute apart. A study retrieved from a PACS is never routed
+back to that same PACS. *Recent activity* on the same page lists what was
+sent, refused or retried, in plain words.
+
 ## What is underneath
 
 `ruthos-net` implements the DICOM services on the dicom-rs upper layer:
-C-ECHO, C-FIND (Study Root, study level), C-GET (Ruthos takes the storage
+C-ECHO, C-FIND (Study Root, study and series level), C-GET (Ruthos takes the storage
 role on the same association), C-MOVE, C-STORE and C-CANCEL. Errors are
 classified in `ruthos_net::error` and explained by `explain`.
 

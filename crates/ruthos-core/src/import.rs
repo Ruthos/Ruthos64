@@ -43,6 +43,11 @@ pub struct ImportSummary {
     pub errors: Vec<(PathBuf, String)>,
     pub new_study_ids: Vec<i64>,
     pub touched_study_ids: Vec<i64>,
+    /// Images added by this import, for routing.
+    pub image_ids: Vec<i64>,
+    /// Received over the network (the listener or a PACS retrieval)
+    /// rather than imported from a folder or files.
+    pub from_network: bool,
 }
 
 impl ImportSummary {
@@ -107,9 +112,13 @@ impl Importer {
                 for (file, r) in results {
                     match r {
                         Ok(FileOutcome::Imported {
-                            study_id, new_study, ..
+                            study_id,
+                            new_study,
+                            image_id,
+                            ..
                         }) => {
                             summary.imported += 1;
+                            summary.image_ids.push(image_id);
                             if new_study && !summary.new_study_ids.contains(&study_id) {
                                 summary.new_study_ids.push(study_id);
                             }

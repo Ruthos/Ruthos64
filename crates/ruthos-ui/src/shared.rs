@@ -61,6 +61,13 @@ pub struct Shared {
     pub prefs_section: Mutex<Option<&'static str>>,
     /// Open the Query/Retrieve window, on a PACS by index.
     pub open_query: Mutex<Option<Option<usize>>>,
+    /// Finished imports waiting for the router.
+    pub route_inbox: Mutex<Vec<crate::routing::Arrival>>,
+    /// What the router did, newest first.
+    pub route_log: Mutex<std::collections::VecDeque<crate::routing::RouteLogEntry>>,
+    /// Studies retrieved from a PACS, by Study Instance UID, so routing
+    /// never sends a study back where it came from.
+    pub retrieved_from: Mutex<HashMap<String, String>>,
     /// The viewer window that last had keyboard focus, for menu actions.
     pub focused_viewer: AtomicU64,
     /// Studies whose report window should open.
@@ -99,6 +106,9 @@ impl Shared {
             open_prefs: AtomicBool::new(false),
             prefs_section: Mutex::new(None),
             open_query: Mutex::new(None),
+            route_inbox: Mutex::new(Vec::new()),
+            route_log: Mutex::new(Default::default()),
+            retrieved_from: Mutex::new(HashMap::new()),
             focused_viewer: AtomicU64::new(0),
             open_reports: Mutex::new(Vec::new()),
         })

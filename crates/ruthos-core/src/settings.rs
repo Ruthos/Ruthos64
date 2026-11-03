@@ -48,6 +48,8 @@ pub struct Settings {
     pub echo_length_unit: String,
     /// PACS that Ruthos can search, retrieve from and send to.
     pub pacs_nodes: Vec<PacsNode>,
+    /// Send arriving images on to a PACS automatically.
+    pub routing_rules: Vec<crate::routing::RouteRule>,
 }
 
 /// A PACS (or another viewer's archive) as Ruthos knows it.
@@ -140,6 +142,7 @@ impl Default for Settings {
             loupe_fine_movement: true,
             echo_length_unit: "mm".to_string(),
             pacs_nodes: Vec::new(),
+            routing_rules: Vec::new(),
         }
     }
 }

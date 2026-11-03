@@ -316,6 +316,12 @@ impl BrowserState {
                 ImportEvent::Progress { done, total, current } => self.import_progress = Some((done, total, current)),
                 ImportEvent::Finished(summary) => {
                     self.import_progress = None;
+                    if !summary.image_ids.is_empty() && !shared.settings.lock().routing_rules.is_empty() {
+                        shared.route_inbox.lock().push(crate::routing::Arrival {
+                            from_network: summary.from_network,
+                            image_ids: summary.image_ids.clone(),
+                        });
+                    }
                     if summary.total_files() > 0 {
                         let msg = format!(
                             "Imported {} image{}{}{}",

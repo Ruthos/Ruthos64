@@ -918,6 +918,54 @@ impl Database {
             .optional()?)
     }
 
+    /// What routing needs to know about newly imported images: their
+    /// study, its UID and label, the series modality and the stored path.
+    pub fn route_items(&self, image_ids: &[i64]) -> Result<Vec<crate::routing::RouteItem>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT i.id, st.id, st.study_instance_uid, st.patient_name, st.study_date, se.modality, i.path
+             FROM image i JOIN series se ON se.id = i.series_id JOIN study st ON st.id = se.study_id
+             WHERE i.id = ?1",
+        )?;
+        let mut out = Vec::new();
+        for id in image_ids {
+            let row = stmt
+                .query_row(params![id], |r| {
+                    Ok(crate::routing::RouteItem {
+                        image_id: r.get(0)?,
+                        study_id: r.get(1)?,
+                        study_uid: r.get(2)?,
+                        study_label: {
+                            let name: String = r.get(3)?;
+                            let date: Option<String> = r.get(4)?;
+                            match date {
+                                Some(d) if !d.is_empty() => format!("{name}, {d}"),
+                                _ => name,
+                            }
+                        },
+                        modality: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                        path: r.get(6)?,
+                    })
+                })
+                .optional()?;
+            out.extend(row);
+        }
+        Ok(out)
+    }
+
+    /// Whether the archive holds a series with this Series Instance UID.
+    pub fn series_in_archive(&self, series_uid: &str) -> Result<bool> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                "SELECT 1 FROM series WHERE series_instance_uid = ?1",
+                params![series_uid],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     /// Every image of a study, for sending it.
     pub fn images_for_study(&self, study_id: i64) -> Result<Vec<ImageRow>> {
         let mut out = Vec::new();

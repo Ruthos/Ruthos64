@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use egui::{Color32, RichText, Ui, ViewportId};
 use egui_extras::{Column, TableBuilder};
 use parking_lot::Mutex;
-use ruthos_net::{NetError, Problem, RetrieveOutcome, RetrieveProgress, StudyQuery, StudyResult};
+use ruthos_net::{NetError, Problem, RetrieveOutcome, RetrieveProgress, SeriesResult, StudyQuery, StudyResult};
 
 use crate::pacs::{effective_method, me, node, problem, show_problem, Task};
 use crate::shared::Shared;
@@ -79,6 +79,29 @@ struct RetrieveJob {
     cancel: Arc<AtomicBool>,
 }
 
+/// The series of an expanded study.
+enum SeriesState {
+    Loading(Task<Result<Vec<SeriesResult>, NetError>>),
+    Loaded(Vec<SeriesResult>),
+    Failed(Problem),
+}
+
+/// One line of the results table: a study, or a series under it.
+#[derive(Clone, Copy)]
+enum Line {
+    Study(usize),
+    Series(usize, usize),
+    Note(usize),
+}
+
+/// The key of a retrieval: the study, or the study and one series.
+fn job_key(study: &str, series: Option<&str>) -> String {
+    match series {
+        Some(s) => format!("{study}|{s}"),
+        None => study.to_string(),
+    }
+}
+
 enum RowState {
     Retrieving,
     Done(RetrieveOutcome),
@@ -103,6 +126,12 @@ pub struct QueryState {
     /// Study UID to local study id, refreshed every couple of seconds.
     local: HashMap<String, i64>,
     local_checked: Option<Instant>,
+    /// Studies whose series are shown.
+    expanded: HashSet<String>,
+    series: HashMap<String, SeriesState>,
+    /// Series already in the archive, by Series Instance UID.
+    local_series: HashSet<String>,
+    pending_expand: Option<String>,
     dev_searched: bool,
 }
 
@@ -125,6 +154,10 @@ impl QueryState {
             rows: HashMap::new(),
             local: HashMap::new(),
             local_checked: None,
+            expanded: HashSet::new(),
+            series: HashMap::new(),
+            local_series: HashSet::new(),
+            pending_expand: None,
             dev_searched: false,
         }
     }
@@ -158,8 +191,9 @@ impl QueryState {
         ));
     }
 
-    fn start_retrieve(&mut self, ctx: &egui::Context, shared: &Shared, study_uid: &str) {
-        if self.jobs.contains_key(study_uid) {
+    fn start_retrieve(&mut self, ctx: &egui::Context, shared: &Shared, study_uid: &str, series_uid: Option<&str>) {
+        let key = job_key(study_uid, series_uid);
+        if self.jobs.contains_key(&key) {
             return;
         }
         let settings = shared.settings.lock().clone();
@@ -170,34 +204,55 @@ impl QueryState {
         let method = match effective_method(&n, listener_on) {
             Ok(m) => m,
             Err(p) => {
-                self.rows.insert(study_uid.to_string(), RowState::Failed(p));
+                self.rows.insert(key, RowState::Failed(p));
                 return;
             }
         };
+        // Routing must not send this study straight back.
+        shared
+            .retrieved_from
+            .lock()
+            .insert(study_uid.to_string(), n.name.trim().to_string());
         let progress = Arc::new(Mutex::new(RetrieveProgress::default()));
         let cancel = Arc::new(AtomicBool::new(false));
         let (p2, c2, ctx2) = (progress.clone(), cancel.clone(), ctx.clone());
         let target = node(&n);
         let ae = settings.listener_ae_title.clone();
         let out = shared.paths.incoming_dir();
-        let uid = study_uid.to_string();
+        let study = study_uid.to_string();
+        let series = series_uid.map(String::from);
         let task = Task::spawn(ctx, "ruthos-retrieve", move || {
-            ruthos_net::retrieve_study(
-                &target,
-                &ae,
-                &uid,
-                method,
-                &out,
-                &|p| {
-                    *p2.lock() = p;
-                    ctx2.request_repaint();
-                },
-                &c2,
-            )
+            let report = |p: RetrieveProgress| {
+                *p2.lock() = p;
+                ctx2.request_repaint();
+            };
+            match &series {
+                Some(se) => ruthos_net::retrieve_series(&target, &ae, &study, se, method, &out, &report, &c2),
+                None => ruthos_net::retrieve_study(&target, &ae, &study, method, &out, &report, &c2),
+            }
         });
-        self.rows.insert(study_uid.to_string(), RowState::Retrieving);
-        self.jobs
-            .insert(study_uid.to_string(), RetrieveJob { progress, task, cancel });
+        self.rows.insert(key.clone(), RowState::Retrieving);
+        self.jobs.insert(key, RetrieveJob { progress, task, cancel });
+    }
+
+    /// Show or hide a study's series, asking the PACS the first time.
+    fn toggle_series(&mut self, ctx: &egui::Context, shared: &Shared, study_uid: &str) {
+        if !self.expanded.remove(study_uid) {
+            self.expanded.insert(study_uid.to_string());
+            if !matches!(self.series.get(study_uid), Some(SeriesState::Loaded(_))) {
+                let settings = shared.settings.lock().clone();
+                let Some(n) = settings.pacs_nodes.get(self.node).cloned() else {
+                    return;
+                };
+                let target = node(&n);
+                let ae = settings.listener_ae_title.clone();
+                let uid = study_uid.to_string();
+                let task = Task::spawn(ctx, "ruthos-find-series", move || {
+                    ruthos_net::find_series(&target, &ae, &uid, &AtomicBool::new(false))
+                });
+                self.series.insert(study_uid.to_string(), SeriesState::Loading(task));
+            }
+        }
     }
 
     fn poll(&mut self, shared: &Shared) {
@@ -214,6 +269,13 @@ impl QueryState {
                         self.selected.retain(|u| results.iter().any(|s| &s.study_uid == u));
                         self.results = results;
                         self.local_checked = None;
+                        self.expanded.clear();
+                        self.series.clear();
+                        // Developer option: `RUTHOS_QUERY_EXPAND=1` shows the
+                        // first study's series, for screenshots.
+                        if std::env::var_os("RUTHOS_QUERY_EXPAND").is_some() {
+                            self.pending_expand = self.results.first().map(|s| s.study_uid.clone());
+                        }
                     }
                     Err(NetError::Cancelled) => {}
                     Err(e) => {
@@ -222,6 +284,45 @@ impl QueryState {
                     }
                 }
             }
+        }
+        let loading: Vec<String> = self
+            .series
+            .iter()
+            .filter(|(_, st)| matches!(st, SeriesState::Loading(_)))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for uid in loading {
+            let Some(SeriesState::Loading(t)) = self.series.get(&uid) else {
+                continue;
+            };
+            let Some(r) = t.take() else { continue };
+            let state = match r {
+                Ok(list) => {
+                    // Many PACS leave the study's modalities and image count
+                    // blank; the series say what they are.
+                    if let Some(study) = self.results.iter_mut().find(|s| s.study_uid == uid) {
+                        if study.modalities.trim().is_empty() {
+                            let mut mods: Vec<String> = Vec::new();
+                            for m in list.iter().map(|s| s.modality.clone()).filter(|m| !m.is_empty()) {
+                                if !mods.contains(&m) {
+                                    mods.push(m);
+                                }
+                            }
+                            study.modalities = mods.join(" ");
+                        }
+                        if study.instances.is_none() {
+                            let sum: u32 = list.iter().filter_map(|s| s.instances).sum();
+                            if sum > 0 {
+                                study.instances = Some(sum);
+                            }
+                        }
+                    }
+                    SeriesState::Loaded(list)
+                }
+                Err(e) => SeriesState::Failed(problem(&e, &n, &me)),
+            };
+            self.series.insert(uid, state);
+            self.local_checked = None;
         }
         let finished: Vec<String> = self.jobs.keys().cloned().collect();
         for uid in finished {
@@ -251,6 +352,16 @@ impl QueryState {
                     self.local.insert(s.study_uid.clone(), id);
                 }
             }
+            self.local_series.clear();
+            for st in self.series.values() {
+                if let SeriesState::Loaded(list) = st {
+                    for se in list {
+                        if shared.db.series_in_archive(&se.series_uid).unwrap_or(false) {
+                            self.local_series.insert(se.series_uid.clone());
+                        }
+                    }
+                }
+            }
             self.local_checked = Some(Instant::now());
         }
     }
@@ -262,6 +373,9 @@ impl QueryState {
         }
         self.poll(shared);
         let ctx = ui.ctx().clone();
+        if let Some(uid) = self.pending_expand.take() {
+            self.toggle_series(&ctx, shared, &uid);
+        }
         if !self.searched
             && self.search.is_none()
             && std::env::var_os("RUTHOS_OPEN_QUERY").is_some()
@@ -377,7 +491,7 @@ impl QueryState {
                     {
                         let uids: Vec<String> = self.selected.iter().cloned().collect();
                         for u in uids {
-                            self.start_retrieve(&ctx, shared, &u);
+                            self.start_retrieve(&ctx, shared, &u, None);
                         }
                     }
                     if self.searched {
@@ -398,15 +512,32 @@ impl QueryState {
 
     fn table(&mut self, ui: &mut Ui, shared: &Shared) {
         let ctx = ui.ctx().clone();
-        let mut retrieve: Option<String> = None;
+        // (study, series) to retrieve, a local study to open, a job to cancel.
+        let mut retrieve: Option<(String, Option<String>)> = None;
         let mut open: Option<i64> = None;
         let mut cancel: Option<String> = None;
+        let mut toggle: Option<String> = None;
         let results = self.results.clone();
+        let mut lines = Vec::new();
+        for (i, s) in results.iter().enumerate() {
+            lines.push(Line::Study(i));
+            if self.expanded.contains(&s.study_uid) {
+                match self.series.get(&s.study_uid) {
+                    Some(SeriesState::Loaded(list)) => {
+                        for j in 0..list.len() {
+                            lines.push(Line::Series(i, j));
+                        }
+                    }
+                    _ => lines.push(Line::Note(i)),
+                }
+            }
+        }
+        let red = Color32::from_rgb(190, 40, 30);
         TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(24.0))
+            .column(Column::exact(46.0))
             .column(Column::initial(190.0).at_least(100.0))
             .column(Column::initial(90.0))
             .column(Column::initial(84.0))
@@ -431,91 +562,189 @@ impl QueryState {
                 }
             })
             .body(|body| {
-                body.rows(26.0, results.len(), |mut row| {
-                    let s = &results[row.index()];
-                    let uid = s.study_uid.clone();
-                    row.col(|ui| {
-                        let mut on = self.selected.contains(&uid);
-                        if ui.checkbox(&mut on, "").changed() {
-                            if on {
-                                self.selected.insert(uid.clone());
-                            } else {
-                                self.selected.remove(&uid);
-                            }
+                body.rows(26.0, lines.len(), |mut row| {
+                    let line = lines[row.index()];
+                    match line {
+                        Line::Study(i) => {
+                            let s = &results[i];
+                            let uid = s.study_uid.clone();
+                            row.col(|ui| {
+                                let open_arrow = crate::icons::rich(
+                                    if self.expanded.contains(&uid) {
+                                        crate::icons::CARET_DOWN
+                                    } else {
+                                        crate::icons::CARET_RIGHT
+                                    },
+                                    13.0,
+                                );
+                                if ui
+                                    .add(egui::Button::new(open_arrow).frame(false))
+                                    .on_hover_text("Show or hide this study's series")
+                                    .clicked()
+                                {
+                                    toggle = Some(uid.clone());
+                                }
+                                let mut on = self.selected.contains(&uid);
+                                if ui.checkbox(&mut on, "").changed() {
+                                    if on {
+                                        self.selected.insert(uid.clone());
+                                    } else {
+                                        self.selected.remove(&uid);
+                                    }
+                                }
+                            });
+                            row.col(|ui| {
+                                ui.label(s.patient_name.replace('^', ", "));
+                            });
+                            row.col(|ui| {
+                                ui.label(&s.patient_id);
+                            });
+                            row.col(|ui| {
+                                ui.label(pretty_date(&s.study_date));
+                            });
+                            row.col(|ui| {
+                                ui.label(&s.modalities);
+                            });
+                            row.col(|ui| {
+                                ui.label(&s.description);
+                            });
+                            row.col(|ui| {
+                                ui.label(s.instances.map(|n| n.to_string()).unwrap_or_default());
+                            });
+                            row.col(|ui| {
+                                let local = self.local.get(&uid).copied();
+                                self.status_cell(ui, &uid, local.is_some(), &mut cancel, &mut retrieve, (&uid, None));
+                                if let (Some(id), false) = (local, self.jobs.contains_key(&uid)) {
+                                    if ui.small_button("Open").clicked() {
+                                        open = Some(id);
+                                    }
+                                }
+                            });
                         }
-                    });
-                    row.col(|ui| {
-                        ui.label(s.patient_name.replace('^', ", "));
-                    });
-                    row.col(|ui| {
-                        ui.label(&s.patient_id);
-                    });
-                    row.col(|ui| {
-                        ui.label(pretty_date(&s.study_date));
-                    });
-                    row.col(|ui| {
-                        ui.label(&s.modalities);
-                    });
-                    row.col(|ui| {
-                        ui.label(&s.description);
-                    });
-                    row.col(|ui| {
-                        ui.label(s.instances.map(|n| n.to_string()).unwrap_or_default());
-                    });
-                    row.col(|ui| {
-                        let local = self.local.get(&uid).copied();
-                        if let Some(job) = self.jobs.get(&uid) {
-                            let p = *job.progress.lock();
-                            let text = match p.total() {
-                                Some(t) if t > 0 => format!("Retrieving {} of {t}", p.completed.max(p.received)),
-                                _ if p.received > 0 => format!("Retrieving: {} received", p.received),
-                                _ => "Retrieving\u{2026}".to_string(),
+                        Line::Series(i, j) => {
+                            let study = &results[i];
+                            let Some(SeriesState::Loaded(list)) = self.series.get(&study.study_uid) else {
+                                return;
                             };
-                            ui.spinner();
-                            ui.label(text);
-                            if ui.small_button("Cancel").clicked() {
-                                cancel = Some(uid.clone());
-                            }
-                            return;
+                            let se = list[j].clone();
+                            let key = job_key(&study.study_uid, Some(&se.series_uid));
+                            row.col(|_| {});
+                            row.col(|ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "      Series {}",
+                                        se.number.map(|n| n.to_string()).unwrap_or_else(|| "\u{2014}".into())
+                                    ))
+                                    .color(Color32::from_gray(90)),
+                                );
+                            });
+                            row.col(|_| {});
+                            row.col(|_| {});
+                            row.col(|ui| {
+                                ui.label(&se.modality);
+                            });
+                            row.col(|ui| {
+                                ui.label(&se.description);
+                            });
+                            row.col(|ui| {
+                                ui.label(se.instances.map(|n| n.to_string()).unwrap_or_default());
+                            });
+                            row.col(|ui| {
+                                self.status_cell(
+                                    ui,
+                                    &key,
+                                    self.local_series.contains(&se.series_uid),
+                                    &mut cancel,
+                                    &mut retrieve,
+                                    (&study.study_uid, Some(&se.series_uid)),
+                                );
+                            });
                         }
-                        match (self.rows.get(&uid), local) {
-                            (Some(RowState::Failed(p)), _) => {
-                                ui.label(RichText::new("Failed").color(Color32::from_rgb(190, 40, 30)))
-                                    .on_hover_text(format!("{}\n{}", p.summary, p.fix));
-                                if ui.small_button("Retry").clicked() {
-                                    retrieve = Some(uid.clone());
+                        Line::Note(i) => {
+                            let study = &results[i];
+                            row.col(|_| {});
+                            row.col(|ui| match self.series.get(&study.study_uid) {
+                                Some(SeriesState::Failed(p)) => {
+                                    ui.label(RichText::new(format!("      {}", p.summary)).color(red).size(12.0))
+                                        .on_hover_text(&p.fix);
                                 }
-                            }
-                            (_, Some(id)) => {
-                                ui.label(RichText::new("In database").color(Color32::from_rgb(30, 120, 50)));
-                                if ui.small_button("Open").clicked() {
-                                    open = Some(id);
+                                _ => {
+                                    ui.spinner();
+                                    ui.label(
+                                        RichText::new("Asking for the series\u{2026}").color(Color32::from_gray(110)),
+                                    );
                                 }
-                            }
-                            (Some(RowState::Done(o)), None) => {
-                                let n = o.progress.completed.max(o.progress.received);
-                                ui.label(format!("{n} images received; importing\u{2026}"));
-                            }
-                            _ => {
-                                if ui.small_button("Retrieve").clicked() {
-                                    retrieve = Some(uid.clone());
-                                }
+                            });
+                            for _ in 0..6 {
+                                row.col(|_| {});
                             }
                         }
-                    });
+                    }
                 });
             });
-        if let Some(uid) = retrieve {
-            self.rows.remove(&uid);
-            self.start_retrieve(&ctx, shared, &uid);
+        if let Some(uid) = toggle {
+            self.toggle_series(&ctx, shared, &uid);
         }
-        if let Some(uid) = cancel {
-            if let Some(j) = self.jobs.get(&uid) {
+        if let Some((study, series)) = retrieve {
+            self.rows.remove(&job_key(&study, series.as_deref()));
+            self.start_retrieve(&ctx, shared, &study, series.as_deref());
+        }
+        if let Some(key) = cancel {
+            if let Some(j) = self.jobs.get(&key) {
                 j.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
         if let Some(id) = open {
             shared.open_requests.lock().push(id);
+        }
+    }
+
+    /// The status of a study or series: progress, failure with the reason,
+    /// in the archive, or a Retrieve button.
+    fn status_cell(
+        &self,
+        ui: &mut Ui,
+        key: &str,
+        in_archive: bool,
+        cancel: &mut Option<String>,
+        retrieve: &mut Option<(String, Option<String>)>,
+        target: (&str, Option<&str>),
+    ) {
+        let want = || (target.0.to_string(), target.1.map(String::from));
+        if let Some(job) = self.jobs.get(key) {
+            let p = *job.progress.lock();
+            let text = match p.total() {
+                Some(t) if t > 0 => format!("Retrieving {} of {t}", p.completed.max(p.received)),
+                _ if p.received > 0 => format!("Retrieving: {} received", p.received),
+                _ => "Retrieving\u{2026}".to_string(),
+            };
+            ui.spinner();
+            ui.label(text);
+            if ui.small_button("Cancel").clicked() {
+                *cancel = Some(key.to_string());
+            }
+            return;
+        }
+        match self.rows.get(key) {
+            Some(RowState::Failed(p)) => {
+                ui.label(RichText::new("Failed").color(Color32::from_rgb(190, 40, 30)))
+                    .on_hover_text(format!("{}\n{}", p.summary, p.fix));
+                if ui.small_button("Retry").clicked() {
+                    *retrieve = Some(want());
+                }
+            }
+            _ if in_archive => {
+                ui.label(RichText::new("In database").color(Color32::from_rgb(30, 120, 50)));
+            }
+            Some(RowState::Done(o)) => {
+                let n = o.progress.completed.max(o.progress.received);
+                ui.label(format!("{n} images received; importing\u{2026}"));
+            }
+            _ => {
+                if ui.small_button("Retrieve").clicked() {
+                    *retrieve = Some(want());
+                }
+            }
         }
     }
 }

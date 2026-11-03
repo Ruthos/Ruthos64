@@ -13,6 +13,6 @@ pub mod scu;
 pub use error::{explain, local_address, Me, NetError, Node, Problem};
 pub use scp::{ListenerConfig, NetEvent, StoreScp};
 pub use scu::{
-    echo, find_studies, retrieve_study, send_files, RetrieveMethod, RetrieveOutcome, RetrieveProgress, SendOutcome,
-    StudyQuery, StudyResult,
+    echo, find_series, find_studies, retrieve_series, retrieve_study, send_files, RetrieveMethod, RetrieveOutcome,
+    RetrieveProgress, SendOutcome, SeriesResult, StudyQuery, StudyResult,
 };

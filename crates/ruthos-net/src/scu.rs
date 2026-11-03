@@ -188,7 +188,7 @@ fn find_once(
     identifier: &Obj,
     message_id: u16,
     cancel: &AtomicBool,
-) -> Result<Vec<StudyResult>, NetError> {
+) -> Result<Vec<Obj>, NetError> {
     let model = uids::STUDY_ROOT_QUERY_RETRIEVE_INFORMATION_MODEL_FIND;
     let (pc, ts) = context_for(assoc, model).ok_or(NetError::NotSupported("searching (C-FIND)"))?;
     let data = encode(identifier, &ts)?;
@@ -214,7 +214,7 @@ fn find_once(
         let status = m.status();
         if is_pending(status) {
             if let Some(d) = &m.data {
-                out.push(study_result(&decode(d, &ts)?));
+                out.push(decode(d, &ts)?);
             }
             continue;
         }
@@ -245,6 +245,59 @@ fn send_cancel(link: &mut dyn Link, pc: u8, message_id: u16) -> Result<(), NetEr
     send_message(link, pc, &cancel, None)
 }
 
+/// One series of a study as the PACS describes it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SeriesResult {
+    pub series_uid: String,
+    pub number: Option<i64>,
+    pub modality: String,
+    pub description: String,
+    pub instances: Option<u32>,
+}
+
+/// The series of a study (a C-FIND at series level), in series order.
+pub fn find_series(
+    node: &Node,
+    me_ae: &str,
+    study_uid: &str,
+    cancel: &AtomicBool,
+) -> Result<Vec<SeriesResult>, NetError> {
+    let mut assoc = connect(
+        ClientAssociationOptions::new().with_presentation_context(
+            uids::STUDY_ROOT_QUERY_RETRIEVE_INFORMATION_MODEL_FIND,
+            vec![EXPLICIT_VR_LE, IMPLICIT_VR_LE],
+        ),
+        node,
+        me_ae,
+    )?;
+    let mut q = InMemDicomObject::new_empty();
+    for e in [
+        el(tags::QUERY_RETRIEVE_LEVEL, VR::CS, "SERIES"),
+        el(tags::STUDY_INSTANCE_UID, VR::UI, study_uid),
+        el(tags::SERIES_INSTANCE_UID, VR::UI, ""),
+        el(tags::SERIES_NUMBER, VR::IS, ""),
+        el(tags::MODALITY, VR::CS, ""),
+        el(tags::SERIES_DESCRIPTION, VR::LO, ""),
+        el(tags::NUMBER_OF_SERIES_RELATED_INSTANCES, VR::IS, ""),
+    ] {
+        q.put(e);
+    }
+    let found = find_once(&mut assoc, &q, 1, cancel);
+    release(assoc);
+    let mut out: Vec<SeriesResult> = found?
+        .iter()
+        .map(|o| SeriesResult {
+            series_uid: str_of(o, tags::SERIES_INSTANCE_UID),
+            number: str_of(o, tags::SERIES_NUMBER).trim().parse().ok(),
+            modality: str_of(o, tags::MODALITY),
+            description: str_of(o, tags::SERIES_DESCRIPTION),
+            instances: number(o, tags::NUMBER_OF_SERIES_RELATED_INSTANCES),
+        })
+        .collect();
+    out.sort_by_key(|s| s.number.unwrap_or(i64::MAX));
+    Ok(out)
+}
+
 /// Search the PACS for studies. A patient field is tried as a name and as
 /// an ID, and the results merged, so the user need not say which it is.
 pub fn find_studies(
@@ -263,15 +316,25 @@ pub fn find_studies(
     let text = q.patient.trim();
     let mut results = if text.is_empty() {
         find_once(&mut assoc, &study_identifier(q, "", ""), 1, cancel)?
+            .iter()
+            .map(study_result)
+            .collect::<Vec<_>>()
     } else {
         let name = if text.contains('*') {
             text.to_string()
         } else {
             format!("*{text}*")
         };
-        let mut r = find_once(&mut assoc, &study_identifier(q, &name, ""), 1, cancel)?;
+        let mut r = find_once(&mut assoc, &study_identifier(q, &name, ""), 1, cancel)?
+            .iter()
+            .map(study_result)
+            .collect::<Vec<_>>();
         if !text.contains(' ') {
-            for s in find_once(&mut assoc, &study_identifier(q, "", text), 2, cancel)? {
+            for s in find_once(&mut assoc, &study_identifier(q, "", text), 2, cancel)?
+                .iter()
+                .map(study_result)
+                .collect::<Vec<_>>()
+            {
                 if !r.iter().any(|x| x.study_uid == s.study_uid) {
                     r.push(s);
                 }
@@ -340,11 +403,41 @@ pub struct RetrieveOutcome {
     pub files: Vec<PathBuf>,
 }
 
-fn retrieve_identifier(study_uid: &str) -> Obj {
+fn retrieve_identifier(study_uid: &str, series_uid: Option<&str>) -> Obj {
     let mut obj = InMemDicomObject::new_empty();
-    obj.put(el(tags::QUERY_RETRIEVE_LEVEL, VR::CS, "STUDY"));
+    obj.put(el(
+        tags::QUERY_RETRIEVE_LEVEL,
+        VR::CS,
+        if series_uid.is_some() { "SERIES" } else { "STUDY" },
+    ));
     obj.put(el(tags::STUDY_INSTANCE_UID, VR::UI, study_uid));
+    if let Some(series) = series_uid {
+        obj.put(el(tags::SERIES_INSTANCE_UID, VR::UI, series));
+    }
     obj
+}
+
+/// Bring one series of a study into `out_dir`.
+#[allow(clippy::too_many_arguments)]
+pub fn retrieve_series(
+    node: &Node,
+    me_ae: &str,
+    study_uid: &str,
+    series_uid: &str,
+    method: RetrieveMethod,
+    out_dir: &Path,
+    progress: &dyn Fn(RetrieveProgress),
+    cancel: &AtomicBool,
+) -> Result<RetrieveOutcome, NetError> {
+    retrieve_with(
+        node,
+        me_ae,
+        &retrieve_identifier(study_uid, Some(series_uid)),
+        method,
+        out_dir,
+        progress,
+        cancel,
+    )
 }
 
 /// Bring a study into `out_dir` (the archive's incoming folder).
@@ -357,13 +450,33 @@ pub fn retrieve_study(
     progress: &dyn Fn(RetrieveProgress),
     cancel: &AtomicBool,
 ) -> Result<RetrieveOutcome, NetError> {
+    retrieve_with(
+        node,
+        me_ae,
+        &retrieve_identifier(study_uid, None),
+        method,
+        out_dir,
+        progress,
+        cancel,
+    )
+}
+
+fn retrieve_with(
+    node: &Node,
+    me_ae: &str,
+    identifier: &Obj,
+    method: RetrieveMethod,
+    out_dir: &Path,
+    progress: &dyn Fn(RetrieveProgress),
+    cancel: &AtomicBool,
+) -> Result<RetrieveOutcome, NetError> {
     match method {
-        RetrieveMethod::Get => get_study(node, me_ae, study_uid, out_dir, progress, cancel),
-        RetrieveMethod::Move => move_study(node, me_ae, study_uid, progress, cancel),
-        RetrieveMethod::Auto => match get_study(node, me_ae, study_uid, out_dir, progress, cancel) {
+        RetrieveMethod::Get => get_study(node, me_ae, identifier, out_dir, progress, cancel),
+        RetrieveMethod::Move => move_study(node, me_ae, identifier, progress, cancel),
+        RetrieveMethod::Auto => match get_study(node, me_ae, identifier, out_dir, progress, cancel) {
             Err(NetError::NotSupported(_)) | Err(NetError::Status(0xA900..=0xA9FF)) => {
                 tracing::info!("{} does not offer C-GET; retrieving with C-MOVE", node.ae_title);
-                move_study(node, me_ae, study_uid, progress, cancel)
+                move_study(node, me_ae, identifier, progress, cancel)
             }
             other => other,
         },
@@ -373,7 +486,7 @@ pub fn retrieve_study(
 fn get_study(
     node: &Node,
     me_ae: &str,
-    study_uid: &str,
+    identifier: &Obj,
     out_dir: &Path,
     progress: &dyn Fn(RetrieveProgress),
     cancel: &AtomicBool,
@@ -394,7 +507,7 @@ fn get_study(
     let (pc, ts) = context_for(&assoc, model).ok_or(NetError::NotSupported("retrieval by C-GET"))?;
     std::fs::create_dir_all(out_dir)
         .map_err(|e| NetError::Other(format!("cannot write to {}: {e}", out_dir.display())))?;
-    let data = encode(&retrieve_identifier(study_uid), &ts)?;
+    let data = encode(identifier, &ts)?;
     send_message(
         &mut assoc,
         pc,
@@ -481,7 +594,7 @@ fn get_study(
 fn move_study(
     node: &Node,
     me_ae: &str,
-    study_uid: &str,
+    identifier: &Obj,
     progress: &dyn Fn(RetrieveProgress),
     cancel: &AtomicBool,
 ) -> Result<RetrieveOutcome, NetError> {
@@ -492,7 +605,7 @@ fn move_study(
         me_ae,
     )?;
     let (pc, ts) = context_for(&assoc, model).ok_or(NetError::NotSupported("retrieval by C-MOVE"))?;
-    let data = encode(&retrieve_identifier(study_uid), &ts)?;
+    let data = encode(identifier, &ts)?;
     let destination = DataElement::new(tags::MOVE_DESTINATION, VR::AE, PrimitiveValue::from(me_ae));
     send_message(
         &mut assoc,

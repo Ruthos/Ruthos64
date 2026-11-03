@@ -22,6 +22,7 @@ enum Section {
     General,
     Listener,
     Pacs,
+    Routing,
     Viewer,
     Measurements,
 }
@@ -32,6 +33,8 @@ pub struct PrefsState {
     library_editor: LibraryEditor,
     /// The PACS being edited, by index.
     pacs_edit: Option<usize>,
+    /// The routing rule being edited, by index.
+    route_edit: Option<usize>,
     pacs_tests: std::collections::HashMap<usize, crate::pacs::Task<Result<std::time::Duration, ruthos_net::NetError>>>,
     pacs_results: std::collections::HashMap<usize, Result<std::time::Duration, ruthos_net::NetError>>,
     pub close_requested: bool,
@@ -49,6 +52,7 @@ impl PrefsState {
         let section = match asked.or_else(|| std::env::var("RUTHOS_OPEN_PREFS").ok()).as_deref() {
             Some("listener") => Section::Listener,
             Some("pacs") => Section::Pacs,
+            Some("routing") => Section::Routing,
             Some("viewer") => Section::Viewer,
             Some("measurements") => Section::Measurements,
             _ => Section::General,
@@ -58,6 +62,7 @@ impl PrefsState {
             draft,
             library_editor: LibraryEditor::default(),
             pacs_edit: None,
+            route_edit: None,
             pacs_tests: Default::default(),
             pacs_results: Default::default(),
             close_requested: false,
@@ -95,6 +100,7 @@ impl PrefsState {
                             "Listener",
                         ),
                         (Section::Pacs, crate::widgets::Icon::Bitmap(Bitmap::Query), "PACS"),
+                        (Section::Routing, crate::widgets::Icon::Bitmap(Bitmap::Send), "Routing"),
                         (Section::Viewer, crate::widgets::Icon::Bitmap(Bitmap::Viewer), "Viewer"),
                         (
                             Section::Measurements,
@@ -151,6 +157,7 @@ impl PrefsState {
                         Section::General => self.general(ui, shared),
                         Section::Listener => self.listener(ui),
                         Section::Pacs => self.pacs(ui, shared),
+                        Section::Routing => self.routing(ui, shared),
                         Section::Viewer => self.viewer(ui, shared),
                         Section::Measurements => self.measurements(ui),
                     });
@@ -466,6 +473,141 @@ impl PrefsState {
             );
         }
         Self::hint(ui, "Changes are kept when you press Save.");
+    }
+
+    fn routing(&mut self, ui: &mut Ui, shared: &Shared) {
+        use ruthos_core::routing::{RouteRule, RouteSource};
+        Self::heading(ui, "Routing");
+        Self::hint(
+            ui,
+            "Send images on to a PACS as they arrive. Ruthos waits until a study has been quiet for a few seconds and sends it in one go; a send that fails is tried again three times, a minute apart. A study retrieved from a PACS is never sent back to that PACS.",
+        );
+        ui.add_space(8.0);
+        let names: Vec<String> = self.draft.pacs_nodes.iter().map(|n| n.name.clone()).collect();
+        if names.is_empty() {
+            ui.label("Routing needs a PACS to send to.");
+            if ui.button("Set up a PACS first").clicked() {
+                self.section = Section::Pacs;
+            }
+            return;
+        }
+        let mut remove = None;
+        for i in 0..self.draft.routing_rules.len() {
+            let r = &mut self.draft.routing_rules[i];
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut r.enabled, "");
+                let text = RichText::new(r.sentence());
+                ui.label(if r.enabled {
+                    text
+                } else {
+                    text.color(Color32::from_gray(140))
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                    let editing = self.route_edit == Some(i);
+                    if ui.button(if editing { "Close" } else { "Edit" }).clicked() {
+                        self.route_edit = if editing { None } else { Some(i) };
+                    }
+                });
+            });
+        }
+        if let Some(i) = remove {
+            self.draft.routing_rules.remove(i);
+            self.route_edit = None;
+        }
+        if ui.button("Add a rule").clicked() {
+            self.draft.routing_rules.push(RouteRule {
+                destination: names[0].clone(),
+                ..Default::default()
+            });
+            self.route_edit = Some(self.draft.routing_rules.len() - 1);
+        }
+        if let Some(i) = self.route_edit.filter(|i| *i < self.draft.routing_rules.len()) {
+            ui.add_space(10.0);
+            let r = &mut self.draft.routing_rules[i];
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                egui::Grid::new("route-edit")
+                    .num_columns(2)
+                    .spacing([12.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("When images arrive");
+                        egui::ComboBox::from_id_salt("route-source")
+                            .selected_text(match r.source {
+                                RouteSource::Network => "over the network",
+                                RouteSource::Any => "from any import",
+                            })
+                            .width(200.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut r.source, RouteSource::Network, "over the network")
+                                    .on_hover_text(
+                                        "From modalities through the listener, and studies retrieved from a PACS",
+                                    );
+                                ui.selectable_value(&mut r.source, RouteSource::Any, "from any import")
+                                    .on_hover_text("Also folders, files and pictures imported by hand");
+                            });
+                        ui.end_row();
+                        ui.label("Modalities");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut r.modalities)
+                                .desired_width(200.0)
+                                .hint_text("US, CR (empty for all)"),
+                        );
+                        ui.end_row();
+                        ui.label("Send to");
+                        egui::ComboBox::from_id_salt("route-dest")
+                            .selected_text(if r.destination.is_empty() {
+                                "Choose a PACS".to_string()
+                            } else {
+                                r.destination.clone()
+                            })
+                            .width(200.0)
+                            .show_ui(ui, |ui| {
+                                for n in &names {
+                                    ui.selectable_value(&mut r.destination, n.clone(), n);
+                                }
+                            });
+                        ui.end_row();
+                    });
+                ui.label(RichText::new(r.sentence()).italics());
+                if !names.iter().any(|n| n.eq_ignore_ascii_case(r.destination.trim())) {
+                    ui.label(
+                        RichText::new("No PACS has that name any more; choose one.")
+                            .color(Color32::from_rgb(190, 40, 30)),
+                    );
+                }
+            });
+        }
+        Self::hint(ui, "Changes take effect when you press Save.");
+
+        ui.add_space(14.0);
+        Self::heading(ui, "Recent activity");
+        let log = shared.route_log.lock().clone();
+        if log.is_empty() {
+            Self::hint(ui, "Nothing routed since Ruthos started.");
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("route-log")
+            .max_height(180.0)
+            .show(ui, |ui| {
+                for e in log.iter().take(50) {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(&e.when)
+                                .monospace()
+                                .size(11.5)
+                                .color(Color32::from_gray(120)),
+                        );
+                        ui.label(RichText::new(&e.text).size(12.0).color(if e.ok {
+                            Color32::from_rgb(30, 120, 50)
+                        } else {
+                            Color32::from_rgb(170, 60, 20)
+                        }));
+                    });
+                }
+            });
     }
 
     fn listener(&mut self, ui: &mut Ui) {
