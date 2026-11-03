@@ -29,8 +29,8 @@ use super::{DialEvent, DialMode, DialSettings};
 struct Registered {
     hwnd: isize,
     /// Kept alive: dropping the controller stops its events.
-    _controller: RadialController,
-    _items: Vec<RadialControllerMenuItem>,
+    controller: RadialController,
+    items: Vec<(DialMode, RadialControllerMenuItem)>,
 }
 
 /// The dial controllers of Ruthos's windows and the events they send.
@@ -84,6 +84,18 @@ fn glyph(mode: DialMode) -> &'static str {
 }
 
 impl DialHost {
+    /// Show `mode` as the chosen item in the dial's own menu, so a press in
+    /// Ruthos and the Windows menu agree.
+    pub fn select(&self, mode: DialMode) {
+        for r in &self.registered {
+            if let Some((_, item)) = r.items.iter().find(|(m, _)| *m == mode) {
+                if let Ok(menu) = r.controller.Menu() {
+                    let _ = menu.SelectMenuItem(item);
+                }
+            }
+        }
+    }
+
     /// Why Windows refused a controller, if it did.
     pub fn last_error(&self) -> Option<String> {
         self.last_error.lock().clone()
@@ -160,11 +172,11 @@ impl DialHost {
                 windows::core::IInspectable,
             >::new(move |_, _| {
                 let _ = tx.send((Instant::now(), DialEvent::Choose(mode)));
-                c.request_repaint();
+                c.request_repaint_of(egui::ViewportId::ROOT);
                 Ok(())
             }))?;
             menu.Items()?.Append(&item)?;
-            items.push(item);
+            items.push((mode, item));
         }
         let config_interop =
             windows::core::factory::<RadialControllerConfiguration, IRadialControllerConfigurationInterop>()?;
@@ -179,7 +191,7 @@ impl DialHost {
         >::new(move |_, args| {
             if let Some(args) = args.as_ref() {
                 let _ = tx.send((Instant::now(), DialEvent::Rotate(args.RotationDeltaInDegrees()?)));
-                c.request_repaint();
+                c.request_repaint_of(egui::ViewportId::ROOT);
             }
             Ok(())
         }))?;
@@ -189,13 +201,13 @@ impl DialHost {
             RadialControllerButtonClickedEventArgs,
         >::new(move |_, _| {
             let _ = tx.send((Instant::now(), DialEvent::Press));
-            c.request_repaint();
+            c.request_repaint_of(egui::ViewportId::ROOT);
             Ok(())
         }))?;
         Ok(Registered {
             hwnd: hwnd.0 as isize,
-            _controller: controller,
-            _items: items,
+            controller,
+            items,
         })
     }
 }

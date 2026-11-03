@@ -12,6 +12,7 @@ pub mod measure;
 pub mod mmode;
 pub mod model;
 pub mod movie;
+pub mod mpr_export;
 pub mod paths;
 pub mod report;
 pub mod routing;

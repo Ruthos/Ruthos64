@@ -35,6 +35,7 @@ impl DialHost {
     pub fn last_error(&self) -> Option<String> {
         None
     }
+    pub fn select(&self, _mode: DialMode) {}
 }
 
 /// What the dial did.
@@ -48,9 +49,9 @@ pub enum DialEvent {
     Choose(DialMode),
 }
 
-/// Events older than this when a viewer drains them were meant for another
-/// window and are dropped.
-pub const STALE: Duration = Duration::from_millis(500);
+/// Events older than this when they are routed are dropped (a dial turned
+/// while no viewer was open, say).
+pub const STALE: Duration = Duration::from_secs(2);
 
 /// How long the mode indicator stays after the last press or turn.
 pub const INDICATOR: Duration = Duration::from_millis(1500);

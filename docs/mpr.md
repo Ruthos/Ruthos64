@@ -13,12 +13,37 @@ The three panes start square to the acquisition. For an axial CT they are axial,
 | Tilt the planes (oblique MPR) | Drag a round handle on a line. The planes turn about the pane's own axis; that pane keeps still while the other two turn |
 | Step through a pane's own plane | Mouse wheel |
 | Zoom | Ctrl and the wheel, or pinch |
-| Window and level | Right-drag, or drag anywhere that is not a line or handle; or type the numbers, or pick a preset |
+| Window and level | Right-drag; with the Crosshair tool, drag anywhere that is not a line or handle; or type the numbers, or pick a preset |
 | Pan | Middle-drag |
 | Fit a pane again | Double-click it |
 | Go back to the original planes | Reset |
 
 Each pane names its plane (Axial, Coronal, Sagittal, or Oblique and the plane it is nearest), shows its position in millimetres along its normal, and labels its edges with the patient directions. The status line gives the value under the pointer and its patient coordinates.
+
+## Tools, layouts and the lock
+
+The second toolbar picks what the left button does, as in the 2D viewer; the letter in brackets is the shortcut.
+
+- **Crosshair** (C) moves and tilts the planes, as described above. Elsewhere in the pane it sets window and level.
+- **WL/WW** (W), **Move** (M) and **Zoom** (Z) adjust the view.
+- **Caliper** (L), **Angle** (A), **Rectangle** (B), **Ellipse** (E), **Arrow** (N), **Point** (P) and **Text** (X) measure and annotate. Drag a caliper, rectangle, ellipse or arrow; drag the first arm of an angle and click its end; click to place a point or a text note.
+
+Measurements are in millimetres from the plane's square pixels. A measurement belongs to the plane it was drawn on: it shows whenever that plane is on screen and hides when the plane moves. Click one to select it, drag its handles or its outline to change it, and press Delete to remove it.
+
+**Lock planes** stops the planes moving or tilting, by drag or by the wheel, so measuring cannot shift them by accident.
+
+**Layout** chooses three panes in a row, a 2×2 grid, or one pane on its own. In the 2×2 grid the fourth pane shows the original slice through the crosshair, square to the acquisition, which keeps the scan's own orientation in view while the other planes are tilted.
+
+## Saving
+
+**Save to study** writes the pane last worked in as a new series in the same study:
+
+- **This plane**, as one image with its measurements; or
+- **a stack** of parallel planes across the volume, a chosen distance apart, each as thick as the slab if one is set. Measurements on any of those planes go with them.
+
+The images are of the source's kind (a CT reformat is a CT image), marked as derived and reformatted, with their own position, orientation and pixel size. They open, measure and report like any other image, and the database window shows the new series straight away.
+
+**Save image** writes the pane as a PNG or JPEG picture, windowed as shown.
 
 ## Thick slabs
 

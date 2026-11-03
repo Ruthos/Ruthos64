@@ -529,6 +529,8 @@ pub struct ViewerState {
     movie: Option<MovieJob>,
     /// The dial's mode and the indicator (dial/mod.rs).
     dial: crate::dial::Dial,
+    /// Dial events routed to this viewer by the app.
+    pub dial_inbox: Vec<crate::dial::DialEvent>,
     /// The cell under the pointer and the cells' rectangles, last frame.
     hover_cell: Option<usize>,
     cell_rects: Vec<Rect>,
@@ -753,6 +755,7 @@ impl ViewerState {
             last_tick: None,
             movie: None,
             dial: crate::dial::Dial::new(&shared.settings.lock().dial),
+            dial_inbox: Vec::new(),
             hover_cell: None,
             cell_rects: Vec::new(),
             dial_script_done: false,
@@ -1402,17 +1405,15 @@ impl ViewerState {
         let settings = shared.settings.lock().dial.clone();
         let focused = ui.input(|i| i.viewport().focused.unwrap_or(false));
         let mut events: Vec<DialEvent> = Vec::new();
-        if focused && settings.enabled {
-            let ctx = ui.ctx().clone();
-            let mut host = shared.dial.lock();
-            host.pump(&ctx, &settings);
-            let now = Instant::now();
-            events.extend(
-                host.drain()
-                    .into_iter()
-                    .filter(|(t, _)| now.duration_since(*t) < crate::dial::STALE)
-                    .map(|(_, e)| e),
-            );
+        if settings.enabled {
+            // This window gets a controller as soon as it is in front; the
+            // app routes the events here.
+            if focused {
+                shared.dial.lock().pump(&ui.ctx().clone(), &settings);
+            }
+            events.append(&mut self.dial_inbox);
+        } else {
+            self.dial_inbox.clear();
         }
         // The shortcuts: each names its mode, so it works whatever the
         // dial's mode is. Taken before the plain arrows and tool letters
@@ -1487,7 +1488,9 @@ impl ViewerState {
             match ev {
                 DialEvent::Press => {
                     let cx = self.dial_context();
-                    self.dial.next_mode(&settings, cx);
+                    let mode = self.dial.next_mode(&settings, cx);
+                    // The dial's own menu shows the same mode.
+                    shared.dial.lock().select(mode);
                 }
                 DialEvent::Choose(m) => self.dial.mode = m,
                 DialEvent::Rotate(deg) => {

@@ -607,7 +607,33 @@ impl eframe::App for RuthosApp {
         self.router.pump(&ctx, &self.shared);
         // The dial follows the foreground window (dial/windows.rs).
         let dial_settings = self.shared.settings.lock().dial.clone();
-        self.shared.dial.lock().pump(&ctx, &dial_settings);
+        let dial_events = {
+            let mut host = self.shared.dial.lock();
+            host.pump(&ctx, &dial_settings);
+            host.drain()
+        };
+        if !dial_events.is_empty() && dial_settings.enabled {
+            // To the viewer last used, whatever Windows says has focus (the
+            // dial's own menu can take it), and wake that window.
+            let focused = self.shared.focused_viewer.load(Ordering::Relaxed);
+            let target = self
+                .viewers
+                .iter()
+                .find(|v| v.lock().id == focused)
+                .or_else(|| self.viewers.last())
+                .cloned();
+            if let Some(v) = target {
+                let now = std::time::Instant::now();
+                let mut g = v.lock();
+                g.dial_inbox.extend(
+                    dial_events
+                        .into_iter()
+                        .filter(|(t, _)| now.duration_since(*t) < crate::dial::STALE)
+                        .map(|(_, e)| e),
+                );
+                ctx.request_repaint_of(g.viewport_id);
+            }
+        }
         // Watch folders follow Preferences as soon as they are saved.
         {
             let wanted = self.shared.settings.lock().watch_folders.clone();
