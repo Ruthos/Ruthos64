@@ -66,7 +66,7 @@ pub struct StoreScp {
 /// Storage SOP classes announced explicitly. Promiscuous mode accepts
 /// anything else a modality proposes, which matters for veterinary vendors.
 #[allow(deprecated)]
-const STORAGE_ABSTRACT_SYNTAXES: &[&str] = &[
+pub(crate) const STORAGE_ABSTRACT_SYNTAXES: &[&str] = &[
     uids::COMPUTED_RADIOGRAPHY_IMAGE_STORAGE,
     uids::DIGITAL_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION,
     uids::DIGITAL_X_RAY_IMAGE_STORAGE_FOR_PROCESSING,
@@ -319,7 +319,24 @@ fn store_instance<A: Association>(
         .iter()
         .find(|pc| pc.id == pc_id)
         .ok_or_else(|| anyhow::anyhow!("missing presentation context {pc_id}"))?;
-    let ts_uid = pc.transfer_syntax.trim_end_matches('\0').to_string();
+    write_instance(
+        data,
+        pc.transfer_syntax.trim_end_matches(' '),
+        sop_instance_uid,
+        out_dir,
+    )
+}
+
+/// Write a received data set as a DICOM file in `out_dir`, through a
+/// `.part` temporary so the incoming-folder scanner never sees half a
+/// file. Used by the listener and by C-GET retrieval.
+pub(crate) fn write_instance(
+    data: &[u8],
+    ts_uid: &str,
+    sop_instance_uid: &str,
+    out_dir: &Path,
+) -> anyhow::Result<PathBuf> {
+    let ts_uid = ts_uid.to_string();
     let ts = TransferSyntaxRegistry
         .get(&ts_uid)
         .ok_or_else(|| anyhow::anyhow!("unknown transfer syntax {ts_uid}"))?;
@@ -328,12 +345,12 @@ fn store_instance<A: Association>(
     let sop_class = obj
         .element(tags::SOP_CLASS_UID)?
         .to_str()?
-        .trim_end_matches('\0')
+        .trim_end_matches(' ')
         .to_string();
     let sop_instance = obj
         .element(tags::SOP_INSTANCE_UID)
         .ok()
-        .and_then(|e| e.to_str().ok().map(|s| s.trim_end_matches('\0').to_string()))
+        .and_then(|e| e.to_str().ok().map(|s| s.trim_end_matches(' ').to_string()))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| sop_instance_uid.to_string());
 
