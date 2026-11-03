@@ -1,6 +1,6 @@
 # Ruthos 0.1.2-alpha
 
-The first public build of Ruthos, a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
+Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
 ## New in 0.1.2-alpha
 
