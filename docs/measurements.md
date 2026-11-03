@@ -54,18 +54,55 @@ selected measurement, undo and delete, calibration, showing or hiding
 measurements and labels, copying values as tab-separated text, and the
 report.
 
-## LV M-mode
+## LV dimensions (M-mode and 2D)
 
-The LV M-mode tool (K) takes four clicks down one time column of an M-mode
-strip: septum top, septum bottom, free wall top, free wall bottom. It gives
-IVS, LVID and LVFW for diastole or systole; the phase of a new line follows
-the series (a systole after an unpaired diastole). Each point must lie below
-the last; Backspace removes the last point and Escape abandons the line.
-Fractional shortening (LVIDd − LVIDs) / LVIDd is drawn beside the systolic
-line and appears in the report's LV M-mode block with the paired values.
-Lines are stored as `roi` rows of kind `lvmmode-d` or `lvmmode-s`; their
-three values go into `roi_value` under `lv.ivsd`, `lv.lvidd`, `lv.lvfwd`
-or the systolic keys.
+The LV tool (K) takes four clicks along one line: septum top, septum
+bottom, free wall top, free wall bottom. It gives IVS, LVID and LVFW for
+diastole or systole.
+
+- **In an M-mode strip** the first click fixes the time column and each
+  later point must be deeper than the last.
+- **On a 2D image** the line runs from the first point in any direction;
+  each point must be further along than the last, and the two inner
+  points are placed on the line from the first to the last.
+
+Afterwards the ends move anywhere, which rotates, shortens or lengthens
+the line, and the inner points keep their places along it; an inner
+point slides along the line. In an M-mode strip each thickness is the
+vertical distance between its points, so a slanted line still measures
+at one instant. Backspace removes the last point and Escape abandons the
+line.
+
+**Several sets.** Measure as many cycles as you like. In an M-mode strip
+each systolic line pairs with the nearest unpaired diastolic line to its
+left, as cycles run left to right; on a 2D loop, diastole and systole are
+different frames, and lines pair in frame order. The phase of a new line
+follows that pairing, and the Measurements menu changes it. FS is drawn
+beside each systolic line. The report lists every set with its FS and,
+with two or more, the mean of each value.
+
+Lines are stored as `roi` rows of kind `lvmmode-d`/`lvmmode-s` (M-mode) or
+`lv2d-d`/`lv2d-s` (2D); their three values go into `roi_value` under
+`lv.ivsd`, `lv.lvidd`, `lv.lvfwd` or the systolic keys.
+
+## Spectral Doppler and M-mode time
+
+Inside a spectral Doppler strip the scale comes from the ultrasound
+region's velocity axis and its baseline (Reference Pixel Y0):
+
+- **A point** gives the velocity in m/s and the simplified Bernoulli
+  gradient, 4v² in mmHg. Name it MV E, Ao Vmax, TR Vmax and so on.
+- **A line** gives the time between its ends in ms, the velocities at both
+  ends and the slope in m/s², for deceleration times and pressure
+  half-times.
+
+In an M-mode strip a line gives its vertical distance and, when its ends
+are at different times, the time between them.
+
+The built-in Doppler set covers MV E and A, E deceleration time, Ao, PA,
+MR, TR and AR Vmax and AR pressure half-time, with calculations for E/A
+and the TR, MR, Ao and PA peak gradients. Named repeats of any
+measurement are averaged in the report and in calculations.
 
 ## Definitions, sets and calculations
 

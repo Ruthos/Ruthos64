@@ -115,12 +115,19 @@ impl ReportState {
     /// The paired LV M-mode values of each series and their fractional
     /// shortening, in the echo length unit from Preferences.
     fn mmode_block(&self, shared: &Shared) -> Vec<ReportMeasurement> {
-        use ruthos_core::mmode::{echo_value, pair_rows, KEYS_D, KEYS_S, LABELS_D, LABELS_S};
+        use ruthos_core::mmode::{echo_value, mean_of_sets, sets_from_rows, KEYS_D, KEYS_S, LABELS_D, LABELS_S};
         let cm = shared.settings.lock().echo_length_unit == "cm";
         let rows = shared.db.mmode_rows_for_study(self.study.id).unwrap_or_default();
+        let sets = sets_from_rows(rows);
+        let numbered = sets.len() > 1;
         let mut out = Vec::new();
-        for pair in pair_rows(rows) {
-            for (line, keys, labels) in [(&pair.diastole, KEYS_D, LABELS_D), (&pair.systole, KEYS_S, LABELS_S)] {
+        for (n, set) in sets.iter().enumerate() {
+            let where_ = if numbered {
+                format!("Set {} \u{b7} {}", n + 1, set.location())
+            } else {
+                set.location()
+            };
+            for (line, keys, labels) in [(&set.diastole, KEYS_D, LABELS_D), (&set.systole, KEYS_S, LABELS_S)] {
                 let Some(line) = line else { continue };
                 for (key, label) in keys.iter().zip(labels) {
                     let v = line.values.iter().find(|v| v.def_key == *key);
@@ -133,17 +140,51 @@ impl ReportState {
                             .and_then(|v| v.value)
                             .map(|mm| echo_value(mm, cm))
                             .unwrap_or_else(|| "\u{2014}".into()),
-                        location: line.location(),
+                        location: where_.clone(),
                         basis: basis.map(|b| b.label().to_string()).unwrap_or_default(),
                         patient_scale: basis.map(|b| b.is_patient_scale()).unwrap_or(true),
                     });
                 }
             }
-            if let Some(fs) = pair.fs_percent {
+            if let Some(fs) = set.fs_percent {
                 out.push(ReportMeasurement {
                     name: "FS".into(),
                     value: format!("{fs:.1} %"),
-                    location: pair.series_label.clone(),
+                    location: where_.clone(),
+                    basis: String::new(),
+                    patient_scale: true,
+                });
+            }
+        }
+        // With more than one cycle measured, the mean of each value, as
+        // echocardiography reports them.
+        if numbered {
+            let mean = mean_of_sets(&sets);
+            let labels: Vec<(&str, &str)> = KEYS_D
+                .iter()
+                .zip(LABELS_D)
+                .chain(KEYS_S.iter().zip(LABELS_S))
+                .map(|(k, l)| (*k, l))
+                .collect();
+            for (key, value, count) in &mean.values {
+                let label = labels
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .map(|(_, l)| *l)
+                    .unwrap_or(key.as_str());
+                out.push(ReportMeasurement {
+                    name: format!("{label} (mean)"),
+                    value: echo_value(*value, cm),
+                    location: format!("Mean of {count} set{}", if *count == 1 { "" } else { "s" }),
+                    basis: String::new(),
+                    patient_scale: true,
+                });
+            }
+            if let Some((fs, count)) = mean.fs_percent {
+                out.push(ReportMeasurement {
+                    name: "FS (mean)".into(),
+                    value: format!("{fs:.1} %"),
+                    location: format!("Mean of {count} set{}", if count == 1 { "" } else { "s" }),
                     basis: String::new(),
                     patient_scale: true,
                 });
@@ -152,8 +193,47 @@ impl ReportState {
         out
     }
 
+    /// Repeated named measurements (two VSDs, three LA diameters): the mean
+    /// of each name measured more than once in the same unit.
+    fn repeated_means(&self) -> Vec<ReportMeasurement> {
+        let mut groups: Vec<(String, String, Vec<f64>, bool)> = Vec::new();
+        for m in &self.measurements {
+            let (Some(name), Some(v)) = (m.roi.name.clone(), m.roi.value) else {
+                continue;
+            };
+            if m.roi.unit == "px" || m.roi.unit.is_empty() {
+                continue;
+            }
+            let patient = m
+                .roi
+                .basis
+                .as_deref()
+                .and_then(ruthos_dicom::SpacingBasis::from_key)
+                .map(|b| b.is_patient_scale())
+                .unwrap_or(true);
+            match groups.iter_mut().find(|(n, u, _, _)| *n == name && *u == m.roi.unit) {
+                Some(g) => {
+                    g.2.push(v);
+                    g.3 &= patient;
+                }
+                None => groups.push((name, m.roi.unit.clone(), vec![v], patient)),
+            }
+        }
+        groups
+            .into_iter()
+            .filter(|(_, _, v, _)| v.len() > 1)
+            .map(|(name, unit, v, patient)| ReportMeasurement {
+                name: format!("{name} (mean)"),
+                value: format_value(Some(v.iter().sum::<f64>() / v.len() as f64), &unit),
+                location: format!("Mean of {}", v.len()),
+                basis: String::new(),
+                patient_scale: patient,
+            })
+            .collect()
+    }
+
     /// Every library calculation whose inputs this study has, from the
-    /// latest value of each definition.
+    /// mean of every value measured for each definition.
     fn calculations_block(&self, shared: &Shared) -> Vec<ReportMeasurement> {
         use ruthos_core::measure::{evaluate_all, Input};
         let library = shared.library.lock().clone();
@@ -161,7 +241,8 @@ impl ReportState {
             .db
             .measurement_inputs_for_study(self.study.id)
             .unwrap_or_default();
-        let mut values: std::collections::BTreeMap<String, Input> = std::collections::BTreeMap::new();
+        // Sum, count and scale of each definition's values.
+        let mut acc: std::collections::BTreeMap<String, (f64, usize, bool)> = std::collections::BTreeMap::new();
         for m in inputs {
             if m.unit == "px" {
                 continue;
@@ -172,14 +253,24 @@ impl ReportState {
                 .and_then(ruthos_dicom::SpacingBasis::from_key)
                 .map(|b| b.is_patient_scale())
                 .unwrap_or(true);
-            values.insert(
-                m.def_key,
-                Input {
-                    value: m.value,
-                    patient_scale,
-                },
-            );
+            let e = acc.entry(m.def_key).or_insert((0.0, 0, true));
+            e.0 += m.value;
+            e.1 += 1;
+            e.2 &= patient_scale;
         }
+        let counts: std::collections::BTreeMap<String, usize> = acc.iter().map(|(k, v)| (k.clone(), v.1)).collect();
+        let values: std::collections::BTreeMap<String, Input> = acc
+            .into_iter()
+            .map(|(k, (sum, n, patient_scale))| {
+                (
+                    k,
+                    Input {
+                        value: sum / n as f64,
+                        patient_scale,
+                    },
+                )
+            })
+            .collect();
         let has_mmode = !self.mmode.is_empty();
         evaluate_all(&library, &values)
             .into_iter()
@@ -187,7 +278,15 @@ impl ReportState {
             .map(|r| ReportMeasurement {
                 name: r.label.clone(),
                 value: r.text.clone(),
-                location: r.inputs.iter().map(|k| library.label(k)).collect::<Vec<_>>().join(", "),
+                location: r
+                    .inputs
+                    .iter()
+                    .map(|k| match counts.get(k) {
+                        Some(n) if *n > 1 => format!("{} (mean of {n})", library.label(k)),
+                        _ => library.label(k),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 basis: if r.scale_independent {
                     "Scale independent".into()
                 } else {
@@ -347,6 +446,13 @@ impl ReportState {
                             r.on_hover_text(b.explanation());
                         }
                         ui.label(RichText::new(m.location()).color(Color32::from_gray(90)));
+                        ui.end_row();
+                    }
+                    for m in self.repeated_means() {
+                        ui.label(RichText::new(&m.name).strong());
+                        ui.label(RichText::new(&m.value).strong());
+                        ui.label("");
+                        ui.label(RichText::new(&m.location).color(Color32::from_gray(90)));
                         ui.end_row();
                     }
                 });
@@ -533,6 +639,7 @@ impl ReportState {
                         .map(|b| b.is_patient_scale())
                         .unwrap_or(true),
                 })
+                .chain(self.repeated_means())
                 .collect(),
             mmode: self.mmode.clone(),
             calculations: self.calculations.clone(),

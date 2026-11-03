@@ -200,7 +200,7 @@ pub const MENU_BAR: &[MenuDef] = &[
             item("viewer:tool:point", "Point", Some("P"), AppAction::Viewer("tool:point")),
             item(
                 "viewer:tool:lvmmode",
-                "LV M-mode",
+                "LV Dimensions",
                 Some("K"),
                 AppAction::Viewer("tool:lvmmode"),
             ),

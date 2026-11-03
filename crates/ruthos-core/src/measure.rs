@@ -270,6 +270,16 @@ pub fn builtin() -> Library {
             def("echo.rvidd", "RVIDd", "length", "length", "mm", 1, None),
             def("echo.epss", "EPSS", "length", "length", "mm", 1, None),
             def("echo.pa", "PA", "length", "length", "mm", 1, None),
+            // Echo: spectral Doppler (velocities in m/s, times in ms)
+            def("echo.mv_e", "MV E", "point", "velocity", "m/s", 2, None),
+            def("echo.mv_a", "MV A", "point", "velocity", "m/s", 2, None),
+            def("echo.mv_edt", "E deceleration time", "length", "time", "ms", 0, None),
+            def("echo.ao_vmax", "Ao Vmax", "point", "velocity", "m/s", 2, None),
+            def("echo.pa_vmax", "PA Vmax", "point", "velocity", "m/s", 2, None),
+            def("echo.mr_vmax", "MR Vmax", "point", "velocity", "m/s", 2, None),
+            def("echo.tr_vmax", "TR Vmax", "point", "velocity", "m/s", 2, None),
+            def("echo.ar_vmax", "AR Vmax", "point", "velocity", "m/s", 2, None),
+            def("echo.ar_pht", "AR pressure half-time", "length", "time", "ms", 0, None),
             // Radiography
             def("vhs.long", "VHS long axis", "length", "length", "mm", 1, None),
             def("vhs.short", "VHS short axis", "length", "length", "mm", 1, None),
@@ -285,6 +295,20 @@ pub fn builtin() -> Library {
         sets: vec![
             set("Echo: LV M-mode", &["lv.ivsd", "lv.lvidd", "lv.lvfwd", "lv.ivss", "lv.lvids", "lv.lvfws"]),
             set("Echo: 2D", &["echo.ao", "echo.la", "echo.rvidd", "echo.epss", "echo.pa"]),
+            set(
+                "Echo: Doppler",
+                &[
+                    "echo.mv_e",
+                    "echo.mv_a",
+                    "echo.mv_edt",
+                    "echo.ao_vmax",
+                    "echo.pa_vmax",
+                    "echo.mr_vmax",
+                    "echo.tr_vmax",
+                    "echo.ar_vmax",
+                    "echo.ar_pht",
+                ],
+            ),
             set("Radiography", &["vhs.long", "vhs.short", "vhs.t4", "kidney.left", "kidney.right"]),
             set("Orthopaedic", &["ortho.norberg", "ortho.tpa", "ortho.patellar_ligament", "ortho.patella"]),
         ],
@@ -302,6 +326,11 @@ pub fn builtin() -> Library {
                 Some("echo"),
             ),
             calc("echo.la_ao", "LA/Ao", "echo.la / echo.ao", "cm", "", 2, Some("echo")),
+            calc("echo.mv_ea", "E/A", "echo.mv_e / echo.mv_a", "cm", "", 2, Some("echo")),
+            calc("echo.tr_pg", "TR peak gradient", "4 * echo.tr_vmax^2", "cm", "mmHg", 1, Some("echo")),
+            calc("echo.mr_pg", "MR peak gradient", "4 * echo.mr_vmax^2", "cm", "mmHg", 1, Some("echo")),
+            calc("echo.ao_pg", "Ao peak gradient", "4 * echo.ao_vmax^2", "cm", "mmHg", 1, Some("echo")),
+            calc("echo.pa_pg", "PA peak gradient", "4 * echo.pa_vmax^2", "cm", "mmHg", 1, Some("echo")),
             calc("vhs.total", "Vertebral heart score", "(vhs.long + vhs.short) / vhs.t4", "cm", "v", 1, Some("thorax")),
             calc("ortho.patellar_ratio", "Patellar ligament : patella", "ortho.patellar_ligament / ortho.patella", "cm", "", 2, Some("stifle")),
         ],
@@ -1057,6 +1086,19 @@ mod tests {
         .unwrap();
         assert!((fs.value - 40.0).abs() < 1e-9);
         assert!(fs.scale_independent);
+    }
+
+    #[test]
+    fn doppler_gradients_use_velocity_unchanged() {
+        let lib = builtin();
+        let r = evaluate(
+            &lib,
+            lib.calculation("echo.tr_pg").unwrap(),
+            &values(&[("echo.tr_vmax", 3.0)]),
+        )
+        .unwrap();
+        assert!((r.value - 36.0).abs() < 1e-9, "4 v squared with v in m/s");
+        assert!(r.scale_independent, "velocities do not depend on the image scale");
     }
 
     #[test]

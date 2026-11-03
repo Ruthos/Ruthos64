@@ -74,7 +74,7 @@ impl Tool {
             Tool::Oval => "Oval",
             Tool::Arrow => "Arrow",
             Tool::Point => "Point",
-            Tool::LvMmode => "LV M-mode",
+            Tool::LvMmode => "LV dimensions",
         }
     }
 
@@ -301,6 +301,9 @@ pub struct ViewerState {
     mmode_draft: Option<MmodeDraft>,
     /// Per series: (roi id, edit time, LVID mm) of the latest lines.
     mmode_latest: HashMap<i64, MmodeLatest>,
+    /// The stored LV lines of each series, for pairing 2D lines across
+    /// the frames of a loop.
+    mmode_rows: HashMap<i64, Vec<ruthos_core::mmode::MmodeRow>>,
     mmode_refresh: HashSet<i64>,
     pub selected_roi: Option<usize>,
     /// The handle the keyboard nudges, index into `Roi::handles`.
@@ -345,10 +348,32 @@ pub struct ViewerState {
 
 /// An LV M-mode line being placed: the time column and the depths so far.
 struct MmodeDraft {
-    x: f32,
-    depths: Vec<f32>,
-    /// Pointer depth, for the preview segment.
-    hover_y: Option<f32>,
+    /// In an M-mode strip the points share one time column; on a 2D image
+    /// they lie along the line from the first point.
+    mmode: bool,
+    points: Vec<Vec2>,
+    /// Where the next point would go, for the preview segment.
+    hover: Option<Vec2>,
+}
+
+impl MmodeDraft {
+    /// The next point for a pointer position: in M-mode, on the column.
+    fn snap(&self, p: Vec2) -> Vec2 {
+        match (self.mmode, self.points.first()) {
+            (true, Some(first)) => Vec2::new(first.x, p.y),
+            _ => p,
+        }
+    }
+
+    /// How far along the line a point is: depth in M-mode, distance from
+    /// the first point in 2D. Each point must be further than the last.
+    fn progress(&self, p: Vec2) -> f32 {
+        match (self.mmode, self.points.first()) {
+            (true, _) => p.y,
+            (false, Some(first)) => (p - *first).length(),
+            (false, None) => 0.0,
+        }
+    }
 }
 
 /// The latest diastolic and systolic lines of a series, for choosing the
@@ -485,6 +510,7 @@ impl ViewerState {
             angle_draft: None,
             mmode_draft: None,
             mmode_latest: HashMap::new(),
+            mmode_rows: HashMap::new(),
             mmode_refresh: HashSet::new(),
             selected_roi: None,
             active_handle: 0,
@@ -859,7 +885,7 @@ impl ViewerState {
                     if let Some(list) = self.rois.get_mut(&key) {
                         for (roi, rec) in list.iter_mut().zip(records.iter()) {
                             roi.id = Some(rec.id);
-                            if let (RoiKind::LvMmode { phase, .. }, Some(f)) = (&roi.kind, frame.as_deref()) {
+                            if let (RoiKind::Lv { phase, .. }, Some(f)) = (&roi.kind, frame.as_deref()) {
                                 let values: Vec<ruthos_core::RoiValue> = match roi.mmode_values(f) {
                                     Ok((v, basis)) => phase
                                         .keys()
@@ -907,20 +933,68 @@ impl ViewerState {
     /// Re-read the latest M-mode lines of a series from the archive.
     fn refresh_mmode_latest(&mut self, shared: &Shared, series_id: i64) {
         let rows = shared.db.mmode_rows_for_series(series_id).unwrap_or_default();
-        let mut latest = MmodeLatest::default();
-        for pair in ruthos_core::mmode::pair_rows(rows) {
-            if let Some(d) = pair.diastole {
-                latest.diastole = d.value("lv.lvidd").map(|v| (d.roi_id, d.date_modified, v));
-            }
-            if let Some(s) = pair.systole {
-                latest.systole = s.value("lv.lvids").map(|v| (s.roi_id, s.date_modified, v));
-            }
-        }
+        let (d, s) = ruthos_core::mmode::latest_per_series(&rows, series_id);
+        let latest = MmodeLatest {
+            diastole: d.and_then(|d| d.value("lv.lvidd").map(|v| (d.roi_id, d.date_modified, v))),
+            systole: s.and_then(|s| s.value("lv.lvids").map(|v| (s.roi_id, s.date_modified, v))),
+        };
         self.mmode_latest.insert(series_id, latest);
+        self.mmode_rows.insert(series_id, rows);
     }
 
-    /// The phase a new M-mode line takes: systole when the series' latest
-    /// line is a diastole without a newer systole, else diastole.
+    /// The M-mode lines of a frame as (index in the frame's list, phase,
+    /// time column), for pairing into cycles.
+    fn mmode_lines(&self, key: &FrameKey) -> Vec<(usize, char, f32)> {
+        self.rois
+            .get(key)
+            .map(|l| {
+                l.iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| match &r.kind {
+                        RoiKind::Lv { phase, mmode: true, p } => {
+                            Some((i, if *phase == MmodePhase::Systole { 's' } else { 'd' }, p[0].x))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The cycles on a frame: (diastole, systole) as indices into the
+    /// frame's measurement list, in time order.
+    fn mmode_sets(&self, key: &FrameKey) -> Vec<(Option<usize>, Option<usize>)> {
+        let lines = self.mmode_lines(key);
+        let keys: Vec<(char, f32)> = lines.iter().map(|(_, p, x)| (*p, *x)).collect();
+        ruthos_core::mmode::pair_on_frame(&keys)
+            .into_iter()
+            .map(|(d, s)| (d.map(|i| lines[i].0), s.map(|i| lines[i].0)))
+            .collect()
+    }
+
+    /// The phase a new M-mode line at time column `x` takes. On a frame
+    /// that already has lines: systole when a diastole to its left is still
+    /// unpaired, else diastole, so cycle after cycle alternates. On a frame
+    /// without lines: systole when the series' latest line is a diastole
+    /// without a newer systole, else diastole.
+    fn next_mmode_phase_at(&self, key: &FrameKey, x: f32) -> MmodePhase {
+        let lines = self.mmode_lines(key);
+        if !lines.is_empty() {
+            let open_diastole_left = self.mmode_sets(key).iter().any(|(d, s)| {
+                s.is_none()
+                    && d.and_then(|d| lines.iter().find(|(i, _, _)| *i == d))
+                        .is_some_and(|(_, _, dx)| *dx <= x)
+            });
+            return if open_diastole_left {
+                MmodePhase::Systole
+            } else {
+                MmodePhase::Diastole
+            };
+        }
+        self.next_mmode_phase()
+    }
+
+    /// The phase a new M-mode line takes from the series alone.
     fn next_mmode_phase(&self) -> MmodePhase {
         let Some(sid) = self.current_series_id() else {
             return MmodePhase::Diastole;
@@ -938,25 +1012,30 @@ impl ViewerState {
     }
 
     /// Fractional shortening for a systolic line: its LVIDs against the
-    /// series' latest diastolic LVIDd, preferring a diastole on the same
-    /// frame.
+    /// diastole of its own cycle on the same frame, or the series' latest
+    /// diastole when the frame has none.
     fn fractional_shortening(&self, key: &FrameKey, roi: &Roi, frame: &Frame) -> Option<f64> {
         let (v, _) = roi.mmode_values(frame).ok()?;
         let lvids = v[1];
+        // A 2D line: its diastole is on another frame of the loop, so the
+        // pairing comes from the stored lines of the series.
+        if let (RoiKind::Lv { mmode: false, .. }, Some(id)) = (&roi.kind, roi.id) {
+            let sid = self.series_id_of_image(key.image_id)?;
+            let rows = self.mmode_rows.get(&sid)?.clone();
+            return ruthos_core::mmode::sets_from_rows(rows)
+                .into_iter()
+                .find(|s| s.systole.as_ref().is_some_and(|r| r.roi_id == id))
+                .and_then(|s| s.fs_percent);
+        }
+        // The diastole paired with this systole in its cycle on this frame.
+        let list = self.rois.get(key)?;
+        let index = list.iter().position(|r| std::ptr::eq(r, roi))?;
         let same_frame = self
-            .rois
-            .get(key)
-            .and_then(|l| {
-                l.iter().rev().find(|r| {
-                    matches!(
-                        r.kind,
-                        RoiKind::LvMmode {
-                            phase: MmodePhase::Diastole,
-                            ..
-                        }
-                    )
-                })
-            })
+            .mmode_sets(key)
+            .into_iter()
+            .find(|(_, s)| *s == Some(index))
+            .and_then(|(d, _)| d)
+            .and_then(|d| list.get(d))
             .and_then(|r| r.mmode_values(frame).ok())
             .map(|(v, _)| v[1]);
         let lvidd = same_frame.or_else(|| {
@@ -1004,9 +1083,20 @@ impl ViewerState {
         let (fine_enabled, magnification) = (self.loupe.fine_movement, self.loupe.magnification);
         let pos = response.interact_pointer_pos();
         if response.drag_started_by(PointerButton::Primary) {
-            if let Some(p) = pos {
-                // A handle of the selected measurement first.
-                if let Some(sel) = self.selected_roi {
+            // A drag only starts once the pointer has moved a few pixels, so
+            // the hit test uses the point where the press began.
+            if let Some(p) = press_origin(ui).or(pos) {
+                // A handle of the selected measurement first, then a handle
+                // of any other measurement on the frame.
+                let order: Vec<usize> = {
+                    let n = self.rois.get(key).map(|l| l.len()).unwrap_or(0);
+                    self.selected_roi
+                        .filter(|s| *s < n)
+                        .into_iter()
+                        .chain((0..n).filter(|i| Some(*i) != self.selected_roi))
+                        .collect()
+                };
+                for sel in order {
                     if let Some(roi) = self.rois.get(key).and_then(|l| l.get(sel)) {
                         if let Some(h) = roi.handle_hit(t, p) {
                             self.handle_drag = Some(HandleDrag {
@@ -1016,6 +1106,7 @@ impl ViewerState {
                                 original: roi.kind.clone(),
                                 fine: None,
                             });
+                            self.selected_roi = Some(sel);
                             self.active_handle = h;
                             return true;
                         }
@@ -1186,7 +1277,7 @@ impl ViewerState {
             });
         }
         let selected_phase = match selected.map(|r| &r.kind) {
-            Some(RoiKind::LvMmode { phase, .. }) => Some(*phase),
+            Some(RoiKind::Lv { phase, .. }) => Some(*phase),
             _ => None,
         };
         ui.add_enabled_ui(has_selected && !locked, |ui| {
@@ -1292,10 +1383,10 @@ impl ViewerState {
             MenuAction::SetPhase(phase) => {
                 if let (Some(key), Some(sel)) = (key, self.selected_roi) {
                     if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(sel)) {
-                        if let RoiKind::LvMmode { phase: p, .. } = &mut roi.kind {
+                        if let RoiKind::Lv { phase: p, .. } = &mut roi.kind {
                             *p = phase;
                             self.dirty_rois.insert(key);
-                            self.set_status(format!("M-mode line set to {}", phase.label().to_lowercase()));
+                            self.set_status(format!("LV line set to {}", phase.label().to_lowercase()));
                         }
                     }
                 }
@@ -1365,7 +1456,7 @@ impl ViewerState {
                 let named = key
                     .and_then(|k| self.rois.get(&k))
                     .and_then(|l| self.selected_roi.and_then(|i| l.get(i)))
-                    .is_some_and(|r| r.name.is_some() || matches!(r.kind, RoiKind::LvMmode { .. }));
+                    .is_some_and(|r| r.name.is_some() || matches!(r.kind, RoiKind::Lv { .. }));
                 if named {
                     self.flush_rois(shared);
                     shared.open_reports.lock().push(self.study.id);
@@ -2482,15 +2573,15 @@ impl ViewerState {
             }
             if backspace {
                 let left = self.mmode_draft.as_mut().map(|d| {
-                    d.depths.pop();
-                    d.depths.len()
+                    d.points.pop();
+                    d.points.len()
                 });
                 match left {
                     Some(0) | None => {
                         self.mmode_draft = None;
-                        self.set_status("LV M-mode abandoned");
+                        self.set_status("LV measurement abandoned");
                     }
-                    Some(n) => self.set_status(format!("LV M-mode: {n} point{} placed", if n == 1 { "" } else { "s" })),
+                    Some(n) => self.set_status(format!("LV: {n} point{} placed", if n == 1 { "" } else { "s" })),
                 }
                 return;
             }
@@ -2937,15 +3028,7 @@ impl ViewerState {
                 if sel {
                     roi.draw_handles(&painter, &transform, Some(self.active_handle), roi_color(true));
                 }
-                if self.show_labels
-                    && matches!(
-                        roi.kind,
-                        RoiKind::LvMmode {
-                            phase: MmodePhase::Systole,
-                            ..
-                        }
-                    )
-                {
+                if self.show_labels && roi.lv_phase() == Some(MmodePhase::Systole) {
                     if let Some(fs) = self.fractional_shortening(&key, roi, &frame) {
                         let anchor = label
                             .map(|r| r.left_bottom())
@@ -3302,8 +3385,9 @@ impl ViewerState {
                         }
                     }
                 } else if response.drag_started_by(button) {
-                    if let Some(p) = img_pos {
-                        if !self.try_select_roi(t, key, pos) {
+                    let origin = press_origin(ui).or(pos);
+                    if let Some(p) = origin.map(|p| t.screen_to_image(p)) {
+                        if !self.try_select_roi(t, key, origin) {
                             self.angle_draft = Some(AngleDraft {
                                 a: p,
                                 b: p,
@@ -3317,14 +3401,18 @@ impl ViewerState {
                 }
             }
             Tool::LvMmode => {
-                // Four clicks down one time column. The column is fixed by
-                // the first click; each depth must lie below the last.
+                // Four clicks along one line: septum top, septum bottom,
+                // free wall top, free wall bottom. In an M-mode strip the
+                // first click fixes the time column; on a 2D image the line
+                // runs from the first point in any direction, and the inner
+                // points are placed on the line from the first to the last.
                 if let Some(hp) = hover {
                     let ip = t.screen_to_image(hp);
                     if let Some(d) = &mut self.mmode_draft {
-                        d.hover_y = Some(ip.y);
+                        let snapped = d.snap(ip);
+                        d.hover = Some(snapped);
                         self.loupe_target = Some(LoupeTarget {
-                            image_point: Vec2::new(d.x, ip.y),
+                            image_point: snapped,
                             pointer: hp,
                         });
                     }
@@ -3332,20 +3420,38 @@ impl ViewerState {
                 if response.clicked_by(button) {
                     if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
                         let mut message: Option<String> = None;
-                        let mut finished: Option<[f32; 4]> = None;
+                        let mut finished: Option<(bool, [Vec2; 4])> = None;
                         let mut start = false;
                         match &mut self.mmode_draft {
                             None => start = true,
                             Some(d) => {
-                                let last = *d.depths.last().unwrap_or(&f32::NEG_INFINITY);
-                                if p.y <= last + 0.5 {
-                                    message = Some("Each point must be deeper than the last: septum top, septum bottom, free wall top, free wall bottom".into());
+                                let q = d.snap(p);
+                                let last = d.points.last().map(|l| d.progress(*l)).unwrap_or(f32::NEG_INFINITY);
+                                if d.progress(q) <= last + 0.5 {
+                                    message = Some(if d.mmode {
+                                        "Each point must be deeper than the last: septum top, septum bottom, free wall top, free wall bottom".into()
+                                    } else {
+                                        "Each point must be further along the line than the last: septum top, septum bottom, free wall top, free wall bottom".into()
+                                    });
                                 } else {
-                                    d.depths.push(p.y);
-                                    match d.depths.len() {
-                                        2 => message = Some("LV M-mode: now the top of the free wall".into()),
-                                        3 => message = Some("LV M-mode: now the bottom of the free wall".into()),
-                                        4 => finished = Some([d.depths[0], d.depths[1], d.depths[2], d.depths[3]]),
+                                    d.points.push(q);
+                                    match d.points.len() {
+                                        2 => message = Some("LV: now the top of the free wall".into()),
+                                        3 => message = Some("LV: now the bottom of the free wall".into()),
+                                        4 => {
+                                            let mut pts = [d.points[0], d.points[1], d.points[2], d.points[3]];
+                                            if !d.mmode {
+                                                // Straighten: the inner points onto the line.
+                                                let (a, b) = (pts[0], pts[3]);
+                                                let dir = b - a;
+                                                let len2 = dir.length_sq().max(1e-6);
+                                                for q in pts.iter_mut().take(3).skip(1) {
+                                                    let t = ((*q - a).dot(dir) / len2).clamp(0.0, 1.0);
+                                                    *q = a + dir * t;
+                                                }
+                                            }
+                                            finished = Some((d.mmode, pts));
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -3354,26 +3460,30 @@ impl ViewerState {
                         if start {
                             if self.try_select_roi(t, key, pos) {
                                 // An existing measurement was picked instead.
-                            } else if !frame
-                                .meta
-                                .us_region_at(p.x as f64, p.y as f64)
-                                .is_some_and(|r| r.is_time_across())
-                            {
-                                message =
-                                    Some("LV M-mode: click inside the M-mode strip, where time runs across".into());
                             } else {
+                                let mmode = frame
+                                    .meta
+                                    .us_region_at(p.x as f64, p.y as f64)
+                                    .is_some_and(|r| r.is_time_across());
                                 self.mmode_draft = Some(MmodeDraft {
-                                    x: p.x,
-                                    depths: vec![p.y],
-                                    hover_y: None,
+                                    mmode,
+                                    points: vec![p],
+                                    hover: None,
                                 });
-                                message = Some("LV M-mode: septum top placed; next the septum's ventricular side. Backspace removes a point, Escape abandons".into());
+                                message = Some(format!(
+                                    "LV {}: septum top placed; next the septum's ventricular side. Backspace removes a point, Escape abandons",
+                                    if mmode { "M-mode" } else { "2D" }
+                                ));
                             }
                         }
-                        if let Some(depths) = finished {
-                            let x = self.mmode_draft.take().map(|d| d.x).unwrap_or(p.x);
-                            let phase = self.next_mmode_phase();
-                            let roi = Roi::new(RoiKind::LvMmode { phase, x, depths });
+                        if let Some((mmode, pts)) = finished {
+                            self.mmode_draft = None;
+                            let phase = if mmode {
+                                self.next_mmode_phase_at(key, pts[0].x)
+                            } else {
+                                self.next_mmode_phase()
+                            };
+                            let roi = Roi::new(RoiKind::Lv { phase, mmode, p: pts });
                             let text = roi.value_text(frame);
                             let list = self.rois.entry(*key).or_default();
                             list.push(roi);
@@ -3400,8 +3510,9 @@ impl ViewerState {
             }
             Tool::Length | Tool::Rectangle | Tool::Oval | Tool::Arrow => {
                 if response.drag_started_by(button) {
-                    if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
-                        if !self.try_select_roi(t, key, pos) {
+                    let origin = press_origin(ui).or(pos);
+                    if let Some(p) = origin.map(|p| t.screen_to_image(p)) {
+                        if !self.try_select_roi(t, key, origin) {
                             self.drag_draft = Some((p, p));
                         }
                     }
@@ -3501,18 +3612,25 @@ fn parse_tiling(v: &str) -> Option<Tiling> {
 /// depth down to the pointer, with a tick at each placed depth.
 fn draw_mmode_draft(painter: &egui::Painter, t: &ViewTransform, d: &MmodeDraft, color: Color32) {
     let stroke = egui::Stroke::new(1.5, color);
-    let Some(first) = d.depths.first() else { return };
-    let last = *d.depths.last().unwrap_or(first);
-    let bottom = d.hover_y.map(|y| y.max(last)).unwrap_or(last);
-    let top = t.image_to_screen(Vec2::new(d.x, *first));
-    let end = t.image_to_screen(Vec2::new(d.x, bottom));
-    painter.line_segment([top, end], stroke);
-    for depth in &d.depths {
-        let p = t.image_to_screen(Vec2::new(d.x, *depth));
-        painter.line_segment([p + Vec2::new(-7.0, 0.0), p + Vec2::new(7.0, 0.0)], stroke);
+    let Some(first) = d.points.first() else { return };
+    let last = *d.points.last().unwrap_or(first);
+    let tip = d.hover.unwrap_or(last);
+    let start = t.image_to_screen(*first);
+    let end = t.image_to_screen(tip);
+    painter.line_segment([start, end], stroke);
+    let along = end - start;
+    let unit = if along.length() > 1e-3 {
+        along / along.length()
+    } else {
+        Vec2::Y
+    };
+    let normal = Vec2::new(-unit.y, unit.x);
+    for q in &d.points {
+        let p = t.image_to_screen(*q);
+        painter.line_segment([p - normal * 7.0, p + normal * 7.0], stroke);
     }
     let names = ["septum top", "septum bottom", "free wall top", "free wall bottom"];
-    if let Some(name) = names.get(d.depths.len()) {
+    if let Some(name) = names.get(d.points.len()) {
         shadow_text(
             painter,
             end + Vec2::new(10.0, 0.0),
@@ -3524,12 +3642,19 @@ fn draw_mmode_draft(painter: &egui::Painter, t: &ViewTransform, d: &MmodeDraft, 
     }
 }
 
+/// Where the current press began, in screen points.
+fn press_origin(ui: &Ui) -> Option<Pos2> {
+    ui.input(|i| i.pointer.press_origin())
+}
+
 fn kind_label(kind: &RoiKind) -> &'static str {
     match kind {
         RoiKind::Length { .. } => "Length",
-        RoiKind::LvMmode { phase, .. } => match phase {
-            MmodePhase::Diastole => "LV M-mode (diastole)",
-            MmodePhase::Systole => "LV M-mode (systole)",
+        RoiKind::Lv { phase, mmode, .. } => match (phase, mmode) {
+            (MmodePhase::Diastole, true) => "LV M-mode (diastole)",
+            (MmodePhase::Systole, true) => "LV M-mode (systole)",
+            (MmodePhase::Diastole, false) => "LV 2D (diastole)",
+            (MmodePhase::Systole, false) => "LV 2D (systole)",
         },
         RoiKind::Angle { .. } => "Angle",
         RoiKind::Rect { .. } => "Rectangle",

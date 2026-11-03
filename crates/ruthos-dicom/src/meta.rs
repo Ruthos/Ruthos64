@@ -398,7 +398,7 @@ impl PatientName {
 }
 
 /// One item of the Sequence of Ultrasound Regions.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct UsRegion {
     pub x0: i64,
     pub y0: i64,
@@ -413,9 +413,32 @@ pub struct UsRegion {
     /// Physical size of one pixel, in the units above.
     pub delta_x: f64,
     pub delta_y: f64,
+    /// Reference pixel (0018,6020) and (0018,6022), relative to the
+    /// region's top-left corner: where the physical value is
+    /// `ref_value_x` / `ref_value_y` (the Doppler baseline, the time zero).
+    pub ref_x0: i64,
+    pub ref_y0: i64,
+    pub ref_value_x: f64,
+    pub ref_value_y: f64,
 }
 
 impl UsRegion {
+    /// Velocity in cm/s down the region (spectral Doppler).
+    pub fn is_velocity_y(&self) -> bool {
+        self.units_y == 7 && self.delta_y != 0.0
+    }
+
+    /// The physical value on the vertical axis at image row `y`, in the
+    /// region's units (cm/s for Doppler, cm for M-mode depth).
+    pub fn value_y(&self, y: f64) -> f64 {
+        (y - (self.y0 + self.ref_y0) as f64) * self.delta_y + self.ref_value_y
+    }
+
+    /// Seconds per pixel across a time-axis region.
+    pub fn seconds_per_pixel(&self) -> Option<f64> {
+        (self.units_x == 4 && self.delta_x != 0.0).then(|| self.delta_x.abs())
+    }
+
     pub fn contains(&self, x: f64, y: f64) -> bool {
         x >= self.x0 as f64 && x <= self.x1 as f64 + 1.0 && y >= self.y0 as f64 && y <= self.y1 as f64 + 1.0
     }
@@ -468,6 +491,10 @@ fn read_us_regions(obj: &Obj) -> Vec<UsRegion> {
                 units_y: g.int(tags::PHYSICAL_UNITS_Y_DIRECTION).unwrap_or(0) as u16,
                 delta_x: g.f64(tags::PHYSICAL_DELTA_X).unwrap_or(0.0),
                 delta_y: g.f64(tags::PHYSICAL_DELTA_Y).unwrap_or(0.0),
+                ref_x0: g.int(tags::REFERENCE_PIXEL_X0).unwrap_or(0),
+                ref_y0: g.int(tags::REFERENCE_PIXEL_Y0).unwrap_or(0),
+                ref_value_x: g.f64(tags::REFERENCE_PIXEL_PHYSICAL_VALUE_X).unwrap_or(0.0),
+                ref_value_y: g.f64(tags::REFERENCE_PIXEL_PHYSICAL_VALUE_Y).unwrap_or(0.0),
             })
         })
         .collect()

@@ -864,9 +864,9 @@ impl Database {
         let conn = self.conn.lock();
         let sql = format!(
             "SELECT r.id, r.image_id, i.series_id, s.modality, s.series_number, s.series_description, i.instance_number,
-                    r.kind, COALESCE(r.date_modified, 0)
+                    r.kind, COALESCE(r.date_modified, 0), r.frame, r.points
              FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
-             WHERE {filter} AND r.kind LIKE 'lvmmode-%'
+             WHERE {filter} AND (r.kind LIKE 'lvmmode-%' OR r.kind LIKE 'lv2d-%')
              ORDER BY COALESCE(r.date_modified, 0), r.id"
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -891,6 +891,12 @@ impl Database {
                 phase: if kind.ends_with("-s") { 's' } else { 'd' },
                 date_modified: row.get(8)?,
                 values: Vec::new(),
+                frame: row.get(9)?,
+                x: serde_json::from_str::<Vec<[f32; 2]>>(&row.get::<_, String>(10)?)
+                    .ok()
+                    .and_then(|p| p.first().map(|q| q[0]))
+                    .unwrap_or(0.0),
+                two_d: kind.starts_with("lv2d-"),
             })
         })?;
         let mut out = rows.collect::<std::result::Result<Vec<_>, _>>()?;

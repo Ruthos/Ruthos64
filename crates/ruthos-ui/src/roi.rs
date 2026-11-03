@@ -17,12 +17,16 @@ pub enum RoiKind {
         a: Vec2,
         b: Vec2,
     },
-    /// Left-ventricular M-mode line: one time column and four depths in
-    /// order: septum top, septum bottom, free wall top, free wall bottom.
-    LvMmode {
+    /// Left-ventricular dimensions: four points along one line, in order
+    /// septum top, septum bottom, free wall top, free wall bottom. Drawn in
+    /// an M-mode strip (`mmode`) or on a 2D image. The ends move freely, so
+    /// the line can be rotated, shortened or extended; the two inner
+    /// points stay on the line. In an M-mode strip each thickness is taken
+    /// vertically, at one instant, whatever the line's slant.
+    Lv {
         phase: MmodePhase,
-        x: f32,
-        depths: [f32; 4],
+        mmode: bool,
+        p: [Vec2; 4],
     },
     /// Vertex is `b`.
     Angle {
@@ -77,10 +81,13 @@ impl MmodePhase {
         }
     }
 
-    pub fn kind_key(self) -> &'static str {
-        match self {
-            MmodePhase::Diastole => ruthos_core::mmode::KIND_D,
-            MmodePhase::Systole => ruthos_core::mmode::KIND_S,
+    pub fn kind_key(self, mmode: bool) -> &'static str {
+        use ruthos_core::mmode::{KIND_2D_D, KIND_2D_S, KIND_D, KIND_S};
+        match (self, mmode) {
+            (MmodePhase::Diastole, true) => KIND_D,
+            (MmodePhase::Systole, true) => KIND_S,
+            (MmodePhase::Diastole, false) => KIND_2D_D,
+            (MmodePhase::Systole, false) => KIND_2D_S,
         }
     }
 }
@@ -141,7 +148,7 @@ impl Roi {
     pub fn to_record(&self, image_id: i64, frame_index: u32, frame: Option<&Frame>) -> RoiRecord {
         let kind = match &self.kind {
             RoiKind::Length { .. } => "length",
-            RoiKind::LvMmode { phase, .. } => phase.kind_key(),
+            RoiKind::Lv { phase, mmode, .. } => phase.kind_key(*mmode),
             RoiKind::Angle { .. } => "angle",
             RoiKind::Rect { .. } => "rect",
             RoiKind::Oval { .. } => "oval",
@@ -176,17 +183,16 @@ impl Roi {
             "oval" => RoiKind::Oval { a: p(0)?, b: p(1)? },
             "arrow" => RoiKind::Arrow { a: p(0)?, b: p(1)? },
             "point" => RoiKind::Point { p: p(0)? },
-            "lvmmode-d" | "lvmmode-s" => {
+            "lvmmode-d" | "lvmmode-s" | "lv2d-d" | "lv2d-s" => {
                 let phase = if r.kind.ends_with("-s") {
                     MmodePhase::Systole
                 } else {
                     MmodePhase::Diastole
                 };
-                let x = p(0)?.x;
-                RoiKind::LvMmode {
+                RoiKind::Lv {
                     phase,
-                    x,
-                    depths: [p(0)?.y, p(1)?.y, p(2)?.y, p(3)?.y],
+                    mmode: r.kind.starts_with("lvmmode"),
+                    p: [p(0)?, p(1)?, p(2)?, p(3)?],
                 }
             }
             _ => return None,
@@ -201,6 +207,28 @@ impl Roi {
 
     /// The headline number, unit and scale basis, for storage and reports.
     pub fn measure(&self, frame: &Frame) -> Measurement {
+        // In a spectral Doppler strip a line measures time, and a point
+        // measures velocity.
+        if let RoiKind::Length { a, b } = &self.kind {
+            if let Some(d) = doppler_line(frame, *a, *b) {
+                return Measurement {
+                    value: Some(d.dt_ms),
+                    unit: "ms",
+                    basis: Some(SpacingBasis::UltrasoundRegion),
+                    issue: None,
+                };
+            }
+        }
+        if let RoiKind::Point { p } = &self.kind {
+            if let Some(v) = frame.meta.velocity_at(p.x as f64, p.y as f64) {
+                return Measurement {
+                    value: Some(v.abs()),
+                    unit: "m/s",
+                    basis: Some(SpacingBasis::UltrasoundRegion),
+                    issue: None,
+                };
+            }
+        }
         let none = |issue: Option<MeasureIssue>| Measurement {
             value: None,
             unit: "",
@@ -271,7 +299,7 @@ impl Roi {
                 issue: None,
             },
             RoiKind::Arrow { .. } => none(None),
-            RoiKind::LvMmode { .. } => match self.mmode_values(frame) {
+            RoiKind::Lv { .. } => match self.mmode_values(frame) {
                 Ok((v, basis)) => Measurement {
                     value: Some(v[1]),
                     unit: "mm",
@@ -283,10 +311,11 @@ impl Roi {
         }
     }
 
-    /// The three wall and cavity thicknesses of an M-mode line in
-    /// millimetres (septum, cavity, free wall) and their scale basis.
+    /// The three wall and cavity thicknesses of an LV line in millimetres
+    /// (septum, cavity, free wall) and their scale basis. In an M-mode
+    /// strip each is the vertical distance between its points.
     pub fn mmode_values(&self, frame: &Frame) -> Result<([f64; 3], SpacingBasis), MeasureIssue> {
-        let RoiKind::LvMmode { x, depths, .. } = &self.kind else {
+        let RoiKind::Lv { p, .. } = &self.kind else {
             return Err(MeasureIssue::Uncalibrated);
         };
         let mut out = [0.0; 3];
@@ -294,11 +323,19 @@ impl Roi {
         for i in 0..3 {
             let l = frame
                 .meta
-                .length([*x as f64, depths[i] as f64], [*x as f64, depths[i + 1] as f64])?;
+                .length([p[i].x as f64, p[i].y as f64], [p[i + 1].x as f64, p[i + 1].y as f64])?;
             out[i] = l.mm;
             basis = l.basis;
         }
         Ok((out, basis))
+    }
+
+    /// The phase of an LV line.
+    pub fn lv_phase(&self) -> Option<MmodePhase> {
+        match &self.kind {
+            RoiKind::Lv { phase, .. } => Some(*phase),
+            _ => None,
+        }
     }
 
     /// Value and unit only, for callers that do not show the basis.
@@ -314,7 +351,7 @@ impl Roi {
             }
             RoiKind::Angle { a, b, c } => vec![*a, *b, *c],
             RoiKind::Point { p } => vec![*p],
-            RoiKind::LvMmode { x, depths, .. } => depths.iter().map(|d| Vec2::new(*x, *d)).collect(),
+            RoiKind::Lv { p, .. } => p.to_vec(),
         }
     }
 
@@ -363,12 +400,30 @@ impl Roi {
                 _ => {}
             },
             RoiKind::Point { p: q } => *q = p,
-            RoiKind::LvMmode { depths, .. } => {
-                if i < 4 {
-                    // Handles move vertically only and keep their order.
-                    let lo = if i > 0 { depths[i - 1] + 0.5 } else { f32::NEG_INFINITY };
-                    let hi = if i < 3 { depths[i + 1] - 0.5 } else { f32::INFINITY };
-                    depths[i] = p.y.clamp(lo.min(hi), hi.max(lo));
+            RoiKind::Lv { p: pts, .. } => {
+                let (a, b) = (pts[0], pts[3]);
+                let dir = b - a;
+                let len2 = dir.length_sq();
+                let t_of = |q: Vec2| if len2 > 1e-6 { (q - a).dot(dir) / len2 } else { 0.0 };
+                match i {
+                    // An end moves anywhere: the line rotates, shortens or
+                    // lengthens, and the inner points keep their places
+                    // along it.
+                    0 | 3 => {
+                        let (t1, t2) = (t_of(pts[1]), t_of(pts[2]));
+                        pts[i] = p;
+                        let (na, nb) = (pts[0], pts[3]);
+                        pts[1] = na + (nb - na) * t1;
+                        pts[2] = na + (nb - na) * t2;
+                    }
+                    // An inner point slides along the line, between its
+                    // neighbours.
+                    1 | 2 => {
+                        let (lo, hi) = (t_of(pts[i - 1]), t_of(pts[i + 1]));
+                        let t = t_of(p).clamp(lo.min(hi), hi.max(lo));
+                        pts[i] = a + dir * t;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -411,8 +466,7 @@ impl Roi {
                 *c += d;
             }
             RoiKind::Point { p } => *p += d,
-            // The line moves along the time axis only.
-            RoiKind::LvMmode { x, .. } => *x += d.x,
+            RoiKind::Lv { p, .. } => p.iter_mut().for_each(|q| *q += d),
         }
     }
 
@@ -424,7 +478,7 @@ impl Roi {
             }
             RoiKind::Angle { a, b, c } => (*b - *a).length() < 1.0 || (*c - *b).length() < 1.0,
             RoiKind::Point { .. } => false,
-            RoiKind::LvMmode { depths, .. } => depths.windows(2).any(|w| w[1] - w[0] < 1.0),
+            RoiKind::Lv { p, .. } => p.windows(2).any(|w| (w[1] - w[0]).length() < 1.0),
         }
     }
 
@@ -455,7 +509,7 @@ impl Roi {
                 d
             }
             RoiKind::Point { .. } => (pts[0] - screen).length(),
-            RoiKind::LvMmode { .. } => segment_distance(pts[0], pts[3], screen),
+            RoiKind::Lv { .. } => segment_distance(pts[0], pts[3], screen),
         }
     }
 
@@ -477,11 +531,36 @@ impl Roi {
                     return String::new();
                 }
                 let m = self.measure(frame);
+                if let RoiKind::Length { a, b } = &self.kind {
+                    if let Some(d) = doppler_line(frame, *a, *b) {
+                        let mut text = format!(
+                            "\u{394}t {:.0} ms  {:.2} \u{2192} {:.2} m/s",
+                            d.dt_ms,
+                            d.v1.abs(),
+                            d.v2.abs()
+                        );
+                        if d.dt_ms > 0.5 {
+                            let slope = (d.v2.abs() - d.v1.abs()).abs() / (d.dt_ms / 1000.0);
+                            text.push_str(&format!("  {slope:.1} m/s\u{b2}"));
+                        }
+                        return text;
+                    }
+                }
+                // In an M-mode strip a line also spans time.
+                let dt = match &self.kind {
+                    RoiKind::Length { a, b } => frame
+                        .meta
+                        .time_between([a.x as f64, a.y as f64], [b.x as f64, b.y as f64])
+                        .filter(|s| *s >= 0.001)
+                        .map(|s| format!("  \u{394}t {:.0} ms", s * 1000.0))
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                };
                 match (m.value, m.unit, m.issue) {
                     (Some(mm), "mm", _) if mm >= 10.0 => {
-                        format!("{:.2} cm{}", mm / 10.0, m.basis.map(|b| b.marker()).unwrap_or(""))
+                        format!("{:.2} cm{}{dt}", mm / 10.0, m.basis.map(|b| b.marker()).unwrap_or(""))
                     }
-                    (Some(mm), "mm", _) => format!("{mm:.2} mm{}", m.basis.map(|b| b.marker()).unwrap_or("")),
+                    (Some(mm), "mm", _) => format!("{mm:.2} mm{}{dt}", m.basis.map(|b| b.marker()).unwrap_or("")),
                     (Some(px), "px", _) => format!("{px:.1} px  (not calibrated)"),
                     (_, _, Some(issue)) => issue.label().to_string(),
                     _ => String::new(),
@@ -514,11 +593,17 @@ impl Roi {
                 }
                 None => String::new(),
             },
-            RoiKind::Point { p } => match frame.value_at(p.x.floor() as i64, p.y.floor() as i64) {
-                Some(v) => format!("{v:.0}"),
-                None => String::new(),
-            },
-            RoiKind::LvMmode { phase, .. } => match self.mmode_values(frame) {
+            RoiKind::Point { p } => {
+                if let Some(v) = frame.meta.velocity_at(p.x as f64, p.y as f64) {
+                    // The simplified Bernoulli gradient, 4v\u{b2}.
+                    return format!("{:.2} m/s  {:.1} mmHg", v.abs(), 4.0 * v * v);
+                }
+                match frame.value_at(p.x.floor() as i64, p.y.floor() as i64) {
+                    Some(v) => format!("{v:.0}"),
+                    None => String::new(),
+                }
+            }
+            RoiKind::Lv { phase, .. } => match self.mmode_values(frame) {
                 Ok((v, basis)) => {
                     let labels = phase.labels();
                     let cm = echo_cm();
@@ -738,26 +823,40 @@ impl Roi {
                 );
                 return Some(r);
             }
-            RoiKind::LvMmode { phase, .. } => {
-                // One vertical line, a tick at each depth, each thickness
-                // named beside its segment, and the phase below.
+            RoiKind::Lv { phase, .. } => {
+                // One line, a tick across it at each point, each thickness
+                // named beside its segment, and the phase past the end.
                 painter.line_segment([pts[0], pts[3]], stroke);
+                let along = pts[3] - pts[0];
+                let unit = if along.length() > 1e-3 {
+                    along / along.length()
+                } else {
+                    Vec2::Y
+                };
+                let mut normal = Vec2::new(-unit.y, unit.x);
+                if normal.x < 0.0 || (normal.x == 0.0 && normal.y < 0.0) {
+                    normal = -normal;
+                }
                 for p in &pts {
-                    painter.line_segment([*p + Vec2::new(-7.0, 0.0), *p + Vec2::new(7.0, 0.0)], stroke);
+                    painter.line_segment([*p - normal * 7.0, *p + normal * 7.0], stroke);
                 }
                 let values = self.mmode_values(frame).ok();
                 let labels = phase.labels();
                 let cm = echo_cm();
                 for i in 0..3 {
-                    let mid = Pos2::new(pts[i].x, (pts[i].y + pts[i + 1].y) / 2.0);
+                    let mid = pts[i] + (pts[i + 1] - pts[i]) / 2.0;
                     let text = match &values {
                         Some((v, _)) => format!("{} {}", labels[i], mmode_number(v[i], cm)),
                         None => labels[i].to_string(),
                     };
                     shadow_text(
                         painter,
-                        mid + Vec2::new(10.0, 0.0),
-                        Align2::LEFT_CENTER,
+                        mid + normal * 10.0,
+                        if normal.x >= 0.0 {
+                            Align2::LEFT_CENTER
+                        } else {
+                            Align2::RIGHT_CENTER
+                        },
                         &text,
                         font.clone(),
                         color,
@@ -770,7 +869,7 @@ impl Roi {
                 };
                 let r = shadow_text(
                     painter,
-                    pts[3] + Vec2::new(10.0, 10.0),
+                    pts[3] + unit * 12.0 + normal * 6.0,
                     Align2::LEFT_TOP,
                     &title,
                     label_font,
@@ -781,6 +880,26 @@ impl Roi {
         }
         None
     }
+}
+
+/// A line inside a spectral Doppler strip: the time it spans and the
+/// velocities at its ends.
+struct DopplerLine {
+    dt_ms: f64,
+    v1: f64,
+    v2: f64,
+}
+
+fn doppler_line(frame: &Frame, a: Vec2, b: Vec2) -> Option<DopplerLine> {
+    let m = &frame.meta;
+    let v1 = m.velocity_at(a.x as f64, a.y as f64)?;
+    let v2 = m.velocity_at(b.x as f64, b.y as f64)?;
+    let dt = m.time_between([a.x as f64, a.y as f64], [b.x as f64, b.y as f64])?;
+    Some(DopplerLine {
+        dt_ms: dt * 1000.0,
+        v1,
+        v2,
+    })
 }
 
 fn rect_corners(t: &ViewTransform, roi: &Roi) -> [Pos2; 4] {
@@ -932,18 +1051,27 @@ mod tests {
             units_y: 3,
             delta_x: 0.005,
             delta_y: 0.1,
+            ..Default::default()
         }];
         f
+    }
+
+    fn lv(phase: MmodePhase, mmode: bool, pts: [(f32, f32); 4]) -> Roi {
+        Roi::new(RoiKind::Lv {
+            phase,
+            mmode,
+            p: pts.map(|(x, y)| Vec2::new(x, y)),
+        })
     }
 
     #[test]
     fn mmode_values_come_from_the_strip_scale() {
         let f = mmode_frame();
-        let roi = Roi::new(RoiKind::LvMmode {
-            phase: MmodePhase::Diastole,
-            x: 50.0,
-            depths: [110.0, 120.0, 160.0, 170.0],
-        });
+        let roi = lv(
+            MmodePhase::Diastole,
+            true,
+            [(50.0, 110.0), (50.0, 120.0), (50.0, 160.0), (50.0, 170.0)],
+        );
         let (v, basis) = roi.mmode_values(&f).unwrap();
         assert_eq!(v, [10.0, 40.0, 10.0]);
         assert_eq!(basis, SpacingBasis::UltrasoundRegion);
@@ -959,36 +1087,78 @@ mod tests {
         );
         assert_eq!(rec.points.len(), 4);
         assert_eq!(Roi::from_record(&rec).unwrap(), roi);
+        // A slanted line in the strip still measures vertically.
+        let slanted = lv(
+            MmodePhase::Diastole,
+            true,
+            [(40.0, 110.0), (44.0, 120.0), (60.0, 160.0), (64.0, 170.0)],
+        );
+        assert_eq!(slanted.mmode_values(&f).unwrap().0, [10.0, 40.0, 10.0]);
     }
 
     #[test]
-    fn mmode_handles_move_vertically_and_keep_order() {
-        let mut roi = Roi::new(RoiKind::LvMmode {
-            phase: MmodePhase::Systole,
-            x: 50.0,
-            depths: [10.0, 20.0, 60.0, 70.0],
-        });
-        roi.set_handle(1, Vec2::new(99.0, 25.0));
-        assert_eq!(
-            roi.kind,
-            RoiKind::LvMmode {
-                phase: MmodePhase::Systole,
-                x: 50.0,
-                depths: [10.0, 25.0, 60.0, 70.0]
-            }
+    fn lv_in_2d_measures_along_the_line_and_stores_as_2d() {
+        let f = frame(); // 0.5 mm per pixel both ways
+        let roi = lv(
+            MmodePhase::Systole,
+            false,
+            [(0.0, 0.0), (3.0, 4.0), (6.0, 8.0), (9.0, 12.0)],
         );
-        // Pushed past its neighbour, a handle stops just short of it.
-        roi.set_handle(1, Vec2::new(0.0, 80.0));
-        let RoiKind::LvMmode { depths, .. } = roi.kind else {
-            panic!()
-        };
-        assert!((depths[1] - 59.5).abs() < 1e-6);
-        roi.translate(Vec2::new(5.0, 100.0));
-        let RoiKind::LvMmode { x, depths, .. } = roi.kind else {
-            panic!()
-        };
-        assert_eq!(x, 55.0);
-        assert_eq!(depths[0], 10.0, "the line moves along the time axis only");
+        let (v, _) = roi.mmode_values(&f).unwrap();
+        assert_eq!(v, [2.5, 2.5, 2.5], "5 pixels along the line, 0.5 mm each");
+        let rec = roi.to_record(1, 7, Some(&f));
+        assert_eq!(rec.kind, "lv2d-s");
+        assert_eq!(Roi::from_record(&rec).unwrap(), roi);
+    }
+
+    #[test]
+    fn lv_ends_move_anywhere_and_inner_points_follow() {
+        let mut roi = lv(
+            MmodePhase::Systole,
+            true,
+            [(50.0, 10.0), (50.0, 20.0), (50.0, 60.0), (50.0, 70.0)],
+        );
+        // Rotate and lengthen by moving the bottom end sideways and down.
+        roi.set_handle(3, Vec2::new(110.0, 130.0));
+        let pts = roi.points();
+        assert_eq!(pts[3], Vec2::new(110.0, 130.0));
+        assert!(
+            (pts[1] - Vec2::new(60.0, 30.0)).length() < 1e-4,
+            "inner points keep their fraction"
+        );
+        assert!((pts[2] - Vec2::new(100.0, 110.0)).length() < 1e-4);
+        // An inner point slides along the line and stops at its neighbour.
+        roi.set_handle(1, Vec2::new(500.0, 0.0));
+        let pts = roi.points();
+        assert!((pts[1] - pts[2]).length() < 1e-3);
+        roi.translate(Vec2::new(5.0, 7.0));
+        assert_eq!(roi.points()[0], Vec2::new(55.0, 17.0), "the whole line moves freely");
+    }
+
+    #[test]
+    fn doppler_points_and_lines() {
+        let mut f = mmode_frame();
+        // Spectral strip: -2 cm/s per pixel, baseline 40 rows in.
+        f.meta.us_regions[0].units_y = 7;
+        f.meta.us_regions[0].delta_y = -2.0;
+        f.meta.us_regions[0].ref_y0 = 40;
+        let point = Roi::new(RoiKind::Point {
+            p: Vec2::new(20.0, 90.0 + 15.0),
+        });
+        let m = point.measure(&f);
+        assert_eq!(m.unit, "m/s");
+        assert!((m.value.unwrap() - 0.7).abs() < 1e-6);
+        assert_eq!(point.value_text(&f), "0.70 m/s  2.0 mmHg");
+        let line = Roi::new(RoiKind::Length {
+            a: Vec2::new(20.0, 105.0),
+            b: Vec2::new(60.0, 140.0),
+        });
+        let m = line.measure(&f);
+        assert_eq!(m.unit, "ms");
+        assert!((m.value.unwrap() - 200.0).abs() < 1e-6);
+        assert!(line
+            .value_text(&f)
+            .starts_with("\u{394}t 200 ms  0.70 \u{2192} 0.00 m/s"));
     }
 
     #[test]

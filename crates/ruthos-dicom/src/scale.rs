@@ -321,6 +321,25 @@ impl InstanceMeta {
         })
     }
 
+    /// Blood velocity in m/s at an image point inside a spectral Doppler
+    /// region, signed (towards the transducer positive, as the scanner
+    /// records it).
+    pub fn velocity_at(&self, x: f64, y: f64) -> Option<f64> {
+        let r = self.us_region_at(x, y)?;
+        r.is_velocity_y().then(|| r.value_y(y) / 100.0)
+    }
+
+    /// The time between two points in seconds, when both lie in the same
+    /// region whose horizontal axis is time (M-mode or spectral Doppler).
+    pub fn time_between(&self, a: [f64; 2], b: [f64; 2]) -> Option<f64> {
+        let ra = self.us_region_index_at(a[0], a[1])?;
+        if self.us_region_index_at(b[0], b[1]) != Some(ra) {
+            return None;
+        }
+        let s = self.us_regions[ra].seconds_per_pixel()?;
+        Some((b[0] - a[0]).abs() * s)
+    }
+
     /// Spacing at a point, without the basis, for callers that only scale.
     pub fn spacing_at(&self, x: f64, y: f64) -> Option<[f64; 2]> {
         let s = self.scale_at(x, y)?;
@@ -351,6 +370,10 @@ mod tests {
 
     fn region(x0: i64, y0: i64, x1: i64, y1: i64, ux: u16, dx: f64, dy: f64) -> UsRegion {
         UsRegion {
+            ref_x0: 0,
+            ref_y0: 0,
+            ref_value_x: 0.0,
+            ref_value_y: 0.0,
             x0,
             y0,
             x1,
@@ -362,6 +385,22 @@ mod tests {
             delta_x: dx,
             delta_y: dy,
         }
+    }
+
+    #[test]
+    fn doppler_velocity_and_time() {
+        let mut m = meta("US");
+        // A spectral strip: 0.005 s per pixel across, -2 cm/s per pixel down,
+        // baseline 40 rows into the region.
+        let mut r = region(0, 100, 199, 199, 4, 0.005, -2.0);
+        r.units_y = 7;
+        r.ref_y0 = 40;
+        m.us_regions = vec![r];
+        assert_eq!(m.velocity_at(10.0, 140.0), Some(0.0));
+        assert!((m.velocity_at(10.0, 90.0 + 100.0).unwrap() - (-1.0)).abs() < 1e-9);
+        assert!((m.velocity_at(10.0, 115.0).unwrap() - 0.5).abs() < 1e-9);
+        assert!((m.time_between([10.0, 120.0], [50.0, 150.0]).unwrap() - 0.2).abs() < 1e-9);
+        assert_eq!(m.velocity_at(10.0, 50.0), None, "outside the strip");
     }
 
     #[test]

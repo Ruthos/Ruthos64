@@ -45,7 +45,7 @@ impl Default for LibraryEditor {
 }
 
 const TOOLS: [&str; 5] = ["length", "angle", "area", "point", "lv-mmode"];
-const QUANTITIES: [&str; 4] = ["length", "angle", "area", "value"];
+const QUANTITIES: [&str; 6] = ["length", "angle", "area", "velocity", "time", "value"];
 
 fn grey(text: impl Into<String>) -> RichText {
     RichText::new(text.into()).size(12.0).color(Color32::from_gray(110))
