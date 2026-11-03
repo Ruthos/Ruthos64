@@ -67,6 +67,7 @@
   .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 28px; }
   .badge { font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
   .badge.alpha { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+  .meta { color: var(--muted); font-size: 14px; margin: 14px 0 0; }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; }
   .btn {
     display: inline-block; padding: 12px 20px; border-radius: 8px; font-weight: 600; font-size: 16px;
@@ -87,6 +88,7 @@
   section p.sub { color: var(--muted); max-width: 760px; margin: 0 0 32px; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  th[scope], tbody th { width: 34%; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; }
   .card h3 { margin: 0 0 6px; font-size: 18px; }
   .card p { margin: 0; color: var(--muted); font-size: 15.5px; }
@@ -137,6 +139,7 @@
       <a href="#features">Features</a>
       <a href="#measurements">Measurements</a>
       <a href="#download">Download</a>
+      <a href="#gpu">Graphics</a>
       <a href="#signing">Code signing policy</a>
       <a href="https://github.com/Ruthos/Ruthos64">GitHub</a>
     </nav>
@@ -159,9 +162,10 @@
       first for veterinary practice and teaching, from equine echocardiography to digital radiography.
     </p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/Ruthos/Ruthos64/releases">Download for Windows</a>
+      <a class="btn primary" href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/Ruthos-0.1.0-alpha-win64.zip">Download for Windows (64-bit)</a>
       <a class="btn" href="https://github.com/Ruthos/Ruthos64">Source on GitHub</a>
     </div>
+    <p class="meta">Version 0.1.0-alpha · Windows 10 version 1809 or later, 64-bit (x86-64) · 13 MB zip, nothing to install</p>
     <figure class="shot">
       <img src="img/viewer-echo.jpg" width="1920" height="1163"
            alt="The Ruthos 2D viewer with two echocardiography loops side by side: a long-axis view with named Ao and VSD measurements, and a colour Doppler view.">
@@ -218,7 +222,7 @@
       <table>
         <thead><tr><th>Platform</th><th>Status</th><th>Get it</th></tr></thead>
         <tbody>
-          <tr><td>Windows 10 (1809) and 11, 64-bit</td><td class="ok">Alpha available</td><td><a href="https://github.com/Ruthos/Ruthos64/releases">Releases page</a></td></tr>
+          <tr><td>Windows 10 (1809) and 11, 64-bit (x86-64)</td><td class="ok">0.1.0-alpha available</td><td><a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/Ruthos-0.1.0-alpha-win64.zip"><strong>Ruthos-0.1.0-alpha-win64.zip</strong></a> (13 MB) · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/SHA256SUMS.txt">SHA256SUMS.txt</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">all releases</a></td></tr>
           <tr><td>macOS 11 and later, Apple Silicon and Intel</td><td class="plan">In preparation; the code already builds and tests on macOS</td><td>Not yet</td></tr>
           <tr><td>Linux, 64-bit</td><td class="plan">Builds and tests in CI; community supported</td><td><a href="https://github.com/Ruthos/Ruthos64#building">Build from source</a></td></tr>
         </tbody>
@@ -228,7 +232,8 @@
         <div>
           <h3>Install</h3>
           <ol class="steps">
-            <li>Download the zip from the <a href="https://github.com/Ruthos/Ruthos64/releases">releases page</a> and unzip it anywhere.</li>
+            <li>Download <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/Ruthos-0.1.0-alpha-win64.zip">Ruthos-0.1.0-alpha-win64.zip</a> and unzip it anywhere.</li>
+            <li>This alpha is not code-signed yet, so Windows SmartScreen may say it protected your PC: choose <em>More info</em>, then <em>Run anyway</em>. A PC with Smart App Control switched on will refuse it until the signed release.</li>
             <li>Run <code>ruthos.exe</code>. Nothing is installed and no administrator rights are needed.</li>
             <li>To receive from a modality, turn the listener on in Preferences &gt; Listener (AE title RUTHOS, port 11112) and allow Ruthos through Windows Firewall.</li>
           </ol>
@@ -246,6 +251,43 @@
       <h3 style="margin-top:32px">Verify a download</h3>
       <p class="sub" style="margin-bottom:12px">Every release lists SHA-256 checksums in <code>SHA256SUMS.txt</code>, and each file carries a GitHub build-provenance attestation recording the commit and workflow that built it.</p>
       <pre>gh attestation verify Ruthos-0.1.0-alpha-win64.zip --repo Ruthos/Ruthos64</pre>
+    </div>
+  </section>
+
+  <section id="gpu">
+    <div class="wrap">
+      <h2>Graphics: GPU-powered viewing</h2>
+      <p class="sub">Ruthos draws every image on the graphics processor. Window and level, colour tables, zoom and cine all run on the GPU, so long echo loops and large CT series stay smooth on ordinary clinic hardware.</p>
+      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(230px, 1fr))">
+        <div class="card"><h3>What it runs on</h3><p>Any DirectX 12, Vulkan or OpenGL graphics device: dedicated NVIDIA, AMD and Intel Arc cards, and the integrated graphics in Intel and AMD processors from roughly 2015 on. A recent integrated GPU is enough for echo loops and radiographs.</p></div>
+        <div class="card"><h3>Which GPU it picks</h3><p>On a laptop with two GPUs, Ruthos chooses the dedicated one automatically, using DirectX 12 where it can. The adapter it chose is written at the top of <code>ruthos.log</code> in the data folder.</p></div>
+        <div class="card"><h3>When it matters</h3><p>Playing two or more echo loops at once, tiling many images, and large CT, MR or CBCT series benefit most from a dedicated GPU. A single radiograph or one loop is light work for any device.</p></div>
+        <div class="card"><h3>No GPU or a broken driver</h3><p>Ruthos falls back to Windows' built-in software renderer, which works anywhere but is slower. If it will not start, update the graphics driver first; the error dialog says what failed.</p></div>
+      </div>
+
+      <div class="two" style="margin-top:32px">
+        <div>
+          <h3>Recommended</h3>
+          <table>
+            <tbody>
+              <tr><th>Processor</th><td>64-bit (x86-64), 4 cores or more</td></tr>
+              <tr><th>Memory</th><td>8 GB; 16 GB for large CT or several long loops at once</td></tr>
+              <tr><th>Graphics</th><td>DirectX 12 capable; a dedicated GPU with 4 GB for heavy use</td></tr>
+              <tr><th>Display</th><td>1920 × 1080 or higher</td></tr>
+              <tr><th>System</th><td>Windows 10 version 1809 or later, or Windows 11</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h3>Troubleshooting</h3>
+          <ul>
+            <li><strong>Laptop using the wrong GPU.</strong> In Windows Settings &gt; System &gt; Display &gt; Graphics, add <code>ruthos.exe</code> and set it to <em>High performance</em>.</li>
+            <li><strong>Blank or flickering windows.</strong> Update the graphics driver from NVIDIA, AMD or Intel rather than through Windows Update.</li>
+            <li><strong>Remote desktop or a virtual machine.</strong> These often have no usable GPU; start Ruthos with the environment variable <code>RUTHOS_RENDERER=software</code>.</li>
+            <li><strong>Force a graphics API.</strong> <code>WGPU_BACKEND=dx12</code>, <code>vulkan</code> or <code>gl</code> limits Ruthos to one, for testing a driver problem.</li>
+          </ul>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -287,7 +329,7 @@
 <footer>
   <div class="wrap">
     <span>Ruthos, by the Ruthos contributors. LGPL-3.0-only.</span>
-    <span><a href="https://github.com/Ruthos/Ruthos64">GitHub</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">Releases</a> · <a href="#signing">Code signing policy</a> · <a href="#signing">Privacy</a></span>
+    <span><a href="https://github.com/Ruthos/Ruthos64">GitHub</a> · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/Ruthos-0.1.0-alpha-win64.zip">Download (64-bit)</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">Releases</a> · <a href="#signing">Code signing policy</a> · <a href="#signing">Privacy</a></span>
   </div>
 </footer>
 
