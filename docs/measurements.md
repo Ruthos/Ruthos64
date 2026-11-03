@@ -46,13 +46,38 @@ grid outlines the pixels. Alt while hovering previews it; Shift slows the
 pointer by the magnification. Preferences > Measurements sets the
 magnification (2–8×), size (120–200 px) and whether Shift slows movement.
 
-## The Measurements menu
+## Tools and the Measurements menu
 
-In the viewer toolbar and on right-click: the tools with their shortcuts
-(W M Z T L A B E N P K; L is the Caliper), the measurement set to name from, naming the
-selected measurement, undo and delete, calibration, showing or hiding
-measurements and labels, copying values as tab-separated text, and the
-report.
+The two menus sit side by side in the viewer toolbar.
+
+**Tools** holds the mouse tools: WL/WW, Move, Zoom, Rotate, and one
+**Measure** row. Click a row to put it on the left mouse button,
+right-click to put it on the right.
+
+**Measurements** chooses what Measure draws:
+
+| Group | Tool | Key |
+|---|---|---|
+| Measure | Caliper: distance, time, velocity | L |
+| | LV dimensions: M-mode or 2D | K |
+| | Angle | A |
+| Area | Rectangle | B |
+| | Ellipse | E |
+| | Polygon | G |
+| Mark | Point: value or velocity | P |
+| | Arrow | N |
+
+Below the picker are the measurement set to name from, naming the
+selected measurement, undo and delete, calibration, showing measurements
+and labels, copying values, and the report. The right-click menu is the
+same menu.
+
+**Areas** are computed from the outline, so they work on colour images
+too; on single-channel images the label adds the mean, SD, minimum and
+maximum of the pixels inside. A polygon is clicked point by point and
+closed with a double-click, a click on the first point, or Enter;
+Backspace removes the last point and Escape abandons it. Every vertex has
+a handle.
 
 ## LV dimensions (M-mode and 2D)
 

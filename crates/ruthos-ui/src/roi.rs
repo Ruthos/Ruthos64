@@ -14,6 +14,10 @@ use crate::theme;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoiKind {
+    /// A closed outline through any number of points (three or more).
+    Polygon {
+        points: Vec<Vec2>,
+    },
     Length {
         a: Vec2,
         b: Vec2,
@@ -248,6 +252,7 @@ impl Roi {
     pub fn to_record(&self, image_id: i64, frame_index: u32, frame: Option<&Frame>) -> RoiRecord {
         let kind = match &self.kind {
             RoiKind::Length { .. } => "length",
+            RoiKind::Polygon { .. } => "polygon",
             RoiKind::Lv { phase, mmode, .. } => phase.kind_key(*mmode),
             RoiKind::Angle { .. } => "angle",
             RoiKind::Rect { .. } => "rect",
@@ -283,6 +288,9 @@ impl Roi {
             "oval" => RoiKind::Oval { a: p(0)?, b: p(1)? },
             "arrow" => RoiKind::Arrow { a: p(0)?, b: p(1)? },
             "point" => RoiKind::Point { p: p(0)? },
+            "polygon" if r.points.len() >= 3 => RoiKind::Polygon {
+                points: r.points.iter().map(|q| Vec2::new(q[0], q[1])).collect(),
+            },
             "lvmmode-d" | "lvmmode-s" | "lv2d-d" | "lv2d-s" => {
                 let phase = if r.kind.ends_with("-s") {
                     MmodePhase::Systole
@@ -370,30 +378,30 @@ impl Roi {
                     issue: None,
                 }
             }
-            RoiKind::Rect { a, b } | RoiKind::Oval { a, b } => {
-                let centre = Vec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+            RoiKind::Rect { .. } | RoiKind::Oval { .. } | RoiKind::Polygon { .. } => {
+                let Some((area_px, centre)) = self.area_px() else {
+                    return none(None);
+                };
                 if !frame.meta.allows_geometry_at(centre.x as f64, centre.y as f64) {
                     return none(Some(MeasureIssue::TimeAxis));
                 }
-                match self.stats(frame) {
-                    Some(st) => {
-                        let scale = frame.meta.scale_at(centre.x as f64, centre.y as f64);
-                        match (st.area_mm2, scale) {
-                            (Some(area), Some(sc)) => Measurement {
-                                value: Some(area),
-                                unit: "mm2",
-                                basis: Some(sc.basis),
-                                issue: None,
-                            },
-                            _ => Measurement {
-                                value: Some(st.count as f64),
-                                unit: "px",
-                                basis: Some(SpacingBasis::Uncalibrated),
-                                issue: Some(MeasureIssue::Uncalibrated),
-                            },
-                        }
-                    }
-                    None => none(None),
+                match frame
+                    .meta
+                    .scale_at(centre.x as f64, centre.y as f64)
+                    .filter(|s| s.basis != SpacingBasis::Uncalibrated)
+                {
+                    Some(sc) => Measurement {
+                        value: Some(area_px * sc.spacing[0] * sc.spacing[1]),
+                        unit: "mm2",
+                        basis: Some(sc.basis),
+                        issue: None,
+                    },
+                    None => Measurement {
+                        value: Some(area_px),
+                        unit: "px",
+                        basis: Some(SpacingBasis::Uncalibrated),
+                        issue: Some(MeasureIssue::Uncalibrated),
+                    },
                 }
             }
             RoiKind::Point { p } => Measurement {
@@ -527,6 +535,29 @@ impl Roi {
         Ok((out, basis))
     }
 
+    /// The enclosed area in square pixels, from the geometry, and the
+    /// centre whose scale applies.
+    pub fn area_px(&self) -> Option<(f64, Vec2)> {
+        match &self.kind {
+            RoiKind::Rect { a, b } => Some((((b.x - a.x) * (b.y - a.y)).abs() as f64, (*a + *b) / 2.0)),
+            RoiKind::Oval { a, b } => Some((
+                std::f64::consts::PI * ((b.x - a.x) / 2.0).abs() as f64 * ((b.y - a.y) / 2.0).abs() as f64,
+                (*a + *b) / 2.0,
+            )),
+            RoiKind::Polygon { points } if points.len() >= 3 => {
+                let n = points.len();
+                let mut twice = 0.0f64;
+                for i in 0..n {
+                    let (p, q) = (points[i], points[(i + 1) % n]);
+                    twice += p.x as f64 * q.y as f64 - q.x as f64 * p.y as f64;
+                }
+                let centre = points.iter().fold(Vec2::ZERO, |acc, p| acc + *p) / n as f32;
+                Some((twice.abs() / 2.0, centre))
+            }
+            _ => None,
+        }
+    }
+
     /// The phase of an LV line.
     pub fn lv_phase(&self) -> Option<MmodePhase> {
         match &self.kind {
@@ -549,6 +580,7 @@ impl Roi {
             RoiKind::Angle { a, b, c } => vec![*a, *b, *c],
             RoiKind::Point { p } => vec![*p],
             RoiKind::Lv { p, .. } => p.to_vec(),
+            RoiKind::Polygon { points } => points.clone(),
         }
     }
 
@@ -597,6 +629,11 @@ impl Roi {
                 _ => {}
             },
             RoiKind::Point { p: q } => *q = p,
+            RoiKind::Polygon { points } => {
+                if let Some(q) = points.get_mut(i) {
+                    *q = p;
+                }
+            }
             RoiKind::Lv { p: pts, .. } => {
                 let (a, b) = (pts[0], pts[3]);
                 let dir = b - a;
@@ -664,6 +701,7 @@ impl Roi {
             }
             RoiKind::Point { p } => *p += d,
             RoiKind::Lv { p, .. } => p.iter_mut().for_each(|q| *q += d),
+            RoiKind::Polygon { points } => points.iter_mut().for_each(|q| *q += d),
         }
     }
 
@@ -676,6 +714,7 @@ impl Roi {
             RoiKind::Angle { a, b, c } => (*b - *a).length() < 1.0 || (*c - *b).length() < 1.0,
             RoiKind::Point { .. } => false,
             RoiKind::Lv { p, .. } => p.windows(2).any(|w| (w[1] - w[0]).length() < 1.0),
+            RoiKind::Polygon { points } => points.len() < 3 || self.area_px().is_none_or(|(a, _)| a < 1.0),
         }
     }
 
@@ -707,6 +746,9 @@ impl Roi {
             }
             RoiKind::Point { .. } => (pts[0] - screen).length(),
             RoiKind::Lv { .. } => segment_distance(pts[0], pts[3], screen),
+            RoiKind::Polygon { .. } => (0..pts.len())
+                .map(|i| segment_distance(pts[i], pts[(i + 1) % pts.len()], screen))
+                .fold(f32::INFINITY, f32::min),
         }
     }
 
@@ -773,26 +815,32 @@ impl Roi {
                 let deg = angle_deg(*a, *b, *c, spacing_for(frame, *b));
                 format!("{deg:.1}°")
             }
-            RoiKind::Rect { a, b } | RoiKind::Oval { a, b }
-                if !frame
-                    .meta
-                    .allows_geometry_at(((a.x + b.x) / 2.0) as f64, ((a.y + b.y) / 2.0) as f64) =>
-            {
-                MeasureIssue::TimeAxis.label().to_string()
-            }
-            RoiKind::Rect { .. } | RoiKind::Oval { .. } => match self.stats(frame) {
-                Some(s) => {
-                    let mut lines = vec![format!("Mean: {:.1}  SD: {:.1}", s.mean, s.sd)];
-                    lines.push(format!("Min: {:.0}  Max: {:.0}", s.min, s.max));
-                    match s.area_mm2 {
-                        Some(a) if a >= 100.0 => lines.push(format!("Area: {:.2} cm²", a / 100.0)),
-                        Some(a) => lines.push(format!("Area: {a:.1} mm²")),
-                        None => lines.push(format!("Area: {} px  (not calibrated)", s.count)),
+            RoiKind::Rect { .. } | RoiKind::Oval { .. } | RoiKind::Polygon { .. } => {
+                let m = self.measure(frame);
+                let area = match (m.value, m.unit, m.issue) {
+                    (Some(a), "mm2", _) if a >= 100.0 => {
+                        format!(
+                            "Area: {:.2} cm\u{b2}{}",
+                            a / 100.0,
+                            m.basis.map(|b| b.marker()).unwrap_or("")
+                        )
                     }
-                    lines.join("\n")
+                    (Some(a), "mm2", _) => {
+                        format!("Area: {a:.1} mm\u{b2}{}", m.basis.map(|b| b.marker()).unwrap_or(""))
+                    }
+                    (Some(a), "px", _) => format!("Area: {a:.0} px  (not calibrated)"),
+                    (_, _, Some(issue)) => return issue.label().to_string(),
+                    _ => return String::new(),
+                };
+                // Pixel statistics where the image has a single channel.
+                match self.stats(frame) {
+                    Some(s) => format!(
+                        "Mean: {:.1}  SD: {:.1}\nMin: {:.0}  Max: {:.0}\n{area}",
+                        s.mean, s.sd, s.min, s.max
+                    ),
+                    None => area,
                 }
-                None => String::new(),
-            },
+            }
             RoiKind::Point { p } => {
                 if let Some(v) = frame.meta.velocity_at(p.x as f64, p.y as f64) {
                     // The simplified Bernoulli gradient, 4v\u{b2}.
@@ -824,9 +872,20 @@ impl Roi {
 
     /// Statistics for closed ROIs on grayscale frames.
     pub fn stats(&self, frame: &Frame) -> Option<RoiStats> {
+        let polygon: Option<&Vec<Vec2>> = match &self.kind {
+            RoiKind::Polygon { points } => Some(points),
+            _ => None,
+        };
         let (a, b, oval) = match &self.kind {
             RoiKind::Rect { a, b } => (*a, *b, false),
             RoiKind::Oval { a, b } => (*a, *b, true),
+            RoiKind::Polygon { points } => {
+                let (lo, hi) = points.iter().fold(
+                    (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
+                    |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+                );
+                (lo, hi, false)
+            }
             _ => return None,
         };
         if frame.is_color() {
@@ -858,6 +917,11 @@ impl Roi {
                         continue;
                     }
                 }
+                if let Some(poly) = polygon {
+                    if !point_in_polygon(Vec2::new(x as f32 + 0.5, y as f32 + 0.5), poly) {
+                        continue;
+                    }
+                }
                 if let Some(v) = frame.value_at(x, y) {
                     n += 1;
                     sum += v as f64;
@@ -872,7 +936,7 @@ impl Roi {
         }
         let mean = sum / n as f64;
         let var = (sum_sq / n as f64 - mean * mean).max(0.0);
-        let centre = Vec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+        let centre = self.area_px().map(|(_, c)| c).unwrap_or((a + b) / 2.0);
         let area_mm2 = spacing_for(frame, centre).map(|[r, c]| n as f64 * r * c);
         Some(RoiStats {
             count: n,
@@ -989,6 +1053,28 @@ impl Roi {
                 );
                 return Some(r);
             }
+            RoiKind::Polygon { .. } => {
+                let mut closed = pts.clone();
+                closed.push(pts[0]);
+                painter.line(closed, stroke);
+                for p in &pts {
+                    painter.circle_filled(*p, 2.0, color);
+                }
+                let anchor = pts
+                    .iter()
+                    .fold(Pos2::new(f32::NEG_INFINITY, f32::NEG_INFINITY), |m, p| {
+                        Pos2::new(m.x.max(p.x), m.y.max(p.y))
+                    });
+                let r = shadow_text(
+                    painter,
+                    anchor + Vec2::new(6.0, 0.0),
+                    Align2::LEFT_BOTTOM,
+                    &self.label(frame),
+                    label_font,
+                    color,
+                );
+                return Some(r);
+            }
             RoiKind::Oval { .. } => {
                 let poly = oval_polygon(t, self, 64);
                 let mut closed = poly.clone();
@@ -1080,6 +1166,21 @@ impl Roi {
         }
         None
     }
+}
+
+/// Even-odd test: is `p` inside the closed outline `poly`?
+pub fn point_in_polygon(p: Vec2, poly: &[Vec2]) -> bool {
+    let mut inside = false;
+    let n = poly.len();
+    let mut j = n.wrapping_sub(1);
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[j]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
 
 /// A line inside a spectral Doppler strip: the time it spans and the
@@ -1369,6 +1470,48 @@ mod tests {
         assert_eq!(len.measure(&f).issue, Some(MeasureIssue::NoDistance));
         let rec = rr.to_record(1, 0, Some(&f));
         assert_eq!((rec.value, rec.unit.as_str()), (Some(200.0), "ms"));
+    }
+
+    #[test]
+    fn polygon_area_from_its_outline() {
+        let f = frame(); // 0.5 mm per pixel, 10 x 10 pixels
+                         // A right triangle with legs of 8 pixels: 32 square pixels, 8 mm\u{b2}.
+        let roi = Roi::new(RoiKind::Polygon {
+            points: vec![Vec2::new(0.0, 0.0), Vec2::new(8.0, 0.0), Vec2::new(0.0, 8.0)],
+        });
+        let m = roi.measure(&f);
+        assert_eq!(m.unit, "mm2");
+        assert!((m.value.unwrap() - 8.0).abs() < 1e-9);
+        let rec = roi.to_record(1, 0, Some(&f));
+        assert_eq!(rec.kind, "polygon");
+        assert_eq!(Roi::from_record(&rec).unwrap(), roi);
+        assert!(point_in_polygon(
+            Vec2::new(1.0, 1.0),
+            &[Vec2::new(0.0, 0.0), Vec2::new(8.0, 0.0), Vec2::new(0.0, 8.0)]
+        ));
+        assert!(!point_in_polygon(
+            Vec2::new(7.0, 7.0),
+            &[Vec2::new(0.0, 0.0), Vec2::new(8.0, 0.0), Vec2::new(0.0, 8.0)]
+        ));
+        let s = roi.stats(&f).unwrap();
+        assert!(s.count > 20 && s.count < 40, "about half of the 8 x 8 box");
+    }
+
+    #[test]
+    fn ellipse_area_needs_no_pixel_statistics() {
+        let mut f = frame();
+        f.pixels = FramePixels::Rgba(vec![0; 400]);
+        let roi = Roi::new(RoiKind::Oval {
+            a: Vec2::new(0.0, 0.0),
+            b: Vec2::new(4.0, 2.0),
+        });
+        let m = roi.measure(&f);
+        // Semi-axes 2 and 1 pixel: 2\u{3c0} px\u{b2}, 0.25 mm\u{b2} each.
+        assert!((m.value.unwrap() - 2.0 * std::f64::consts::PI * 0.25).abs() < 1e-9);
+        assert!(
+            roi.value_text(&f).starts_with("Area: 1.6 mm"),
+            "colour images still get an area"
+        );
     }
 
     #[test]

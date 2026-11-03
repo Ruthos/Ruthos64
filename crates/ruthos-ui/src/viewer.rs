@@ -43,12 +43,57 @@ pub enum Tool {
     Oval,
     Arrow,
     Point,
-    /// Left-ventricular M-mode: four depths on one time column.
+    /// Left-ventricular dimensions, in M-mode or 2D.
     LvMmode,
+    /// A closed outline clicked point by point.
+    Polygon,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 11] = [
+    /// The mouse tools of the Tools menu, besides Measure.
+    pub const NAVIGATE: [Tool; 4] = [Tool::WindowLevel, Tool::Move, Tool::Zoom, Tool::Rotate];
+
+    /// What Measure draws, chosen in the Measurements menu, in its order.
+    pub const MEASURE: [Tool; 8] = [
+        Tool::Length,
+        Tool::LvMmode,
+        Tool::Angle,
+        Tool::Rectangle,
+        Tool::Oval,
+        Tool::Polygon,
+        Tool::Point,
+        Tool::Arrow,
+    ];
+
+    pub fn is_measure(self) -> bool {
+        Tool::MEASURE.contains(&self)
+    }
+
+    /// The Measurements menu heading a measuring tool sits under.
+    pub fn group(self) -> &'static str {
+        match self {
+            Tool::Rectangle | Tool::Oval | Tool::Polygon => "Area",
+            Tool::Point | Tool::Arrow => "Mark",
+            _ => "Measure",
+        }
+    }
+
+    /// The picker's line for a measuring tool.
+    pub fn picker_label(self) -> &'static str {
+        match self {
+            Tool::Length => "Caliper: distance, time, velocity",
+            Tool::LvMmode => "LV dimensions: M-mode or 2D",
+            Tool::Angle => "Angle",
+            Tool::Rectangle => "Rectangle",
+            Tool::Oval => "Ellipse",
+            Tool::Polygon => "Polygon",
+            Tool::Point => "Point: value or velocity",
+            Tool::Arrow => "Arrow",
+            other => other.label(),
+        }
+    }
+
+    pub const ALL: [Tool; 12] = [
         Tool::WindowLevel,
         Tool::Move,
         Tool::Zoom,
@@ -60,6 +105,7 @@ impl Tool {
         Tool::Arrow,
         Tool::Point,
         Tool::LvMmode,
+        Tool::Polygon,
     ];
 
     pub fn label(self) -> &'static str {
@@ -71,7 +117,8 @@ impl Tool {
             Tool::Length => "Caliper",
             Tool::Angle => "Angle",
             Tool::Rectangle => "Rectangle",
-            Tool::Oval => "Oval",
+            Tool::Oval => "Ellipse",
+            Tool::Polygon => "Polygon",
             Tool::Arrow => "Arrow",
             Tool::Point => "Point",
             Tool::LvMmode => "LV dimensions",
@@ -88,6 +135,7 @@ impl Tool {
             Tool::Angle => icons::TOOL_ANGLE,
             Tool::Rectangle => icons::TOOL_RECT,
             Tool::Oval => icons::TOOL_OVAL,
+            Tool::Polygon => icons::TOOL_RECT,
             Tool::Arrow => icons::TOOL_ARROW,
             Tool::Point => icons::TOOL_POINT,
             Tool::LvMmode => icons::TOOL_LENGTH,
@@ -106,6 +154,7 @@ impl Tool {
             Tool::Angle => "A",
             Tool::Rectangle => "B",
             Tool::Oval => "E",
+            Tool::Polygon => "G",
             Tool::Arrow => "N",
             Tool::Point => "P",
             Tool::LvMmode => "K",
@@ -122,6 +171,7 @@ impl Tool {
             Key::A => Tool::Angle,
             Key::B => Tool::Rectangle,
             Key::E => Tool::Oval,
+            Key::G => Tool::Polygon,
             Key::N => Tool::Arrow,
             Key::P => Tool::Point,
             Key::K => Tool::LvMmode,
@@ -139,6 +189,7 @@ impl Tool {
             Tool::Angle => Bitmap::Angle,
             Tool::Rectangle => Bitmap::Rectangle,
             Tool::Oval => Bitmap::Oval,
+            Tool::Polygon => Bitmap::Roi,
             Tool::Arrow => Bitmap::Arrow,
             Tool::Point => Bitmap::Point,
             Tool::LvMmode => Bitmap::Length,
@@ -148,7 +199,14 @@ impl Tool {
     fn is_roi(self) -> bool {
         matches!(
             self,
-            Tool::Length | Tool::Angle | Tool::Rectangle | Tool::Oval | Tool::Arrow | Tool::Point | Tool::LvMmode
+            Tool::Length
+                | Tool::Angle
+                | Tool::Rectangle
+                | Tool::Oval
+                | Tool::Arrow
+                | Tool::Point
+                | Tool::LvMmode
+                | Tool::Polygon
         )
     }
 }
@@ -299,6 +357,10 @@ pub struct ViewerState {
     drag_draft: Option<(Vec2, Vec2)>,
     angle_draft: Option<AngleDraft>,
     mmode_draft: Option<MmodeDraft>,
+    /// A polygon being clicked out, and where the next point would go.
+    polygon_draft: Option<(Vec<Vec2>, Option<Vec2>)>,
+    /// What the Measure tool draws, chosen in the Measurements menu.
+    measure_tool: Tool,
     /// Per series: (roi id, edit time, LVID mm) of the latest lines.
     mmode_latest: HashMap<i64, MmodeLatest>,
     /// The stored LV lines of each series, for pairing 2D lines across
@@ -509,6 +571,8 @@ impl ViewerState {
             drag_draft: None,
             angle_draft: None,
             mmode_draft: None,
+            polygon_draft: None,
+            measure_tool: Tool::Length,
             mmode_latest: HashMap::new(),
             mmode_rows: HashMap::new(),
             mmode_refresh: HashSet::new(),
@@ -1266,13 +1330,18 @@ impl ViewerState {
             ui.close();
         };
 
-        ui.menu_button("Tools", |ui| {
-            for t in Tool::ALL {
-                if menu_item_shortcut(ui, t.label(), t.shortcut(), self.tool == t, true).clicked() {
-                    pick(ui, MenuAction::SetTool(t));
-                }
+        // The picker: what the Measure tool draws.
+        let mut group = "";
+        for t in Tool::MEASURE {
+            if t.group() != group {
+                group = t.group();
+                menu_heading(ui, group);
             }
-        });
+            if menu_item_shortcut(ui, t.picker_label(), t.shortcut(), self.measure_tool == t, true).clicked() {
+                pick(ui, MenuAction::SetTool(t));
+            }
+        }
+        ui.separator();
         if !self.library.sets.is_empty() {
             let names: Vec<String> = self.library.sets.iter().map(|s| s.name.clone()).collect();
             ui.menu_button("Measurement set", |ui| {
@@ -1382,9 +1451,17 @@ impl ViewerState {
         match action {
             MenuAction::SetTool(t) => {
                 self.tool = t;
+                if t.is_measure() {
+                    self.measure_tool = t;
+                    // A right button that was measuring follows the choice.
+                    if self.right_tool.is_measure() {
+                        self.right_tool = t;
+                    }
+                }
                 self.drag_draft = None;
                 self.angle_draft = None;
                 self.mmode_draft = None;
+                self.polygon_draft = None;
                 self.set_status(format!("Tool: {}", t.label()));
             }
             MenuAction::SetPhase(phase) => {
@@ -1891,6 +1968,7 @@ impl ViewerState {
             "tool:arrow" => MenuAction::SetTool(Tool::Arrow),
             "tool:point" => MenuAction::SetTool(Tool::Point),
             "tool:lvmmode" => MenuAction::SetTool(Tool::LvMmode),
+            "tool:polygon" => MenuAction::SetTool(Tool::Polygon),
             "undo" => MenuAction::Undo,
             "delete" => MenuAction::DeleteSelected,
             "delete-all" => MenuAction::DeleteAll,
@@ -2261,7 +2339,7 @@ impl ViewerState {
                         // button, right-click on the right button; a small mouse
                         // glyph beside the name shows which.
                         let mut changed = false;
-                        for t in Tool::ALL {
+                        for t in Tool::NAVIGATE {
                             let r = tool_menu_row(ui, t.bitmap(), t.label(), self.tool == t, self.right_tool == t);
                             if r.clicked() {
                                 self.tool = t;
@@ -2273,6 +2351,26 @@ impl ViewerState {
                                 ui.close();
                             }
                         }
+                        // One row for measuring; what it draws is chosen in
+                        // the Measurements menu beside this one.
+                        let m = self.measure_tool;
+                        let label = format!("Measure: {}", m.label());
+                        let r = tool_menu_row(
+                            ui,
+                            m.bitmap(),
+                            &label,
+                            self.tool.is_measure(),
+                            self.right_tool.is_measure(),
+                        );
+                        if r.clicked() {
+                            self.tool = m;
+                            changed = true;
+                            ui.close();
+                        } else if r.secondary_clicked() {
+                            self.right_tool = m;
+                            changed = true;
+                            ui.close();
+                        }
                         ui.add_space(3.0);
                         ui.label(
                             egui::RichText::new("Click: left button  ·  Right-click: right button")
@@ -2283,12 +2381,29 @@ impl ViewerState {
                             self.drag_draft = None;
                             self.angle_draft = None;
                             self.mmode_draft = None;
+                            self.polygon_draft = None;
                         }
                     },
                 );
                 toolbar_caption(ui, &format!("Tool: {}", self.tool.label()));
             });
 
+            // Measurements menu
+            ui.vertical(|ui| {
+                ui.add_space(2.0);
+                let icon = icons::image(ui.ctx(), Bitmap::Length, 18.0);
+                ui.menu_button(
+                    (
+                        icon,
+                        egui::RichText::new(" ").size(13.0),
+                        icons::rich(icons::CARET_DOWN, 11.0),
+                    ),
+                    |ui| {
+                        self.measurements_menu(ui, false);
+                    },
+                );
+                toolbar_caption(ui, &format!("Measure: {}", self.measure_tool.label()));
+            });
             // WL/WW menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
@@ -2437,22 +2552,6 @@ impl ViewerState {
                     }
                 }
             }
-            // Measurements menu
-            ui.vertical(|ui| {
-                ui.add_space(2.0);
-                let icon = icons::image(ui.ctx(), Bitmap::Length, 18.0);
-                ui.menu_button(
-                    (
-                        icon,
-                        egui::RichText::new(" ").size(13.0),
-                        icons::rich(icons::CARET_DOWN, 11.0),
-                    ),
-                    |ui| {
-                        self.measurements_menu(ui, false);
-                    },
-                );
-                toolbar_caption(ui, "Measurements");
-            });
             if ToolbarButton::new(Bitmap::Export, "Export")
                 .tooltip("Export the current image as PNG or JPEG")
                 .show(ui)
@@ -2609,6 +2708,32 @@ impl ViewerState {
         }
         // While an M-mode line is being placed, Backspace removes the last
         // point and Escape abandons it.
+        if let Some((pts, _)) = &mut self.polygon_draft {
+            let (backspace, enter) = ui.input(|i| (i.key_pressed(Key::Backspace), i.key_pressed(Key::Enter)));
+            if esc {
+                self.polygon_draft = None;
+                self.set_status("Polygon abandoned");
+                return;
+            }
+            if backspace {
+                pts.pop();
+                if pts.is_empty() {
+                    self.polygon_draft = None;
+                }
+                return;
+            }
+            if enter && pts.len() >= 3 {
+                let roi = Roi::new(RoiKind::Polygon { points: pts.clone() });
+                self.polygon_draft = None;
+                if let (false, Some(key)) = (roi.is_degenerate(), self.current_key()) {
+                    let list = self.rois.entry(key).or_default();
+                    list.push(roi);
+                    self.selected_roi = Some(list.len() - 1);
+                    self.dirty_rois.insert(key);
+                }
+                return;
+            }
+        }
         if self.mmode_draft.is_some() {
             let backspace = ui.input(|i| i.key_pressed(Key::Backspace));
             if esc {
@@ -2751,6 +2876,7 @@ impl ViewerState {
             self.drag_draft = None;
             self.angle_draft = None;
             self.mmode_draft = None;
+            self.polygon_draft = None;
             self.selected_roi = None;
         }
         if r {
@@ -3108,6 +3234,9 @@ impl ViewerState {
             if let Some(d) = &self.mmode_draft {
                 draw_mmode_draft(&painter, &transform, d, theme::ROI_DRAFT);
             }
+            if let Some((pts, hover)) = &self.polygon_draft {
+                draw_polygon_draft(&painter, &transform, pts, *hover, theme::ROI_DRAFT);
+            }
 
             // The loupe, with the geometry being placed drawn through it.
             if let (true, Some(target), Some(source)) = (self.loupe.enabled, self.loupe_target, loupe_source.as_ref()) {
@@ -3124,7 +3253,11 @@ impl ViewerState {
                     .and_then(|i| self.rois.get(&key).and_then(|l| l.get(i)))
                     .cloned();
                 let mmode = self.mmode_draft.as_ref();
+                let polygon = self.polygon_draft.as_ref();
                 let overlay = |p: &egui::Painter, lt: &ViewTransform| {
+                    if let Some((pts, hover)) = polygon {
+                        draw_polygon_draft(p, lt, pts, *hover, theme::ROI_DRAFT);
+                    }
                     for roi in draft.iter().chain(angle.iter()) {
                         roi.draw(p, lt, &frame, theme::ROI_DRAFT, false);
                     }
@@ -3543,6 +3676,53 @@ impl ViewerState {
                     }
                 }
             }
+            Tool::Polygon => {
+                // Click point by point; close with a double-click, a click
+                // on the first point, or Enter.
+                if let (Some(hp), Some((_, hover_pt))) = (hover, &mut self.polygon_draft) {
+                    let ip = t.screen_to_image(hp);
+                    *hover_pt = Some(ip);
+                    self.loupe_target = Some(LoupeTarget {
+                        image_point: ip,
+                        pointer: hp,
+                    });
+                }
+                let double = response.double_clicked_by(button);
+                if response.clicked_by(button) || double {
+                    if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
+                        let close_to_first = self.polygon_draft.as_ref().is_some_and(|(pts, _)| {
+                            pts.len() >= 3 && pos.is_some_and(|sp| (t.image_to_screen(pts[0]) - sp).length() < 8.0)
+                        });
+                        match &mut self.polygon_draft {
+                            None if !double => {
+                                if !self.try_select_roi(t, key, pos) {
+                                    self.polygon_draft = Some((vec![p], None));
+                                    self.set_status(
+                                        "Polygon: click each point; double-click, click the first point or press Enter to close",
+                                    );
+                                }
+                            }
+                            None => {}
+                            Some((pts, _)) => {
+                                if double || close_to_first {
+                                    if pts.len() >= 3 {
+                                        let roi = Roi::new(RoiKind::Polygon { points: pts.clone() });
+                                        self.polygon_draft = None;
+                                        if !roi.is_degenerate() {
+                                            let list = self.rois.entry(*key).or_default();
+                                            list.push(roi);
+                                            self.selected_roi = Some(list.len() - 1);
+                                            self.dirty_rois.insert(*key);
+                                        }
+                                    }
+                                } else if pts.last().is_none_or(|l| (*l - p).length() > 0.5) {
+                                    pts.push(p);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Tool::Point => {
                 if response.clicked_by(button) && !self.try_select_roi(t, key, pos) {
                     if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
@@ -3687,6 +3867,25 @@ fn draw_mmode_draft(painter: &egui::Painter, t: &ViewTransform, d: &MmodeDraft, 
     }
 }
 
+/// A polygon being clicked out: its points, and the edge to the pointer.
+fn draw_polygon_draft(painter: &egui::Painter, t: &ViewTransform, pts: &[Vec2], hover: Option<Vec2>, color: Color32) {
+    let stroke = egui::Stroke::new(1.5, color);
+    let mut screen: Vec<Pos2> = pts.iter().map(|p| t.image_to_screen(*p)).collect();
+    if let Some(h) = hover {
+        screen.push(t.image_to_screen(h));
+    }
+    if screen.len() >= 2 {
+        painter.line(screen.clone(), stroke);
+    }
+    for p in &screen[..pts.len()] {
+        painter.circle_filled(*p, 2.5, color);
+    }
+    // The first point is where a click closes the outline.
+    if let Some(first) = screen.first() {
+        painter.circle_stroke(*first, 6.0, egui::Stroke::new(1.0, color));
+    }
+}
+
 /// Where the current press began, in screen points.
 fn press_origin(ui: &Ui) -> Option<Pos2> {
     ui.input(|i| i.pointer.press_origin())
@@ -3695,6 +3894,7 @@ fn press_origin(ui: &Ui) -> Option<Pos2> {
 fn kind_label(kind: &RoiKind) -> &'static str {
     match kind {
         RoiKind::Length { .. } => "Caliper",
+        RoiKind::Polygon { .. } => "Polygon",
         RoiKind::Lv { phase, mmode, .. } => match (phase, mmode) {
             (MmodePhase::Diastole, true) => "LV M-mode (diastole)",
             (MmodePhase::Systole, true) => "LV M-mode (systole)",
@@ -3703,7 +3903,7 @@ fn kind_label(kind: &RoiKind) -> &'static str {
         },
         RoiKind::Angle { .. } => "Angle",
         RoiKind::Rect { .. } => "Rectangle",
-        RoiKind::Oval { .. } => "Oval",
+        RoiKind::Oval { .. } => "Ellipse",
         RoiKind::Arrow { .. } => "Arrow",
         RoiKind::Point { .. } => "Point",
     }

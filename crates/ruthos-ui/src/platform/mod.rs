@@ -191,11 +191,22 @@ pub const MENU_BAR: &[MenuDef] = &[
             item("viewer:tool:angle", "Angle", Some("A"), AppAction::Viewer("tool:angle")),
             item(
                 "viewer:tool:rect",
-                "Rectangle",
+                "Rectangle Area",
                 Some("B"),
                 AppAction::Viewer("tool:rect"),
             ),
-            item("viewer:tool:oval", "Oval", Some("E"), AppAction::Viewer("tool:oval")),
+            item(
+                "viewer:tool:oval",
+                "Ellipse Area",
+                Some("E"),
+                AppAction::Viewer("tool:oval"),
+            ),
+            item(
+                "viewer:tool:polygon",
+                "Polygon Area",
+                Some("G"),
+                AppAction::Viewer("tool:polygon"),
+            ),
             item("viewer:tool:arrow", "Arrow", Some("N"), AppAction::Viewer("tool:arrow")),
             item("viewer:tool:point", "Point", Some("P"), AppAction::Viewer("tool:point")),
             item(
