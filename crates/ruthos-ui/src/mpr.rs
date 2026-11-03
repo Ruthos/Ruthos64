@@ -96,6 +96,8 @@ pub struct MprState {
     drag: Option<(usize, Drag)>,
     clut: String,
     status: String,
+    /// Frames drawn since the volume arrived, for the screenshot option.
+    frames_shown: u32,
 }
 
 impl MprState {
@@ -147,6 +149,7 @@ impl MprState {
             drag: None,
             clut: "No CLUT".into(),
             status: String::new(),
+            frames_shown: 0,
         }
     }
 
@@ -213,6 +216,19 @@ impl MprState {
                 }
                 self.volume = Some(Arc::new(v));
                 self.reset();
+                // Developer option: `RUTHOS_MPR_TILT=<degrees>` tilts the
+                // planes in the first pane, as a handle drag would.
+                if let Some(deg) = std::env::var("RUTHOS_MPR_TILT")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                {
+                    let (n, _, _) = self.basis(0);
+                    let da = deg.to_radians();
+                    for a in &mut self.axes {
+                        *a = normalize(rotate(*a, n, da));
+                    }
+                    self.phi[0] += da;
+                }
             }
             Err(e) if e == "cancelled" => self.close_requested = true,
             Err(e) => self.error = Some(e),
@@ -235,6 +251,23 @@ impl MprState {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::BLACK))
             .show(ui, |ui| self.panes_ui(ui, shared));
+
+        // Developer option: `RUTHOS_MPR_SCREENSHOT=<file.png>` saves the
+        // window as drawn, once the volume has been on screen a moment.
+        if self.volume.is_some() {
+            self.frames_shown += 1;
+            ui.ctx().request_repaint();
+            if self.frames_shown == 20 {
+                if let Some(path) = std::env::var_os("RUTHOS_MPR_SCREENSHOT") {
+                    ui.ctx().request_screenshot(move |img| {
+                        let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
+                        if let Some(png) = image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, rgba) {
+                            let _ = png.save(&path);
+                        }
+                    });
+                }
+            }
+        }
     }
 
     fn toolbar(&mut self, ui: &mut Ui, shared: &Shared) {
