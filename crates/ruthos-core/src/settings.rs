@@ -55,7 +55,7 @@ pub fn default_measurement_sets() -> Vec<MeasurementSet> {
         items: items.iter().map(|s| s.to_string()).collect(),
     };
     vec![
-        set("Echo: LV M-mode", &["IVSd", "LVIDd", "LVPWd", "IVSs", "LVIDs", "LVPWs"]),
+        set("Echo: LV M-mode", &["IVSd", "LVIDd", "LVFWd", "IVSs", "LVIDs", "LVFWs"]),
         set("Echo: 2D", &["Ao", "LA", "RVIDd", "EPSS", "PA"]),
         set(
             "Radiography",
@@ -103,13 +103,25 @@ impl Settings {
 
     pub fn load() -> Self {
         let path = Self::file_path();
-        match std::fs::read_to_string(&path) {
+        let mut settings: Self = match std::fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
                 tracing::warn!("settings at {} unreadable ({e}), using defaults", path.display());
                 Self::default()
             }),
             Err(_) => Self::default(),
+        };
+        // The posterior wall is the free wall in veterinary echo; older
+        // settings carry the human names.
+        for set in &mut settings.measurement_sets {
+            for item in &mut set.items {
+                match item.as_str() {
+                    "LVPWd" => *item = "LVFWd".into(),
+                    "LVPWs" => *item = "LVFWs".into(),
+                    _ => {}
+                }
+            }
         }
+        settings
     }
 
     pub fn save(&self) -> std::io::Result<()> {

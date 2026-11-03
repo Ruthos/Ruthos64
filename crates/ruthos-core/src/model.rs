@@ -288,6 +288,15 @@ pub struct RoiRecord {
 }
 
 /// A named measurement with where it was taken, for reports.
+/// One derived value of a measurement, keyed by definition (e.g. `lv.ivsd`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoiValue {
+    pub def_key: String,
+    pub value: Option<f64>,
+    pub unit: String,
+    pub basis: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeasurementRow {
     pub roi: RoiRecord,

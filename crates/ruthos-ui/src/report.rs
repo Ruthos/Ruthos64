@@ -23,6 +23,8 @@ pub struct ReportState {
     pub viewport_id: ViewportId,
     pub study: StudyRow,
     measurements: Vec<MeasurementRow>,
+    /// The LV M-mode block, already formatted.
+    mmode: Vec<ReportMeasurement>,
     key_images: Vec<ImageRow>,
     findings: String,
     conclusion: String,
@@ -42,6 +44,7 @@ impl ReportState {
             viewport_id: ViewportId::from_hash_of(("ruthos-report", id)),
             study,
             measurements: Vec::new(),
+            mmode: Vec::new(),
             key_images: Vec::new(),
             saved: (findings.clone(), conclusion.clone()),
             findings,
@@ -88,8 +91,44 @@ impl ReportState {
             }
         }
         self.measurements = measurements;
+        self.mmode = self.mmode_block(shared);
         self.key_images = shared.db.key_images_for_study(self.study.id).unwrap_or_default();
         self.last_refresh = Instant::now();
+    }
+
+    /// The paired LV M-mode values of each series and their fractional
+    /// shortening, in the echo length unit from Preferences.
+    fn mmode_block(&self, shared: &Shared) -> Vec<ReportMeasurement> {
+        use ruthos_core::mmode::{echo_value, pair_rows, KEYS_D, KEYS_S, LABELS_D, LABELS_S};
+        let cm = shared.settings.lock().echo_length_unit == "cm";
+        let rows = shared.db.mmode_rows_for_study(self.study.id).unwrap_or_default();
+        let mut out = Vec::new();
+        for pair in pair_rows(rows) {
+            for (line, keys, labels) in [(&pair.diastole, KEYS_D, LABELS_D), (&pair.systole, KEYS_S, LABELS_S)] {
+                let Some(line) = line else { continue };
+                for (key, label) in keys.iter().zip(labels) {
+                    let v = line.values.iter().find(|v| v.def_key == *key);
+                    let basis = v.and_then(|v| v.basis.as_deref()).and_then(ruthos_dicom::SpacingBasis::from_key);
+                    out.push(ReportMeasurement {
+                        name: label.to_string(),
+                        value: v.and_then(|v| v.value).map(|mm| echo_value(mm, cm)).unwrap_or_else(|| "\u{2014}".into()),
+                        location: line.location(),
+                        basis: basis.map(|b| b.label().to_string()).unwrap_or_default(),
+                        patient_scale: basis.map(|b| b.is_patient_scale()).unwrap_or(true),
+                    });
+                }
+            }
+            if let Some(fs) = pair.fs_percent {
+                out.push(ReportMeasurement {
+                    name: "FS".into(),
+                    value: format!("{fs:.1} %"),
+                    location: pair.series_label.clone(),
+                    basis: String::new(),
+                    patient_scale: true,
+                });
+            }
+        }
+        out
     }
 
     fn is_dirty(&self) -> bool {
@@ -214,6 +253,31 @@ impl ReportState {
         }
         ui.add_space(14.0);
 
+        if !self.mmode.is_empty() {
+            ui.label(RichText::new("LV M-mode").size(15.0).strong());
+            ui.add_space(4.0);
+            egui::Grid::new(("report-mmode", self.id))
+                .num_columns(4)
+                .striped(true)
+                .spacing([18.0, 4.0])
+                .min_col_width(90.0)
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Measurement").strong());
+                    ui.label(RichText::new("Value").strong());
+                    ui.label(RichText::new("Basis").strong());
+                    ui.label(RichText::new("Image").strong());
+                    ui.end_row();
+                    for m in &self.mmode {
+                        ui.label(if m.name == "FS" { RichText::new("FS (fractional shortening)").strong() } else { RichText::new(&m.name) });
+                        ui.label(&m.value);
+                        ui.label(RichText::new(&m.basis).color(Color32::from_gray(90)));
+                        ui.label(RichText::new(&m.location).color(Color32::from_gray(90)));
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(14.0);
+        }
+
         ui.label(RichText::new("Findings").size(15.0).strong());
         ui.add_space(4.0);
         ui.add(
@@ -320,6 +384,7 @@ impl ReportState {
                     patient_scale: m.roi.basis.as_deref().and_then(ruthos_dicom::SpacingBasis::from_key).map(|b| b.is_patient_scale()).unwrap_or(true),
                 })
                 .collect(),
+            mmode: self.mmode.clone(),
             findings: self.findings.clone(),
             conclusion: self.conclusion.clone(),
             images,

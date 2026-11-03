@@ -244,6 +244,16 @@ impl PrefsState {
         Self::hint(ui, "Hold Alt over the image with a measuring tool to preview the loupe. With Shift held, the point moves by the pointer's movement divided by the magnification.");
         ui.add_space(16.0);
 
+        Self::heading(ui, "Echocardiography");
+        ui.horizontal(|ui| {
+            ui.label("Lengths in");
+            for (v, label) in [("mm", "millimetres"), ("cm", "centimetres")] {
+                ui.selectable_value(&mut self.draft.echo_length_unit, v.to_string(), label);
+            }
+        });
+        Self::hint(ui, "The unit of LV M-mode values on the image and in reports. Calculations work in centimetres regardless.");
+        ui.add_space(16.0);
+
         Self::heading(ui, "Measurement sets");
         Self::hint(ui, "Clicking a measurement's number in the viewer offers these names. One name per line.");
         ui.add_space(8.0);

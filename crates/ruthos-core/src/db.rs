@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use ruthos_dicom::meta::{dicom_date_to_iso, dicom_time_to_hms, InstanceMeta};
 
-use crate::model::{AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, SeriesRow, StudyRow};
+use crate::mmode::MmodeRow;
+use crate::model::{RoiValue, AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, SeriesRow, StudyRow};
 use crate::teaching::TeachingCase;
 use crate::paths::DataPaths;
 use crate::Result;
@@ -712,6 +713,84 @@ impl Database {
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Replace the derived values of a measurement.
+    pub fn set_roi_values(&self, roi_id: i64, values: &[RoiValue]) -> Result<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM roi_value WHERE roi_id = ?1", params![roi_id])?;
+        for v in values {
+            tx.execute(
+                "INSERT INTO roi_value (roi_id, def_key, value, unit, basis) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![roi_id, v.def_key, v.value, v.unit, v.basis],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn roi_values(&self, roi_id: i64) -> Result<Vec<RoiValue>> {
+        let conn = self.conn.lock();
+        Self::roi_values_in(&conn, roi_id)
+    }
+
+    fn roi_values_in(conn: &Connection, roi_id: i64) -> Result<Vec<RoiValue>> {
+        let mut stmt = conn.prepare("SELECT def_key, value, unit, basis FROM roi_value WHERE roi_id = ?1 ORDER BY def_key")?;
+        let rows = stmt.query_map(params![roi_id], |r| {
+            Ok(RoiValue { def_key: r.get(0)?, value: r.get(1)?, unit: r.get(2)?, basis: r.get(3)? })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Every LV M-mode line of a study with its values, oldest edit first.
+    pub fn mmode_rows_for_study(&self, study_id: i64) -> Result<Vec<MmodeRow>> {
+        self.mmode_rows("s.study_id = ?1", study_id)
+    }
+
+    /// Every LV M-mode line of a series with its values, oldest edit first.
+    pub fn mmode_rows_for_series(&self, series_id: i64) -> Result<Vec<MmodeRow>> {
+        self.mmode_rows("s.id = ?1", series_id)
+    }
+
+    fn mmode_rows(&self, filter: &str, id: i64) -> Result<Vec<MmodeRow>> {
+        let conn = self.conn.lock();
+        let sql = format!(
+            "SELECT r.id, r.image_id, i.series_id, s.modality, s.series_number, s.series_description, i.instance_number,
+                    r.kind, COALESCE(r.date_modified, 0)
+             FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
+             WHERE {filter} AND r.kind LIKE 'lvmmode-%'
+             ORDER BY COALESCE(r.date_modified, 0), r.id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![id], |row| {
+            let modality: String = row.get(3)?;
+            let number: Option<i64> = row.get(4)?;
+            let description: String = row.get(5)?;
+            let mut label = modality;
+            if let Some(n) = number {
+                label.push_str(&format!(" {n}"));
+            }
+            if !description.is_empty() {
+                label.push_str(&format!(" {description}"));
+            }
+            let kind: String = row.get(7)?;
+            Ok(MmodeRow {
+                roi_id: row.get(0)?,
+                image_id: row.get(1)?,
+                series_id: row.get(2)?,
+                series_label: label,
+                instance_number: row.get(6)?,
+                phase: if kind.ends_with("-s") { 's' } else { 'd' },
+                date_modified: row.get(8)?,
+                values: Vec::new(),
+            })
+        })?;
+        let mut out = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        for r in &mut out {
+            r.values = Self::roi_values_in(&conn, r.roi_id)?;
+        }
+        Ok(out)
     }
 
     /// Key images of a study in series and instance order.
@@ -1458,6 +1537,45 @@ mod tests {
         assert_eq!(recs[0].id, id);
         assert!(recs[1].id > id);
         assert_eq!(db.rois(image_id, 0).unwrap().len(), 2);
+    }
+
+    /// Acceptance: an M-mode line stores three values and the study query
+    /// returns them with the line's phase and edit time.
+    #[test]
+    fn mmode_values_round_trip() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let InsertOutcome::Inserted { image_id, .. } =
+            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        else {
+            panic!()
+        };
+        let study_id = db.list_studies(&StudyFilter::default()).unwrap()[0].id;
+        let mut recs = vec![RoiRecord {
+            id: 0,
+            image_id,
+            frame: 0,
+            kind: "lvmmode-d".into(),
+            points: vec![[100.0, 10.0], [100.0, 20.0], [100.0, 60.0], [100.0, 70.0]],
+            name: None,
+            value: Some(40.0),
+            unit: "mm".into(),
+            basis: Some("ultrasound-region".into()),
+        }];
+        db.sync_rois(image_id, 0, &mut recs).unwrap();
+        let values: Vec<RoiValue> = crate::mmode::KEYS_D
+            .iter()
+            .zip([10.0, 40.0, 10.0])
+            .map(|(k, v)| RoiValue { def_key: (*k).into(), value: Some(v), unit: "mm".into(), basis: Some("ultrasound-region".into()) })
+            .collect();
+        db.set_roi_values(recs[0].id, &values).unwrap();
+        let rows = db.mmode_rows_for_study(study_id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].phase, 'd');
+        assert_eq!(rows[0].value("lv.lvidd"), Some(40.0));
+        assert_eq!(rows[0].values.len(), 3);
+        // Deleting the line removes its values.
+        db.sync_rois(image_id, 0, &mut []).unwrap();
+        assert!(db.roi_values(recs[0].id).unwrap().is_empty());
     }
 
     #[test]

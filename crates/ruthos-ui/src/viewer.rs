@@ -19,7 +19,7 @@ use crate::loupe::{self, LoupeSettings, LoupeSource, LoupeTarget};
 
 use crate::annotations::{self, AnnotationContext, AnnotationLevel};
 use crate::loader::FrameKey;
-use crate::roi::{roi_color, Roi, RoiKind};
+use crate::roi::{roi_color, MmodePhase, Roi, RoiKind};
 use crate::shared::Shared;
 use crate::icons;
 use crate::theme;
@@ -42,10 +42,12 @@ pub enum Tool {
     Oval,
     Arrow,
     Point,
+    /// Left-ventricular M-mode: four depths on one time column.
+    LvMmode,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 10] = [
+    pub const ALL: [Tool; 11] = [
         Tool::WindowLevel,
         Tool::Move,
         Tool::Zoom,
@@ -56,6 +58,7 @@ impl Tool {
         Tool::Oval,
         Tool::Arrow,
         Tool::Point,
+        Tool::LvMmode,
     ];
 
     pub fn label(self) -> &'static str {
@@ -70,6 +73,7 @@ impl Tool {
             Tool::Oval => "Oval",
             Tool::Arrow => "Arrow",
             Tool::Point => "Point",
+            Tool::LvMmode => "LV M-mode",
         }
     }
 
@@ -85,6 +89,7 @@ impl Tool {
             Tool::Oval => icons::TOOL_OVAL,
             Tool::Arrow => icons::TOOL_ARROW,
             Tool::Point => icons::TOOL_POINT,
+            Tool::LvMmode => icons::TOOL_LENGTH,
         }
     }
 
@@ -102,6 +107,7 @@ impl Tool {
             Tool::Oval => "E",
             Tool::Arrow => "N",
             Tool::Point => "P",
+            Tool::LvMmode => "K",
         }
     }
 
@@ -117,6 +123,7 @@ impl Tool {
             Key::E => Tool::Oval,
             Key::N => Tool::Arrow,
             Key::P => Tool::Point,
+            Key::K => Tool::LvMmode,
             _ => return None,
         })
     }
@@ -133,13 +140,14 @@ impl Tool {
             Tool::Oval => Bitmap::Oval,
             Tool::Arrow => Bitmap::Arrow,
             Tool::Point => Bitmap::Point,
+            Tool::LvMmode => Bitmap::Length,
         }
     }
 
     fn is_roi(self) -> bool {
         matches!(
             self,
-            Tool::Length | Tool::Angle | Tool::Rectangle | Tool::Oval | Tool::Arrow | Tool::Point
+            Tool::Length | Tool::Angle | Tool::Rectangle | Tool::Oval | Tool::Arrow | Tool::Point | Tool::LvMmode
         )
     }
 }
@@ -286,6 +294,10 @@ pub struct ViewerState {
     assign: Option<AssignPopup>,
     drag_draft: Option<(Vec2, Vec2)>,
     angle_draft: Option<AngleDraft>,
+    mmode_draft: Option<MmodeDraft>,
+    /// Per series: (roi id, edit time, LVID mm) of the latest lines.
+    mmode_latest: HashMap<i64, MmodeLatest>,
+    mmode_refresh: HashSet<i64>,
     pub selected_roi: Option<usize>,
     /// The handle the keyboard nudges, index into `Roi::handles`.
     active_handle: usize,
@@ -327,6 +339,22 @@ pub struct ViewerState {
     pending_clear_calibration: Option<i64>,
 }
 
+/// An LV M-mode line being placed: the time column and the depths so far.
+struct MmodeDraft {
+    x: f32,
+    depths: Vec<f32>,
+    /// Pointer depth, for the preview segment.
+    hover_y: Option<f32>,
+}
+
+/// The latest diastolic and systolic lines of a series, for choosing the
+/// phase of a new line and for fractional shortening beside the systole.
+#[derive(Debug, Clone, Default)]
+struct MmodeLatest {
+    diastole: Option<(i64, i64, f64)>,
+    systole: Option<(i64, i64, f64)>,
+}
+
 /// A handle being dragged.
 struct HandleDrag {
     key: FrameKey,
@@ -358,6 +386,7 @@ struct UndoEntry {
 #[derive(Debug, Clone, PartialEq)]
 enum MenuAction {
     SetTool(Tool),
+    SetPhase(MmodePhase),
     SetSet(usize),
     Name(String),
     NamePopup,
@@ -442,6 +471,9 @@ impl ViewerState {
             assign: None,
             drag_draft: None,
             angle_draft: None,
+            mmode_draft: None,
+            mmode_latest: HashMap::new(),
+            mmode_refresh: HashSet::new(),
             selected_roi: None,
             active_handle: 0,
             handle_drag: None,
@@ -475,6 +507,13 @@ impl ViewerState {
         // Developer option: `RUTHOS_TILING=series:2x2` or `study:1x2`.
         if let Some(t) = std::env::var("RUTHOS_TILING").ok().and_then(|v| parse_tiling(&v)) {
             viewer.set_tiling(shared, t);
+        }
+        // Developer option: `RUTHOS_OPEN_IMAGE=<image id>` starts on that image.
+        if let Some(id) = std::env::var("RUTHOS_OPEN_IMAGE").ok().and_then(|v| v.trim().parse::<i64>().ok()) {
+            let a = viewer.active;
+            if let Some(idx) = viewer.panes[a].images.iter().position(|i| i.id == id) {
+                viewer.panes[a].image_idx = idx;
+            }
         }
         Ok(viewer)
     }
@@ -790,15 +829,88 @@ impl ViewerState {
             match shared.db.sync_rois(key.image_id, key.frame as i64, &mut records) {
                 Ok(()) => {
                     // New rows now have ids; keep them so edits update in place.
+                    let mut mmode_values = Vec::new();
                     if let Some(list) = self.rois.get_mut(&key) {
                         for (roi, rec) in list.iter_mut().zip(records.iter()) {
                             roi.id = Some(rec.id);
+                            if let (RoiKind::LvMmode { phase, .. }, Some(f)) = (&roi.kind, frame.as_deref()) {
+                                let values: Vec<ruthos_core::RoiValue> = match roi.mmode_values(f) {
+                                    Ok((v, basis)) => phase
+                                        .keys()
+                                        .iter()
+                                        .zip(v)
+                                        .map(|(k, mm)| ruthos_core::RoiValue { def_key: (*k).into(), value: Some(mm), unit: "mm".into(), basis: Some(basis.key().into()) })
+                                        .collect(),
+                                    Err(_) => Vec::new(),
+                                };
+                                mmode_values.push((rec.id, values));
+                            }
+                        }
+                    }
+                    for (id, values) in mmode_values {
+                        if let Err(e) = shared.db.set_roi_values(id, &values) {
+                            tracing::warn!("could not store M-mode values: {e}");
+                        }
+                        if let Some(sid) = self.series_id_of_image(key.image_id) {
+                            self.mmode_refresh.insert(sid);
                         }
                     }
                 }
                 Err(e) => tracing::warn!("could not store ROIs: {e}"),
             }
         }
+    }
+
+    fn current_series_id(&self) -> Option<i64> {
+        self.series.get(self.panes[self.active].series_idx).map(|s| s.id)
+    }
+
+    fn series_id_of_image(&self, image_id: i64) -> Option<i64> {
+        self.panes.iter().flat_map(|p| p.images.iter()).find(|i| i.id == image_id).map(|i| i.series_id)
+    }
+
+    /// Re-read the latest M-mode lines of a series from the archive.
+    fn refresh_mmode_latest(&mut self, shared: &Shared, series_id: i64) {
+        let rows = shared.db.mmode_rows_for_series(series_id).unwrap_or_default();
+        let mut latest = MmodeLatest::default();
+        for pair in ruthos_core::mmode::pair_rows(rows) {
+            if let Some(d) = pair.diastole {
+                latest.diastole = d.value("lv.lvidd").map(|v| (d.roi_id, d.date_modified, v));
+            }
+            if let Some(s) = pair.systole {
+                latest.systole = s.value("lv.lvids").map(|v| (s.roi_id, s.date_modified, v));
+            }
+        }
+        self.mmode_latest.insert(series_id, latest);
+    }
+
+    /// The phase a new M-mode line takes: systole when the series' latest
+    /// line is a diastole without a newer systole, else diastole.
+    fn next_mmode_phase(&self) -> MmodePhase {
+        let Some(sid) = self.current_series_id() else { return MmodePhase::Diastole };
+        match self.mmode_latest.get(&sid) {
+            Some(MmodeLatest { diastole: Some((_, dt, _)), systole }) => match systole {
+                Some((_, st, _)) if st >= dt => MmodePhase::Diastole,
+                _ => MmodePhase::Systole,
+            },
+            _ => MmodePhase::Diastole,
+        }
+    }
+
+    /// Fractional shortening for a systolic line: its LVIDs against the
+    /// series' latest diastolic LVIDd, preferring a diastole on the same
+    /// frame.
+    fn fractional_shortening(&self, key: &FrameKey, roi: &Roi, frame: &Frame) -> Option<f64> {
+        let (v, _) = roi.mmode_values(frame).ok()?;
+        let lvids = v[1];
+        let same_frame = self
+            .rois
+            .get(key)
+            .and_then(|l| l.iter().rev().find(|r| matches!(r.kind, RoiKind::LvMmode { phase: MmodePhase::Diastole, .. })))
+            .and_then(|r| r.mmode_values(frame).ok())
+            .map(|(v, _)| v[1]);
+        let lvidd = same_frame.or_else(|| self.series_id_of_image(key.image_id).and_then(|sid| self.mmode_latest.get(&sid)).and_then(|l| l.diastole.map(|d| d.2)))?;
+        ruthos_core::mmode::fractional_shortening(lvidd, lvids)
     }
 
     /// Record a measurement's geometry before an edit so Ctrl+Z can restore it.
@@ -991,9 +1103,22 @@ impl ViewerState {
                 }
             });
         }
+        let selected_phase = match selected.map(|r| &r.kind) {
+            Some(RoiKind::LvMmode { phase, .. }) => Some(*phase),
+            _ => None,
+        };
         ui.add_enabled_ui(has_selected && !locked, |ui| {
             ui.menu_button("Name selected measurement", |ui| {
                 let current = selected.and_then(|r| r.name.clone());
+                if let Some(cur) = selected_phase {
+                    menu_heading(ui, "LV M-mode phase");
+                    for phase in [MmodePhase::Diastole, MmodePhase::Systole] {
+                        if menu_item(ui, phase.label(), cur == phase).clicked() {
+                            pick(ui, MenuAction::SetPhase(phase));
+                        }
+                    }
+                    ui.separator();
+                }
                 if let Some(set) = self.sets.get(self.current_set) {
                     menu_heading(ui, &set.name);
                     for item in &set.items {
@@ -1067,7 +1192,19 @@ impl ViewerState {
                 self.tool = t;
                 self.drag_draft = None;
                 self.angle_draft = None;
+                self.mmode_draft = None;
                 self.set_status(format!("Tool: {}", t.label()));
+            }
+            MenuAction::SetPhase(phase) => {
+                if let (Some(key), Some(sel)) = (key, self.selected_roi) {
+                    if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(sel)) {
+                        if let RoiKind::LvMmode { phase: p, .. } = &mut roi.kind {
+                            *p = phase;
+                            self.dirty_rois.insert(key);
+                            self.set_status(format!("M-mode line set to {}", phase.label().to_lowercase()));
+                        }
+                    }
+                }
             }
             MenuAction::SetSet(i) => {
                 self.current_set = i;
@@ -1133,7 +1270,7 @@ impl ViewerState {
                 let named = key
                     .and_then(|k| self.rois.get(&k))
                     .and_then(|l| self.selected_roi.and_then(|i| l.get(i)))
-                    .is_some_and(|r| r.name.is_some());
+                    .is_some_and(|r| r.name.is_some() || matches!(r.kind, RoiKind::LvMmode { .. }));
                 if named {
                     self.flush_rois(shared);
                     shared.open_reports.lock().push(self.study.id);
@@ -1440,6 +1577,15 @@ impl ViewerState {
             let st = shared.settings.lock();
             self.loupe = LoupeSettings::from(&*st);
             self.sets = st.measurement_sets.clone();
+            crate::roi::set_echo_cm(st.echo_length_unit == "cm");
+        }
+        if let Some(sid) = self.current_series_id() {
+            if !self.mmode_latest.contains_key(&sid) {
+                self.mmode_refresh.insert(sid);
+            }
+        }
+        for sid in std::mem::take(&mut self.mmode_refresh) {
+            self.refresh_mmode_latest(shared, sid);
         }
         if self.current_set >= self.sets.len() {
             self.current_set = 0;
@@ -1726,6 +1872,7 @@ impl ViewerState {
                     if changed {
                         self.drag_draft = None;
                         self.angle_draft = None;
+                        self.mmode_draft = None;
                     }
                 });
                 toolbar_caption(ui, &format!("Tool: {}", self.tool.label()));
@@ -1969,6 +2116,30 @@ impl ViewerState {
         if ui.ctx().memory(|m| m.focused().is_some()) {
             return;
         }
+        // While an M-mode line is being placed, Backspace removes the last
+        // point and Escape abandons it.
+        if self.mmode_draft.is_some() {
+            let backspace = ui.input(|i| i.key_pressed(Key::Backspace));
+            if esc {
+                self.mmode_draft = None;
+                self.set_status("LV M-mode abandoned");
+                return;
+            }
+            if backspace {
+                let left = self.mmode_draft.as_mut().map(|d| {
+                    d.depths.pop();
+                    d.depths.len()
+                });
+                match left {
+                    Some(0) | None => {
+                        self.mmode_draft = None;
+                        self.set_status("LV M-mode abandoned");
+                    }
+                    Some(n) => self.set_status(format!("LV M-mode: {n} point{} placed", if n == 1 { "" } else { "s" })),
+                }
+                return;
+            }
+        }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Z)) {
             if !self.active_locked() {
                 self.undo_edit();
@@ -2082,6 +2253,7 @@ impl ViewerState {
         if esc {
             self.drag_draft = None;
             self.angle_draft = None;
+            self.mmode_draft = None;
             self.selected_roi = None;
         }
         if r {
@@ -2351,6 +2523,12 @@ impl ViewerState {
                 if sel {
                     roi.draw_handles(&painter, &transform, Some(self.active_handle), roi_color(true));
                 }
+                if self.show_labels && matches!(roi.kind, RoiKind::LvMmode { phase: MmodePhase::Systole, .. }) {
+                    if let Some(fs) = self.fractional_shortening(&key, roi, &frame) {
+                        let anchor = label.map(|r| r.left_bottom()).unwrap_or_else(|| transform.image_to_screen(roi.points()[3]) + Vec2::new(10.0, 24.0));
+                        shadow_text(&painter, anchor + Vec2::new(0.0, 2.0), Align2::LEFT_TOP, &format!("FS {fs:.0}%"), FontId::proportional(12.5), roi_color(sel));
+                    }
+                }
                 if active {
                     if let Some(r) = label {
                         self.label_hits.push((key, i, r));
@@ -2368,15 +2546,22 @@ impl ViewerState {
                 let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c });
                 roi.draw(&painter, &transform, &frame, theme::ROI_DRAFT, false);
             }
+            if let Some(d) = &self.mmode_draft {
+                draw_mmode_draft(&painter, &transform, d, theme::ROI_DRAFT);
+            }
 
             // The loupe, with the geometry being placed drawn through it.
             if let (true, Some(target), Some(source)) = (self.loupe.enabled, self.loupe_target, loupe_source.as_ref()) {
                 let draft = self.drag_draft.and_then(|(a, b)| draft_kind(self.tool, a, b)).map(Roi::new);
                 let angle = self.angle_draft.as_ref().map(|d| Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c }));
                 let selected = self.selected_roi.and_then(|i| self.rois.get(&key).and_then(|l| l.get(i))).cloned();
+                let mmode = self.mmode_draft.as_ref();
                 let overlay = |p: &egui::Painter, lt: &ViewTransform| {
                     for roi in draft.iter().chain(angle.iter()) {
                         roi.draw(p, lt, &frame, theme::ROI_DRAFT, false);
+                    }
+                    if let Some(d) = mmode {
+                        draw_mmode_draft(p, lt, d, theme::ROI_DRAFT);
                     }
                     if let Some(roi) = &selected {
                         roi.draw(p, lt, &frame, roi_color(true), false);
@@ -2634,6 +2819,66 @@ impl ViewerState {
                     self.try_select_roi(t, key, pos);
                 }
             }
+            Tool::LvMmode => {
+                // Four clicks down one time column. The column is fixed by
+                // the first click; each depth must lie below the last.
+                if let Some(hp) = hover {
+                    let ip = t.screen_to_image(hp);
+                    if let Some(d) = &mut self.mmode_draft {
+                        d.hover_y = Some(ip.y);
+                        self.loupe_target = Some(LoupeTarget { image_point: Vec2::new(d.x, ip.y), pointer: hp });
+                    }
+                }
+                if response.clicked_by(button) {
+                    if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
+                        let mut message: Option<String> = None;
+                        let mut finished: Option<[f32; 4]> = None;
+                        let mut start = false;
+                        match &mut self.mmode_draft {
+                            None => start = true,
+                            Some(d) => {
+                                let last = *d.depths.last().unwrap_or(&f32::NEG_INFINITY);
+                                if p.y <= last + 0.5 {
+                                    message = Some("Each point must be deeper than the last: septum top, septum bottom, free wall top, free wall bottom".into());
+                                } else {
+                                    d.depths.push(p.y);
+                                    match d.depths.len() {
+                                        2 => message = Some("LV M-mode: now the top of the free wall".into()),
+                                        3 => message = Some("LV M-mode: now the bottom of the free wall".into()),
+                                        4 => finished = Some([d.depths[0], d.depths[1], d.depths[2], d.depths[3]]),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        if start {
+                            if self.try_select_roi(t, key, pos) {
+                                // An existing measurement was picked instead.
+                            } else if !frame.meta.us_region_at(p.x as f64, p.y as f64).is_some_and(|r| r.is_time_across()) {
+                                message = Some("LV M-mode: click inside the M-mode strip, where time runs across".into());
+                            } else {
+                                self.mmode_draft = Some(MmodeDraft { x: p.x, depths: vec![p.y], hover_y: None });
+                                message = Some("LV M-mode: septum top placed; next the septum's ventricular side. Backspace removes a point, Escape abandons".into());
+                            }
+                        }
+                        if let Some(depths) = finished {
+                            let x = self.mmode_draft.take().map(|d| d.x).unwrap_or(p.x);
+                            let phase = self.next_mmode_phase();
+                            let roi = Roi::new(RoiKind::LvMmode { phase, x, depths });
+                            let text = roi.value_text(frame);
+                            let list = self.rois.entry(*key).or_default();
+                            list.push(roi);
+                            self.selected_roi = Some(list.len() - 1);
+                            self.active_handle = 0;
+                            self.dirty_rois.insert(*key);
+                            message = Some(format!("{}: {text}", phase.label()));
+                        }
+                        if let Some(m) = message {
+                            self.set_status(m);
+                        }
+                    }
+                }
+            }
             Tool::Point => {
                 if response.clicked_by(button) && !self.try_select_roi(t, key, pos) {
                     if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
@@ -2735,9 +2980,33 @@ fn parse_tiling(v: &str) -> Option<Tiling> {
 }
 
 /// The plain name of a measurement kind, for unnamed rows in copied values.
+/// The M-mode line while it is being placed: the column from the first
+/// depth down to the pointer, with a tick at each placed depth.
+fn draw_mmode_draft(painter: &egui::Painter, t: &ViewTransform, d: &MmodeDraft, color: Color32) {
+    let stroke = egui::Stroke::new(1.5, color);
+    let Some(first) = d.depths.first() else { return };
+    let last = *d.depths.last().unwrap_or(first);
+    let bottom = d.hover_y.map(|y| y.max(last)).unwrap_or(last);
+    let top = t.image_to_screen(Vec2::new(d.x, *first));
+    let end = t.image_to_screen(Vec2::new(d.x, bottom));
+    painter.line_segment([top, end], stroke);
+    for depth in &d.depths {
+        let p = t.image_to_screen(Vec2::new(d.x, *depth));
+        painter.line_segment([p + Vec2::new(-7.0, 0.0), p + Vec2::new(7.0, 0.0)], stroke);
+    }
+    let names = ["septum top", "septum bottom", "free wall top", "free wall bottom"];
+    if let Some(name) = names.get(d.depths.len()) {
+        shadow_text(painter, end + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, name, FontId::proportional(12.0), color);
+    }
+}
+
 fn kind_label(kind: &RoiKind) -> &'static str {
     match kind {
         RoiKind::Length { .. } => "Length",
+        RoiKind::LvMmode { phase, .. } => match phase {
+            MmodePhase::Diastole => "LV M-mode (diastole)",
+            MmodePhase::Systole => "LV M-mode (systole)",
+        },
         RoiKind::Angle { .. } => "Angle",
         RoiKind::Rect { .. } => "Rectangle",
         RoiKind::Oval { .. } => "Oval",

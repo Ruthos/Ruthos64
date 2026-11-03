@@ -41,6 +41,8 @@ pub struct ReportDocument {
     /// Label and value pairs for the header block.
     pub header: Vec<(String, String)>,
     pub measurements: Vec<ReportMeasurement>,
+    /// The LV M-mode block: paired diastolic and systolic values and FS.
+    pub mmode: Vec<ReportMeasurement>,
     pub findings: String,
     pub conclusion: String,
     pub images: Vec<ReportImage>,
@@ -270,6 +272,15 @@ pub fn write_pdf(report: &ReportDocument, path: &Path) -> std::io::Result<()> {
         }
     }
 
+    if !report.mmode.is_empty() {
+        w.heading("LV M-mode");
+        w.columns(&[("Measurement", 56.0), ("Value", 36.0), ("Basis", 44.0), ("Image", TEXT_W - 136.0)], 9.5, true);
+        w.gap(0.5);
+        for m in &report.mmode {
+            w.columns(&[(m.name.as_str(), 56.0), (m.value.as_str(), 36.0), (m.basis.as_str(), 44.0), (m.location.as_str(), TEXT_W - 136.0)], 10.0, false);
+        }
+    }
+
     if !report.findings.trim().is_empty() {
         w.heading("Findings");
         w.text(report.findings.trim(), 10.5, false);
@@ -341,6 +352,13 @@ mod tests {
                 location: "DX 1, image 2".into(),
                 basis: "Detector plane".into(),
                 patient_scale: false,
+            }],
+            mmode: vec![ReportMeasurement {
+                name: "FS".into(),
+                value: "38.0 %".into(),
+                location: "US 1".into(),
+                basis: String::new(),
+                patient_scale: true,
             }],
             findings: "Normal thorax. ".repeat(60),
             conclusion: "No abnormality detected.".into(),
