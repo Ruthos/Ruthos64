@@ -184,7 +184,7 @@ pub const MENU_BAR: &[MenuDef] = &[
             ),
             item(
                 "viewer:tool:length",
-                "Length",
+                "Caliper",
                 Some("L"),
                 AppAction::Viewer("tool:length"),
             ),

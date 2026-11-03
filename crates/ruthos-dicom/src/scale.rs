@@ -127,6 +127,13 @@ pub enum MeasureIssue {
     TimeAxis,
     /// No scale on the image.
     Uncalibrated,
+    /// A time was asked for where no axis is time.
+    NoTime,
+    /// A velocity, slope or half-time was asked for outside a spectral
+    /// Doppler strip.
+    NoVelocity,
+    /// A distance was asked for where the vertical axis is not distance.
+    NoDistance,
 }
 
 impl MeasureIssue {
@@ -135,6 +142,9 @@ impl MeasureIssue {
             MeasureIssue::CrossesRegions => "crosses regions",
             MeasureIssue::TimeAxis => "n/a on a time axis",
             MeasureIssue::Uncalibrated => "not calibrated",
+            MeasureIssue::NoTime => "no time axis here",
+            MeasureIssue::NoVelocity => "no velocity scale here",
+            MeasureIssue::NoDistance => "no distance scale here",
         }
     }
 }

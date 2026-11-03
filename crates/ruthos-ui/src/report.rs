@@ -69,6 +69,8 @@ impl ReportState {
     }
 
     fn refresh(&mut self, shared: &Shared) {
+        // A named measurement records what its definition asks for.
+        let library = shared.library.lock().clone();
         let mut measurements = shared
             .db
             .named_measurements_for_study(self.study.id)
@@ -98,7 +100,8 @@ impl ReportState {
                     Some(std::sync::Arc::new(frame))
                 })
                 .clone();
-            if let (Some(frame), Some(roi)) = (frame, crate::roi::Roi::from_record(&m.roi)) {
+            if let (Some(frame), Some(mut roi)) = (frame, crate::roi::Roi::from_record(&m.roi)) {
+                roi.resolve(&library);
                 let mm = roi.measure(&frame);
                 m.roi.value = mm.value;
                 m.roi.unit = mm.unit.to_string();

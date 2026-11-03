@@ -49,7 +49,7 @@ magnification (2–8×), size (120–200 px) and whether Shift slows movement.
 ## The Measurements menu
 
 In the viewer toolbar and on right-click: the tools with their shortcuts
-(W M Z T L A B E N P K), the measurement set to name from, naming the
+(W M Z T L A B E N P K; L is the Caliper), the measurement set to name from, naming the
 selected measurement, undo and delete, calibration, showing or hiding
 measurements and labels, copying values as tab-separated text, and the
 report.
@@ -85,24 +85,43 @@ Lines are stored as `roi` rows of kind `lvmmode-d`/`lvmmode-s` (M-mode) or
 `lv2d-d`/`lv2d-s` (2D); their three values go into `roi_value` under
 `lv.ivsd`, `lv.lvidd`, `lv.lvfwd` or the systolic keys.
 
-## Spectral Doppler and M-mode time
+## One caliper, many quantities
 
-Inside a spectral Doppler strip the scale comes from the ultrasound
-region's velocity axis and its baseline (Reference Pixel Y0):
+The Caliper (L, formerly Length) reads everything its position allows:
 
-- **A point** gives the velocity in m/s and the simplified Bernoulli
-  gradient, 4v² in mmHg. Name it MV E, Ao Vmax, TR Vmax and so on.
-- **A line** gives the time between its ends in ms, the velocities at both
-  ends and the slope in m/s², for deceleration times and pressure
-  half-times.
+| Where | A caliper line gives | A point gives |
+|---|---|---|
+| 2D image | distance | pixel value |
+| M-mode strip | depth (vertical) and time (across) | |
+| Spectral Doppler strip | time, the velocity at each end, the slope | velocity and 4v² gradient |
 
-In an M-mode strip a line gives its vertical distance and, when its ends
-are at different times, the time between them.
+The scale comes from the ultrasound regions the scanner writes: units
+across and down, the size of a pixel in those units, and the baseline
+(Reference Pixel Y0) of a Doppler strip.
 
-The built-in Doppler set covers MV E and A, E deceleration time, Ao, PA,
-MR, TR and AR Vmax and AR pressure half-time, with calculations for E/A
-and the TR, MR, Ao and PA peak gradients. Named repeats of any
-measurement are averaged in the report and in calculations.
+**The name decides what is recorded.** Each definition has a quantity,
+and naming a caliper after it stores that quantity:
+
+| Quantity | Stored | Example definitions | Label shows |
+|---|---|---|---|
+| length | mm | VSD, LA, Ao | the distance |
+| time | ms | RR interval, E deceleration time | the time; for an RR interval also the heart rate |
+| velocity | m/s | MV E, TR Vmax (a point, or the faster end of a line) | velocity and 4v² |
+| slope | m/s² | E deceleration slope | the rate of change |
+| pht | ms | AR and MV pressure half-time | the half-time and the slope it comes from |
+
+Pressure half-time is the time for the peak velocity to fall to
+peak/√2 at the line's slope: draw the caliper along the
+deceleration from the peak. Where a quantity is not available the label
+says so (no time axis here, no velocity scale here, no distance scale
+here) instead of recording something else. Unnamed calipers show all
+their readings.
+
+The built-in Doppler set covers MV E and A, E deceleration time and
+slope, MV and AR pressure half-time, Ao, PA, MR, TR and AR Vmax and the
+RR interval, with calculations for E/A, heart rate, MVA by pressure
+half-time (220/PHT) and the TR, MR, Ao and PA peak gradients. Repeats of
+a named measurement are averaged in the report and in calculations.
 
 ## Definitions, sets and calculations
 

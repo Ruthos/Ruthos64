@@ -5,6 +5,7 @@
 
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
+use ruthos_core::measure::Library;
 use ruthos_core::RoiRecord;
 use ruthos_dicom::{Frame, MeasureIssue, SpacingBasis};
 use ruthos_render::ViewTransform;
@@ -112,6 +113,95 @@ pub struct Roi {
     pub id: Option<i64>,
     /// The definition this measurement was assigned to (`lv.lvidd`).
     pub def_key: Option<String>,
+    /// What the definition records (`Roi::resolve`); not stored, since it
+    /// follows the definition.
+    pub quantity: Option<Quantity>,
+}
+
+/// What a named measurement records. One caliper line can give a
+/// distance, a time, velocities, a slope and a pressure half-time; the
+/// definition it is named after decides which is stored and reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Quantity {
+    Length,
+    Time,
+    Velocity,
+    Slope,
+    PressureHalfTime,
+    Angle,
+    Area,
+    Value,
+}
+
+impl Quantity {
+    pub fn parse(s: &str) -> Option<Quantity> {
+        Some(match s {
+            "length" => Quantity::Length,
+            "time" => Quantity::Time,
+            "velocity" => Quantity::Velocity,
+            "slope" => Quantity::Slope,
+            "pht" => Quantity::PressureHalfTime,
+            "angle" => Quantity::Angle,
+            "area" => Quantity::Area,
+            "value" => Quantity::Value,
+            _ => return None,
+        })
+    }
+}
+
+/// Everything a caliper line can read where it lies.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaliperReadings {
+    /// Distance: in 2D along the line, in M-mode vertically.
+    pub length: Result<ruthos_dicom::Length, MeasureIssue>,
+    /// Time between the ends, in a region whose horizontal axis is time.
+    pub time_ms: Option<f64>,
+    /// Velocities at the two ends, in a spectral Doppler strip (m/s).
+    pub v1: Option<f64>,
+    pub v2: Option<f64>,
+}
+
+impl CaliperReadings {
+    pub fn read(frame: &Frame, a: Vec2, b: Vec2) -> Self {
+        let m = &frame.meta;
+        let (pa, pb) = ([a.x as f64, a.y as f64], [b.x as f64, b.y as f64]);
+        let v1 = m.velocity_at(pa[0], pa[1]);
+        let v2 = m.velocity_at(pb[0], pb[1]);
+        // The vertical axis of a Doppler strip is velocity, not distance.
+        let length = if v1.is_some() || v2.is_some() {
+            Err(MeasureIssue::NoDistance)
+        } else {
+            m.length(pa, pb)
+        };
+        CaliperReadings {
+            length,
+            time_ms: m.time_between(pa, pb).map(|s| s * 1000.0),
+            v1,
+            v2,
+        }
+    }
+
+    /// The larger of the two end velocities, as a magnitude.
+    pub fn peak(&self) -> Option<f64> {
+        match (self.v1, self.v2) {
+            (Some(a), Some(b)) => Some(a.abs().max(b.abs())),
+            (Some(a), None) | (None, Some(a)) => Some(a.abs()),
+            (None, None) => None,
+        }
+    }
+
+    /// Rate of change of velocity between the ends, m/s\u{b2}.
+    pub fn slope(&self) -> Option<f64> {
+        let (a, b, t) = (self.v1?, self.v2?, self.time_ms?);
+        (t > 0.5).then(|| (a.abs() - b.abs()).abs() / (t / 1000.0))
+    }
+
+    /// Pressure half-time from a deceleration line: the time for the
+    /// peak velocity to fall to peak / \u{221a}2 at the line's slope.
+    pub fn pressure_half_time_ms(&self) -> Option<f64> {
+        let (peak, slope) = (self.peak()?, self.slope()?);
+        (slope > 0.0).then(|| peak * (1.0 - std::f64::consts::FRAC_1_SQRT_2) / slope * 1000.0)
+    }
 }
 
 /// The outcome of measuring a ROI on a frame.
@@ -141,7 +231,17 @@ impl Roi {
             name: None,
             id: None,
             def_key: None,
+            quantity: None,
         }
+    }
+
+    /// Look up what this measurement's definition records.
+    pub fn resolve(&mut self, library: &Library) {
+        self.quantity = self
+            .def_key
+            .as_deref()
+            .and_then(|k| library.definition(k))
+            .and_then(|d| Quantity::parse(&d.quantity));
     }
 
     /// The storage form, with the value as measured on `frame`.
@@ -202,11 +302,15 @@ impl Roi {
             name: r.name.clone(),
             id: if r.id > 0 { Some(r.id) } else { None },
             def_key: r.def_key.clone(),
+            quantity: None,
         })
     }
 
     /// The headline number, unit and scale basis, for storage and reports.
     pub fn measure(&self, frame: &Frame) -> Measurement {
+        if let Some(m) = self.measure_defined(frame) {
+            return m;
+        }
         // In a spectral Doppler strip a line measures time, and a point
         // measures velocity.
         if let RoiKind::Length { a, b } = &self.kind {
@@ -309,6 +413,99 @@ impl Roi {
                 Err(e) => none(Some(e)),
             },
         }
+    }
+
+    /// What a caliper or point named after a definition records: the
+    /// definition's quantity. `None` when it has no quantity or the kind
+    /// has nothing to choose (angles, areas, LV lines).
+    fn measure_defined(&self, frame: &Frame) -> Option<Measurement> {
+        let q = self.quantity?;
+        let ok = |value: f64, unit: &'static str| Measurement {
+            value: Some(value),
+            unit,
+            basis: Some(SpacingBasis::UltrasoundRegion),
+            issue: None,
+        };
+        let issue = |i: MeasureIssue| Measurement {
+            value: None,
+            unit: "",
+            basis: None,
+            issue: Some(i),
+        };
+        match (&self.kind, q) {
+            (RoiKind::Length { a, b }, q) => {
+                let r = CaliperReadings::read(frame, *a, *b);
+                Some(match q {
+                    Quantity::Length => match r.length {
+                        Ok(l) => Measurement {
+                            value: Some(l.mm),
+                            unit: "mm",
+                            basis: Some(l.basis),
+                            issue: None,
+                        },
+                        Err(e) => issue(e),
+                    },
+                    Quantity::Time => r
+                        .time_ms
+                        .map(|t| ok(t, "ms"))
+                        .unwrap_or_else(|| issue(MeasureIssue::NoTime)),
+                    Quantity::Velocity => r
+                        .peak()
+                        .map(|v| ok(v, "m/s"))
+                        .unwrap_or_else(|| issue(MeasureIssue::NoVelocity)),
+                    Quantity::Slope => r
+                        .slope()
+                        .map(|v| ok(v, "m/s2"))
+                        .unwrap_or_else(|| issue(MeasureIssue::NoVelocity)),
+                    Quantity::PressureHalfTime => r
+                        .pressure_half_time_ms()
+                        .map(|t| ok(t, "ms"))
+                        .unwrap_or_else(|| issue(MeasureIssue::NoVelocity)),
+                    _ => return None,
+                })
+            }
+            (RoiKind::Point { p }, Quantity::Velocity) => Some(
+                frame
+                    .meta
+                    .velocity_at(p.x as f64, p.y as f64)
+                    .map(|v| ok(v.abs(), "m/s"))
+                    .unwrap_or_else(|| issue(MeasureIssue::NoVelocity)),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The label text for a caliper or point named after a definition: the
+    /// recorded value first, then what supports it.
+    fn defined_text(&self, frame: &Frame) -> Option<String> {
+        let q = self.quantity?;
+        let m = self.measure_defined(frame)?;
+        let Some(v) = m.value else {
+            return Some(m.issue.map(|i| i.label().to_string()).unwrap_or_default());
+        };
+        let readings = match &self.kind {
+            RoiKind::Length { a, b } => Some(CaliperReadings::read(frame, *a, *b)),
+            _ => None,
+        };
+        Some(match q {
+            Quantity::Length if v >= 10.0 => format!("{:.2} cm{}", v / 10.0, m.basis.map(|b| b.marker()).unwrap_or("")),
+            Quantity::Length => format!("{v:.2} mm{}", m.basis.map(|b| b.marker()).unwrap_or("")),
+            Quantity::Time => {
+                let mut t = format!("{v:.0} ms");
+                // An RR interval also gives the heart rate.
+                if self.def_key.as_deref().is_some_and(|k| k.ends_with(".rr")) && v > 0.0 {
+                    t.push_str(&format!("  {:.0} bpm", 60000.0 / v));
+                }
+                t
+            }
+            Quantity::Velocity => format!("{v:.2} m/s  {:.1} mmHg", 4.0 * v * v),
+            Quantity::Slope => format!("{v:.2} m/s\u{b2}"),
+            Quantity::PressureHalfTime => {
+                let slope = readings.and_then(|r| r.slope()).unwrap_or(0.0);
+                format!("{v:.0} ms  slope {slope:.2} m/s\u{b2}")
+            }
+            _ => return None,
+        })
     }
 
     /// The three wall and cavity thicknesses of an LV line in millimetres
@@ -525,6 +722,9 @@ impl Roi {
 
     /// The measured value as text.
     pub fn value_text(&self, frame: &Frame) -> String {
+        if let Some(text) = self.defined_text(frame) {
+            return text;
+        }
         match &self.kind {
             RoiKind::Length { .. } | RoiKind::Arrow { .. } => {
                 if matches!(self.kind, RoiKind::Arrow { .. }) {
@@ -1133,6 +1333,57 @@ mod tests {
         assert!((pts[1] - pts[2]).length() < 1e-3);
         roi.translate(Vec2::new(5.0, 7.0));
         assert_eq!(roi.points()[0], Vec2::new(55.0, 17.0), "the whole line moves freely");
+    }
+
+    #[test]
+    fn a_caliper_records_what_its_definition_asks_for() {
+        let mut f = mmode_frame();
+        f.meta.us_regions[0].units_y = 7;
+        f.meta.us_regions[0].delta_y = -2.0;
+        f.meta.us_regions[0].ref_y0 = 40;
+        // Peak 0.70 m/s falling to 0 over 200 ms: slope 3.5 m/s\u{b2}.
+        let line = |q: Quantity, key: &str| {
+            let mut r = Roi::new(RoiKind::Length {
+                a: Vec2::new(20.0, 105.0),
+                b: Vec2::new(60.0, 140.0),
+            });
+            r.def_key = Some(key.into());
+            r.quantity = Some(q);
+            r
+        };
+        let pht = line(Quantity::PressureHalfTime, "echo.ar_pht");
+        let m = pht.measure(&f);
+        assert_eq!(m.unit, "ms");
+        let want = 0.7 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) / 3.5 * 1000.0;
+        assert!((m.value.unwrap() - want).abs() < 1e-6);
+        assert_eq!(pht.value_text(&f), format!("{want:.0} ms  slope 3.50 m/s\u{b2}"));
+        let rr = line(Quantity::Time, "ecg.rr");
+        assert_eq!((rr.measure(&f).value, rr.measure(&f).unit), (Some(200.0), "ms"));
+        assert_eq!(rr.value_text(&f), "200 ms  300 bpm");
+        let slope = line(Quantity::Slope, "echo.mv_dec_slope");
+        assert!((slope.measure(&f).value.unwrap() - 3.5).abs() < 1e-9);
+        let vel = line(Quantity::Velocity, "echo.mr_vmax");
+        assert!((vel.measure(&f).value.unwrap() - 0.7).abs() < 1e-9);
+        // A length asked for in a Doppler strip is refused, not faked.
+        let len = line(Quantity::Length, "echo.ao");
+        assert_eq!(len.measure(&f).issue, Some(MeasureIssue::NoDistance));
+        let rec = rr.to_record(1, 0, Some(&f));
+        assert_eq!((rec.value, rec.unit.as_str()), (Some(200.0), "ms"));
+    }
+
+    #[test]
+    fn a_time_asked_for_on_a_2d_image_is_refused() {
+        let f = frame();
+        let mut r = Roi::new(RoiKind::Length {
+            a: Vec2::new(0.0, 0.0),
+            b: Vec2::new(0.0, 4.0),
+        });
+        r.def_key = Some("ecg.rr".into());
+        r.quantity = Some(Quantity::Time);
+        assert_eq!(r.measure(&f).issue, Some(MeasureIssue::NoTime));
+        assert_eq!(r.value_text(&f), "no time axis here");
+        r.quantity = Some(Quantity::Length);
+        assert_eq!(r.measure(&f).unit, "mm");
     }
 
     #[test]

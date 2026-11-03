@@ -68,7 +68,7 @@ impl Tool {
             Tool::Move => "Move",
             Tool::Zoom => "Zoom",
             Tool::Rotate => "Rotate",
-            Tool::Length => "Length",
+            Tool::Length => "Caliper",
             Tool::Angle => "Angle",
             Tool::Rectangle => "Rectangle",
             Tool::Oval => "Oval",
@@ -858,7 +858,14 @@ impl ViewerState {
             return;
         }
         if let Ok(records) = shared.db.rois(key.image_id, key.frame as i64) {
-            let list: Vec<Roi> = records.iter().filter_map(Roi::from_record).collect();
+            let list: Vec<Roi> = records
+                .iter()
+                .filter_map(Roi::from_record)
+                .map(|mut r| {
+                    r.resolve(&self.library);
+                    r
+                })
+                .collect();
             if !list.is_empty() {
                 self.rois.entry(key).or_default().extend(list);
             }
@@ -1402,6 +1409,7 @@ impl ViewerState {
                     if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(sel)) {
                         roi.name = Some(name.clone());
                         roi.def_key = def_key;
+                        roi.resolve(&self.library);
                         self.dirty_rois.insert(key);
                         self.set_status(format!("Named {name}"));
                     }
@@ -1741,6 +1749,7 @@ impl ViewerState {
                     Some((label, def_key)) => {
                         roi.name = Some(label.clone());
                         roi.def_key = def_key.clone();
+                        roi.resolve(&self.library);
                     }
                     None => {
                         roi.name = None;
@@ -1914,7 +1923,20 @@ impl ViewerState {
             self.loupe = LoupeSettings::from(&*st);
             crate::roi::set_echo_cm(st.echo_length_unit == "cm");
         }
-        self.library = shared.library.lock().clone();
+        {
+            let library = shared.library.lock().clone();
+            if !Arc::ptr_eq(&library, &self.library) {
+                // Definitions changed in Preferences: what each named
+                // measurement records may have changed with them.
+                for list in self.rois.values_mut() {
+                    for roi in list.iter_mut() {
+                        roi.resolve(&library);
+                    }
+                }
+                self.dirty_rois.extend(self.rois.keys().copied());
+                self.library = library;
+            }
+        }
         if let Some(sid) = self.current_series_id() {
             if !self.mmode_latest.contains_key(&sid) {
                 self.mmode_refresh.insert(sid);
@@ -3672,7 +3694,7 @@ fn press_origin(ui: &Ui) -> Option<Pos2> {
 
 fn kind_label(kind: &RoiKind) -> &'static str {
     match kind {
-        RoiKind::Length { .. } => "Length",
+        RoiKind::Length { .. } => "Caliper",
         RoiKind::Lv { phase, mmode, .. } => match (phase, mmode) {
             (MmodePhase::Diastole, true) => "LV M-mode (diastole)",
             (MmodePhase::Systole, true) => "LV M-mode (systole)",

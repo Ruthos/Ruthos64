@@ -44,8 +44,8 @@ impl Default for LibraryEditor {
     }
 }
 
-const TOOLS: [&str; 5] = ["length", "angle", "area", "point", "lv-mmode"];
-const QUANTITIES: [&str; 6] = ["length", "angle", "area", "velocity", "time", "value"];
+const TOOLS: [&str; 5] = ["caliper", "angle", "area", "point", "lv-mmode"];
+const QUANTITIES: [&str; 8] = ["length", "time", "velocity", "slope", "pht", "angle", "area", "value"];
 
 fn grey(text: impl Into<String>) -> RichText {
     RichText::new(text.into()).size(12.0).color(Color32::from_gray(110))

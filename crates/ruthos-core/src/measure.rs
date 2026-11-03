@@ -26,9 +26,12 @@ pub struct Definition {
     pub key: String,
     /// What the clinician sees: `LVIDd`.
     pub label: String,
-    /// The tool that produces it: `length`, `angle`, `area`, `point` or `lv-mmode`.
+    /// The tool that produces it: `caliper`, `angle`, `area`, `point` or
+    /// `lv-mmode` (`length` is accepted for `caliper`).
     pub tool: String,
-    /// `length`, `angle`, `area`, `value`.
+    /// What is recorded when a measurement is given this name:
+    /// `length`, `time`, `velocity`, `slope`, `pht` (pressure half-time),
+    /// `angle`, `area` or `value`. One caliper line can give any of them.
     pub quantity: String,
     /// Stored unit: `mm`, `deg`, `mm2` or empty.
     pub unit: String,
@@ -44,7 +47,7 @@ impl Default for Definition {
         Self {
             key: String::new(),
             label: String::new(),
-            tool: "length".into(),
+            tool: "caliper".into(),
             quantity: "length".into(),
             unit: "mm".into(),
             decimals: 1,
@@ -265,35 +268,42 @@ pub fn builtin() -> Library {
             def("lv.lvids", "LVIDs", "lv-mmode", "length", "mm", 1, Some("LN:29438-9")),
             def("lv.lvfws", "LVFWs", "lv-mmode", "length", "mm", 1, Some("LN:18151-1")),
             // Echo: 2D
-            def("echo.ao", "Ao", "length", "length", "mm", 1, Some("LN:18014-1")),
-            def("echo.la", "LA", "length", "length", "mm", 1, Some("LN:29469-4")),
-            def("echo.rvidd", "RVIDd", "length", "length", "mm", 1, None),
-            def("echo.epss", "EPSS", "length", "length", "mm", 1, None),
-            def("echo.pa", "PA", "length", "length", "mm", 1, None),
+            def("echo.ao", "Ao", "caliper", "length", "mm", 1, Some("LN:18014-1")),
+            def("echo.la", "LA", "caliper", "length", "mm", 1, Some("LN:29469-4")),
+            def("echo.rvidd", "RVIDd", "caliper", "length", "mm", 1, None),
+            def("echo.epss", "EPSS", "caliper", "length", "mm", 1, None),
+            def("echo.pa", "PA", "caliper", "length", "mm", 1, None),
             // Echo: spectral Doppler (velocities in m/s, times in ms)
             def("echo.mv_e", "MV E", "point", "velocity", "m/s", 2, None),
             def("echo.mv_a", "MV A", "point", "velocity", "m/s", 2, None),
-            def("echo.mv_edt", "E deceleration time", "length", "time", "ms", 0, None),
+            def("echo.mv_edt", "E deceleration time", "caliper", "time", "ms", 0, None),
+            def("echo.mv_dec_slope", "E deceleration slope", "caliper", "slope", "m/s2", 2, None),
+            def("echo.mv_pht", "MV pressure half-time", "caliper", "pht", "ms", 0, None),
             def("echo.ao_vmax", "Ao Vmax", "point", "velocity", "m/s", 2, None),
             def("echo.pa_vmax", "PA Vmax", "point", "velocity", "m/s", 2, None),
             def("echo.mr_vmax", "MR Vmax", "point", "velocity", "m/s", 2, None),
             def("echo.tr_vmax", "TR Vmax", "point", "velocity", "m/s", 2, None),
             def("echo.ar_vmax", "AR Vmax", "point", "velocity", "m/s", 2, None),
-            def("echo.ar_pht", "AR pressure half-time", "length", "time", "ms", 0, None),
+            def("echo.ar_pht", "AR pressure half-time", "caliper", "pht", "ms", 0, None),
+            // Timing
+            def("ecg.rr", "RR interval", "caliper", "time", "ms", 0, None),
             // Radiography
-            def("vhs.long", "VHS long axis", "length", "length", "mm", 1, None),
-            def("vhs.short", "VHS short axis", "length", "length", "mm", 1, None),
-            def("vhs.t4", "T4 vertebral length", "length", "length", "mm", 1, None),
-            def("kidney.left", "Kidney length (L)", "length", "length", "mm", 1, None),
-            def("kidney.right", "Kidney length (R)", "length", "length", "mm", 1, None),
+            def("vhs.long", "VHS long axis", "caliper", "length", "mm", 1, None),
+            def("vhs.short", "VHS short axis", "caliper", "length", "mm", 1, None),
+            def("vhs.t4", "T4 vertebral length", "caliper", "length", "mm", 1, None),
+            def("kidney.left", "Kidney length (L)", "caliper", "length", "mm", 1, None),
+            def("kidney.right", "Kidney length (R)", "caliper", "length", "mm", 1, None),
             // Orthopaedic
             def("ortho.norberg", "Norberg angle", "angle", "angle", "deg", 1, None),
             def("ortho.tpa", "Tibial plateau angle", "angle", "angle", "deg", 1, None),
-            def("ortho.patellar_ligament", "Patellar ligament length", "length", "length", "mm", 1, None),
-            def("ortho.patella", "Patella length", "length", "length", "mm", 1, None),
+            def("ortho.patellar_ligament", "Patellar ligament length", "caliper", "length", "mm", 1, None),
+            def("ortho.patella", "Patella length", "caliper", "length", "mm", 1, None),
         ],
         sets: vec![
-            set("Echo: LV M-mode", &["lv.ivsd", "lv.lvidd", "lv.lvfwd", "lv.ivss", "lv.lvids", "lv.lvfws"]),
+            set(
+                "Echo: LV M-mode",
+                &["lv.ivsd", "lv.lvidd", "lv.lvfwd", "lv.ivss", "lv.lvids", "lv.lvfws", "ecg.rr"],
+            ),
             set("Echo: 2D", &["echo.ao", "echo.la", "echo.rvidd", "echo.epss", "echo.pa"]),
             set(
                 "Echo: Doppler",
@@ -301,12 +311,15 @@ pub fn builtin() -> Library {
                     "echo.mv_e",
                     "echo.mv_a",
                     "echo.mv_edt",
+                    "echo.mv_dec_slope",
+                    "echo.mv_pht",
                     "echo.ao_vmax",
                     "echo.pa_vmax",
                     "echo.mr_vmax",
                     "echo.tr_vmax",
                     "echo.ar_vmax",
                     "echo.ar_pht",
+                    "ecg.rr",
                 ],
             ),
             set("Radiography", &["vhs.long", "vhs.short", "vhs.t4", "kidney.left", "kidney.right"]),
@@ -327,6 +340,8 @@ pub fn builtin() -> Library {
             ),
             calc("echo.la_ao", "LA/Ao", "echo.la / echo.ao", "cm", "", 2, Some("echo")),
             calc("echo.mv_ea", "E/A", "echo.mv_e / echo.mv_a", "cm", "", 2, Some("echo")),
+            calc("ecg.hr", "Heart rate", "60000 / ecg.rr", "cm", "bpm", 0, None),
+            calc("echo.mva_pht", "MVA (pressure half-time)", "220 / echo.mv_pht", "cm", "cm\u{b2}", 2, Some("echo")),
             calc("echo.tr_pg", "TR peak gradient", "4 * echo.tr_vmax^2", "cm", "mmHg", 1, Some("echo")),
             calc("echo.mr_pg", "MR peak gradient", "4 * echo.mr_vmax^2", "cm", "mmHg", 1, Some("echo")),
             calc("echo.ao_pg", "Ao peak gradient", "4 * echo.ao_vmax^2", "cm", "mmHg", 1, Some("echo")),
@@ -389,9 +404,9 @@ pub fn validate(lib: &Library) -> Vec<String> {
         if d.label.trim().is_empty() {
             problems.push(format!("Definition '{}' has no label", d.key));
         }
-        if !["length", "angle", "area", "point", "lv-mmode"].contains(&d.tool.as_str()) {
+        if !["caliper", "length", "angle", "area", "point", "lv-mmode"].contains(&d.tool.as_str()) {
             problems.push(format!(
-                "Definition '{}': tool '{}' is not length, angle, area, point or lv-mmode",
+                "Definition '{}': tool '{}' is not caliper, angle, area, point or lv-mmode",
                 d.key, d.tool
             ));
         }
@@ -1086,6 +1101,15 @@ mod tests {
         .unwrap();
         assert!((fs.value - 40.0).abs() < 1e-9);
         assert!(fs.scale_independent);
+    }
+
+    #[test]
+    fn heart_rate_from_the_rr_interval() {
+        let lib = builtin();
+        let r = evaluate(&lib, lib.calculation("ecg.hr").unwrap(), &values(&[("ecg.rr", 750.0)])).unwrap();
+        assert!((r.value - 80.0).abs() < 1e-9);
+        assert_eq!(lib.definition("echo.ar_pht").unwrap().quantity, "pht");
+        assert_eq!(lib.definition("echo.la").unwrap().tool, "caliper");
     }
 
     #[test]
