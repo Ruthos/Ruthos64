@@ -239,8 +239,7 @@ pub fn import_file(db: &Database, paths: &DataPaths, file: &Path, mode: ImportMo
                 &meta.sop_instance_uid,
             );
             let rel = paths
-                .relative(&dest)
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .relative_str(&dest)
                 .unwrap_or_else(|| dest.to_string_lossy().to_string());
             // If the database already has this instance, do not touch the disk.
             if db.image_path_exists(&rel)? {

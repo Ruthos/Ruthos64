@@ -1,0 +1,40 @@
+# cargo-packager configuration: Ruthos.app and a disk image on macOS, an
+# AppImage on Linux. Windows ships as a zip from release.yml; an installer
+# comes with the signing work.
+#
+#   cargo install cargo-packager --locked
+#   cargo build --release
+#   cargo packager --release
+#
+# On macOS, cargo-packager signs and notarises when APPLE_SIGNING_IDENTITY,
+# APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID are set in the environment.
+
+product-name = "Ruthos"
+identifier = "org.ruthos.Ruthos"
+version = "0.1.0"
+description = "A Horos-inspired DICOM viewer and patient archive"
+long-description = "Ruthos is a community, open-source DICOM viewer and patient archive inspired by Horos: an archive with a DICOM listener, a 2D viewer, measurements with a stated scale basis, reports, and teaching anonymisation."
+authors = ["The Ruthos contributors"]
+homepage = "https://github.com/Ruthos/Ruthos64"
+license-file = "LICENSE"
+publisher = "Ruthos"
+category = "Utility"
+out-dir = "dist"
+
+binaries = [{ path = "ruthos", main = true }]
+
+# Formats are chosen per platform in release.yml (--formats).
+
+[[file-associations]]
+extensions = ["dcm", "dicom", "dic"]
+mime-type = "application/dicom"
+description = "DICOM image"
+name = "DICOM"
+role = "Viewer"
+
+[macos]
+minimum-system-version = "11.0"
+info-plist-path = "packaging/macos/Info.plist"
+
+[appimage]
+# appimagetool is fetched by cargo-packager; libfuse2 must be installed.

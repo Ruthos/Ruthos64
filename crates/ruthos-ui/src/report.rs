@@ -243,7 +243,10 @@ impl ReportState {
                 ui.horizontal(|ui| {
                     if ToolbarButton::new(Bitmap::Save, "Save")
                         .enabled(self.is_dirty())
-                        .tooltip("Save the report text (Ctrl+S)")
+                        .tooltip(&format!(
+                            "Save the report text ({})",
+                            crate::platform::shortcut("Ctrl+S")
+                        ))
                         .show(ui)
                         .clicked()
                     {
@@ -541,10 +544,8 @@ impl ReportState {
         match write_pdf(&doc, &path) {
             Ok(()) => {
                 self.set_status(format!("Exported {}", path.display()));
-                // Show it: Windows opens PDFs with the user's reader.
-                let _ = std::process::Command::new("cmd")
-                    .args(["/C", "start", "", &path.to_string_lossy()])
-                    .spawn();
+                // Show it in the user's PDF reader.
+                crate::platform::open_path(&path);
             }
             Err(e) => self.set_status(format!("Export failed: {e}")),
         }

@@ -122,15 +122,10 @@ impl Settings {
         }
     }
 
-    /// `%APPDATA%\Ruthos\settings.json` on Windows.
+    /// `%APPDATA%\Ruthos\settings.json` on Windows, `~/Library/Application
+    /// Support/Ruthos/settings.json` on macOS, `~/.config/ruthos` on Linux.
     pub fn file_path() -> PathBuf {
-        if let Some(roaming) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
-            PathBuf::from(roaming).join("Ruthos").join("settings.json")
-        } else if let Some(dirs) = directories::ProjectDirs::from("org", "Ruthos", "Ruthos") {
-            dirs.config_dir().join("settings.json")
-        } else {
-            PathBuf::from("ruthos-settings.json")
-        }
+        crate::paths::config_dir().join("settings.json")
     }
 
     pub fn load() -> Self {

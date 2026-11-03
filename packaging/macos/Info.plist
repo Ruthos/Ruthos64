@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keys merged into the Info.plist that cargo-packager generates for
+  Ruthos.app (see Packager.toml). The bundle identifier, version and
+  minimum system version come from Packager.toml.
+
+  The three privacy descriptions are required: without them macOS refuses
+  the access silently or terminates the application.
+-->
+<plist version="1.0">
+<dict>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.medical</string>
+
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Ruthos talks to DICOM modalities and other Ruthos computers on your local network: the echo test, sending studies, and teaching sessions.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Ruthos reads an existing Horos database from your Documents folder and imports studies kept there.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Ruthos imports studies kept on your Desktop.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Ruthos imports studies kept in your Downloads folder.</string>
+
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>DICOM image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.nema.dicom</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>dcm</string>
+                <string>dicom</string>
+                <string>dic</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Folder</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.folder</string>
+            </array>
+        </dict>
+    </array>
+
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.nema.dicom</string>
+            <key>UTTypeDescription</key>
+            <string>DICOM image</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+                <string>public.image</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>dcm</string>
+                    <string>dicom</string>
+                    <string>dic</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>application/dicom</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

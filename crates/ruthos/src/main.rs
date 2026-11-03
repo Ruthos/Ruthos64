@@ -1,4 +1,4 @@
-//! Ruthos: a Horos-inspired DICOM viewer and patient archive for Windows.
+//! Ruthos: a Horos-inspired DICOM viewer and patient archive for Windows, macOS and Linux.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -89,9 +89,9 @@ fn startup_error_text(e: &eframe::Error) -> String {
     if lower.contains("adapter") || lower.contains("gpu") || lower.contains("device") {
         format!(
             "Ruthos could not find a graphics device it can draw with.\n\n\
-             It runs on any DirectX 12, Vulkan or OpenGL adapter, including Windows' \
-             built-in software renderer, so this usually means the graphics driver or the \
-             DirectX runtime is missing or broken. Updating the graphics driver normally fixes it.\n\n\
+             It runs on any DirectX 12, Metal, Vulkan or OpenGL adapter, including Windows' \
+             built-in software renderer, so this usually means the graphics driver is missing \
+             or broken. Updating the graphics driver normally fixes it.\n\n\
              Details: {text}"
         )
     } else {
@@ -101,15 +101,17 @@ fn startup_error_text(e: &eframe::Error) -> String {
 
 /// How the GPU is chosen.
 ///
-/// All three native backends are enumerated and the adapters ranked: a
-/// discrete GPU first, then integrated, then virtual, then a CPU renderer
-/// such as Windows' WARP, preferring DirectX 12 over Vulkan over OpenGL
-/// within a class. `RUTHOS_RENDERER=software` forces the CPU renderer and
-/// `WGPU_BACKEND=dx12|vulkan|gl` limits the backends, for troubleshooting.
+/// The native backends (DirectX 12, Metal, Vulkan) and OpenGL are
+/// enumerated and the adapters ranked: a discrete GPU first, then
+/// integrated, then virtual, then a CPU renderer such as Windows' WARP or
+/// Linux's llvmpipe, preferring the platform's own API within a class.
+/// `RUTHOS_RENDERER=software` forces the CPU renderer where one exists and
+/// `WGPU_BACKEND=dx12|metal|vulkan|gl` limits the backends, for
+/// troubleshooting.
 fn wgpu_configuration() -> egui_wgpu::WgpuConfiguration {
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     setup.instance_descriptor.backends =
-        wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::GL);
+        wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL);
     setup.native_adapter_selector = Some(Arc::new(select_adapter));
     setup.device_descriptor = Arc::new(|adapter| {
         let supported = adapter.limits();
@@ -136,6 +138,30 @@ fn wgpu_configuration() -> egui_wgpu::WgpuConfiguration {
     }
 }
 
+/// The platform's own API first: DirectX 12 on Windows, Metal on macOS,
+/// Vulkan on Linux; OpenGL is the fallback everywhere.
+fn backend_rank(backend: wgpu::Backend) -> u8 {
+    match backend {
+        wgpu::Backend::Dx12 => {
+            if cfg!(target_os = "windows") {
+                0
+            } else {
+                3
+            }
+        }
+        wgpu::Backend::Metal => {
+            if cfg!(target_os = "macos") {
+                0
+            } else {
+                3
+            }
+        }
+        wgpu::Backend::Vulkan => 1,
+        wgpu::Backend::Gl => 2,
+        _ => 4,
+    }
+}
+
 fn select_adapter(adapters: &[wgpu::Adapter], _surface: Option<&wgpu::Surface<'_>>) -> Result<wgpu::Adapter, String> {
     for a in adapters {
         let info = a.get_info();
@@ -147,9 +173,15 @@ fn select_adapter(adapters: &[wgpu::Adapter], _surface: Option<&wgpu::Surface<'_
             info.driver
         );
     }
-    let want_software = std::env::var("RUTHOS_RENDERER")
+    let software_requested = std::env::var("RUTHOS_RENDERER")
         .map(|v| v.eq_ignore_ascii_case("software"))
         .unwrap_or(false);
+    // WARP on Windows and llvmpipe on Linux are CPU adapters; every
+    // supported Mac has a Metal GPU, so the request is noted and ignored.
+    let want_software = software_requested && ruthos_ui::platform::software_renderer_available();
+    if software_requested && !want_software {
+        tracing::info!("RUTHOS_RENDERER=software is ignored on macOS; Metal is used");
+    }
     let rank = |a: &wgpu::Adapter| -> (u8, u8) {
         let info = a.get_info();
         let class = match info.device_type {
@@ -168,19 +200,13 @@ fn select_adapter(adapters: &[wgpu::Adapter], _surface: Option<&wgpu::Surface<'_
         } else {
             class
         };
-        let backend = match info.backend {
-            wgpu::Backend::Dx12 => 0,
-            wgpu::Backend::Vulkan => 1,
-            wgpu::Backend::Gl => 2,
-            _ => 3,
-        };
-        (class, backend)
+        (class, backend_rank(info.backend))
     };
     let best = adapters
         .iter()
         .min_by_key(|a| rank(a))
         .cloned()
-        .ok_or_else(|| "no graphics adapter found on DirectX 12, Vulkan or OpenGL".to_string())?;
+        .ok_or_else(|| "no graphics adapter found on DirectX 12, Metal, Vulkan or OpenGL".to_string())?;
     let info = best.get_info();
     tracing::info!(
         "using graphics adapter: {} ({:?}, {:?})",

@@ -388,7 +388,7 @@ struct UndoEntry {
 /// What the Measurements menu (toolbar and right-click) can do. Both menus
 /// are drawn from the same list and the choice runs once per frame.
 #[derive(Debug, Clone, PartialEq)]
-enum MenuAction {
+pub enum MenuAction {
     SetTool(Tool),
     SetPhase(MmodePhase),
     SetSet(usize),
@@ -1220,7 +1220,15 @@ impl ViewerState {
             });
         });
         ui.separator();
-        if menu_item_shortcut(ui, "Undo edit", "Ctrl+Z", false, !self.undo.is_empty() && !locked).clicked() {
+        if menu_item_shortcut(
+            ui,
+            "Undo edit",
+            &crate::platform::shortcut("Ctrl+Z"),
+            false,
+            !self.undo.is_empty() && !locked,
+        )
+        .clicked()
+        {
             pick(ui, MenuAction::Undo);
         }
         if menu_item_shortcut(ui, "Delete selected", "Delete", false, has_selected && !locked).clicked() {
@@ -1249,7 +1257,7 @@ impl ViewerState {
             pick(ui, MenuAction::ToggleLabels);
         }
         ui.separator();
-        if menu_item_shortcut(ui, "Copy values", "Ctrl+C", false, any_rois).clicked() {
+        if menu_item_shortcut(ui, "Copy values", &crate::platform::shortcut("Ctrl+C"), false, any_rois).clicked() {
             pick(ui, MenuAction::CopyValues);
         }
         if menu_item_enabled(ui, "Add to report", false, has_selected).clicked() {
@@ -1745,8 +1753,48 @@ impl ViewerState {
 
     // ---------------------------------------------------------------- UI
 
+    /// The Measurements menu item behind a native menu id
+    /// (`platform::MENU_BAR`): `tool:length`, `undo`, `copy`…
+    pub fn menu_from_id(id: &str) -> Option<MenuAction> {
+        Some(match id {
+            "tool:wl" => MenuAction::SetTool(Tool::WindowLevel),
+            "tool:move" => MenuAction::SetTool(Tool::Move),
+            "tool:zoom" => MenuAction::SetTool(Tool::Zoom),
+            "tool:rotate" => MenuAction::SetTool(Tool::Rotate),
+            "tool:length" => MenuAction::SetTool(Tool::Length),
+            "tool:angle" => MenuAction::SetTool(Tool::Angle),
+            "tool:rect" => MenuAction::SetTool(Tool::Rectangle),
+            "tool:oval" => MenuAction::SetTool(Tool::Oval),
+            "tool:arrow" => MenuAction::SetTool(Tool::Arrow),
+            "tool:point" => MenuAction::SetTool(Tool::Point),
+            "tool:lvmmode" => MenuAction::SetTool(Tool::LvMmode),
+            "undo" => MenuAction::Undo,
+            "delete" => MenuAction::DeleteSelected,
+            "delete-all" => MenuAction::DeleteAll,
+            "calibrate" => MenuAction::Calibrate,
+            "remove-calibration" => MenuAction::RemoveCalibration,
+            "basis" => MenuAction::ToggleBasisPanel,
+            "show-rois" => MenuAction::ToggleRois,
+            "show-labels" => MenuAction::ToggleLabels,
+            "copy" => MenuAction::CopyValues,
+            "add-to-report" => MenuAction::AddToReport,
+            "report" => MenuAction::OpenReport,
+            _ => return None,
+        })
+    }
+
+    /// Carry out a menu action on the next frame (the native menu bar).
+    pub fn request_menu(&mut self, action: MenuAction) {
+        self.pending_menu = Some(action);
+    }
+
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("viewer");
+        if ui.input(|i| i.viewport().focused.unwrap_or(false)) {
+            shared
+                .focused_viewer
+                .store(self.id, std::sync::atomic::Ordering::Relaxed);
+        }
         {
             let st = shared.settings.lock();
             self.loupe = LoupeSettings::from(&*st);

@@ -49,6 +49,7 @@ impl RuthosApp {
 
         crate::icons::install(&cc.egui_ctx);
         theme::apply_global_style(&cc.egui_ctx);
+        crate::platform::install_native();
         // Developer option: `RUTHOS_ZOOM=0.8` scales the whole interface,
         // for screenshots on small screens.
         if let Some(z) = std::env::var("RUTHOS_ZOOM")
@@ -231,6 +232,35 @@ impl RuthosApp {
         }
     }
 
+    /// An action from the menu bar (native on macOS) by its item id.
+    fn run_app_action(&mut self, id: &str) {
+        use crate::platform::AppAction;
+        match crate::platform::action_for(id) {
+            Some(AppAction::Preferences) => self.shared.open_prefs.store(true, Ordering::Relaxed),
+            Some(AppAction::ImportFolder) => self.browser.import_folder_dialog(&self.shared),
+            Some(AppAction::ImportFiles) => self.browser.import_files_dialog(&self.shared),
+            Some(AppAction::DatabaseWindow) => self.shared.focus_browser.store(true, Ordering::Relaxed),
+            Some(AppAction::Url(url)) => crate::platform::open_url(url),
+            Some(AppAction::Viewer(item)) => {
+                let Some(action) = ViewerState::menu_from_id(item) else {
+                    return;
+                };
+                let focused = self.shared.focused_viewer.load(Ordering::Relaxed);
+                let target = self
+                    .viewers
+                    .iter()
+                    .find(|v| v.lock().id == focused)
+                    .or_else(|| self.viewers.last())
+                    .cloned();
+                match target {
+                    Some(v) => v.lock().request_menu(action),
+                    None => tracing::info!("menu item {id} needs an open viewer"),
+                }
+            }
+            None => tracing::warn!("unknown menu item {id}"),
+        }
+    }
+
     /// The Preferences window: opened on request, closed on Cancel, Save or
     /// the window's close button. Saved settings are applied live where
     /// they can be.
@@ -392,6 +422,17 @@ impl eframe::App for RuthosApp {
 
         if let Err(msg) = crate::crash::guarded(|| self.browser.show(ui, &self.shared)) {
             self.report_error(format!("The database window hit an internal error: {msg}"));
+        }
+
+        // Files the system handed to the running application (Finder's
+        // "Open with", a drop on the Dock icon) are imported and opened.
+        let handed = crate::platform::take_open_files();
+        if !handed.is_empty() {
+            self.browser.open_next_import = true;
+            self.browser.import_paths(&self.shared, handed);
+        }
+        for id in crate::platform::poll_native_menu() {
+            self.run_app_action(&id);
         }
 
         if let Some(id) = self.startup_open.take() {

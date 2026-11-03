@@ -1,0 +1,144 @@
+# A version tag (v0.2.0) builds every platform and creates a draft
+# pre-release with all the artefacts and RELEASE_NOTES.md as its text.
+# Nothing is published until the draft is reviewed, and a failure on any
+# platform stops the draft, so a release never ships for Windows while
+# silently missing its Mac build.
+#
+# Signing and notarisation are named here and configured through
+# repository secrets and variables (see docs/cross-platform.md):
+#   Windows: SignPath (SIGNPATH_API_TOKEN secret, SIGNPATH_ORGANIZATION_ID,
+#            SIGNPATH_PROJECT_SLUG and SIGNPATH_SIGNING_POLICY_SLUG variables)
+#   macOS:   Developer ID (APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+#            APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID)
+# Without them the builds are unsigned, as the alpha is.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows x86-64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/setup-nasm@v1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p ruthos
+      - name: SignPath signing
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ""
+          wait-for-completion: true
+          output-artifact-directory: target/release
+      - name: Zip
+        shell: pwsh
+        run: |
+          $name = "Ruthos-$($env:GITHUB_REF_NAME.TrimStart('v'))-win64"
+          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
+          Copy-Item target/release/ruthos.exe, LICENSE, README.md "dist/$name"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+
+  macos:
+    name: macOS universal
+    runs-on: macos-latest
+    env:
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Developer ID certificate
+        if: ${{ env.APPLE_SIGNING_IDENTITY != '' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions build.keychain
+      - run: cargo build --release -p ruthos --target aarch64-apple-darwin
+      - run: cargo build --release -p ruthos --target x86_64-apple-darwin
+      - name: Universal binary
+        run: |
+          mkdir -p target/release
+          lipo -create -output target/release/ruthos \
+            target/aarch64-apple-darwin/release/ruthos target/x86_64-apple-darwin/release/ruthos
+          lipo -info target/release/ruthos
+      - run: cargo install cargo-packager --locked
+      - name: Ruthos.app and disk image (signed and notarised when the secrets are set)
+        run: cargo packager --release --formats app,dmg
+      - name: Zip the application
+        run: |
+          cd dist
+          ditto -c -k --keepParent Ruthos.app "Ruthos-${GITHUB_REF_NAME#v}-macos.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            dist/*.dmg
+            dist/*.zip
+
+  linux:
+    name: Linux x86-64 AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake nasm libgtk-3-dev libxkbcommon-dev libwayland-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-dev libxi-dev libxrandr-dev libfuse2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p ruthos
+      - run: cargo install cargo-packager --locked
+      - run: cargo packager --release --formats appimage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.AppImage
+
+  draft:
+    name: Draft pre-release
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artefacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: true
+          name: Ruthos ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            artefacts/windows/*
+            artefacts/macos/*
+            artefacts/linux/*

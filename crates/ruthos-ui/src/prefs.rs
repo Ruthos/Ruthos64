@@ -177,6 +177,16 @@ impl PrefsState {
             }
         });
         Self::hint(ui, "Imported files, the database and thumbnails live here. A change takes effect the next time Ruthos starts; nothing is moved.");
+        if let Some(service) = ruthos_core::paths::sync_service(&current) {
+            ui.label(
+                RichText::new(format!(
+                    "This folder is inside {service}. A synced folder can corrupt the database when the sync \
+                     uploads it and its log at different moments; choose a folder that is not synced."
+                ))
+                .size(12.0)
+                .color(Color32::from_rgb(180, 40, 30)),
+            );
+        }
         if std::env::var_os("RUTHOS_DATA_ROOT").is_some() {
             Self::hint(
                 ui,

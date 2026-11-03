@@ -166,6 +166,20 @@ impl BrowserState {
     }
 
     /// Studies the user asked to open since the last call.
+    /// Ask for folders and import them (the Import button, the File menu).
+    pub fn import_folder_dialog(&mut self, shared: &Shared) {
+        if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM folder").pick_folders() {
+            self.start_import(shared, paths);
+        }
+    }
+
+    /// Ask for files and import them (Import Files, the File menu).
+    pub fn import_files_dialog(&mut self, shared: &Shared) {
+        if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM files").pick_files() {
+            self.start_import(shared, paths);
+        }
+    }
+
     pub fn take_open_requests(&mut self) -> Vec<(i64, Option<i64>)> {
         std::mem::take(&mut self.open_requests)
     }
@@ -527,18 +541,14 @@ impl BrowserState {
                 .show(ui)
                 .clicked()
             {
-                if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM folder").pick_folders() {
-                    self.start_import(shared, paths);
-                }
+                self.import_folder_dialog(shared);
             }
             if ToolbarButton::new(Bitmap::ImportImages, "Import Files")
                 .tooltip("Import individual DICOM files")
                 .show(ui)
                 .clicked()
             {
-                if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM files").pick_files() {
-                    self.start_import(shared, paths);
-                }
+                self.import_files_dialog(shared);
             }
             if ToolbarButton::new(Bitmap::AddImages, "Pictures")
                 .tooltip("Import JPEG or PNG pictures as a DICOM series, asking for the patient")
@@ -850,7 +860,7 @@ impl BrowserState {
 
         ui.add_space(8.0);
         if source_row(ui, icons::SMART_ALBUM, "Preferences…", None, false)
-            .on_hover_text("Settings (Ctrl+,)")
+            .on_hover_text(format!("Settings ({})", crate::platform::shortcut("Ctrl+,")))
             .clicked()
         {
             shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);

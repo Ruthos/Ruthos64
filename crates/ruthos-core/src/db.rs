@@ -22,7 +22,7 @@ use crate::paths::DataPaths;
 use crate::teaching::TeachingCase;
 use crate::Result;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// A hand calibration (`[row mm, column mm]`) and the image point it was
 /// set from when it is scoped to an ultrasound region.
@@ -1465,6 +1465,21 @@ fn migrate(conn: &Connection) -> Result<()> {
             PRIMARY KEY (roi_id, def_key)
          );",
     )?;
+    // Version 3: relative paths are stored with forward slashes on every
+    // platform, so an archive moves between a PC and a Mac.
+    let previous: i64 = conn
+        .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if previous < 3 {
+        conn.execute(
+            "UPDATE image SET path = REPLACE(path, '\\', '/') WHERE stored_in_database_folder = 1",
+            [],
+        )?;
+    }
     conn.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION.to_string()],
@@ -1765,6 +1780,39 @@ mod tests {
         // Deleting the line removes its values.
         db.sync_rois(image_id, 0, &mut []).unwrap();
         assert!(db.roi_values(recs[0].id).unwrap().is_empty());
+    }
+
+    /// An archive written on Windows before 0.1.0-alpha holds backslashes;
+    /// opening it rewrites them so the same file resolves on a Mac.
+    #[test]
+    fn stored_paths_migrate_to_forward_slashes() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        db.insert_instance(&meta("1", "1.1", "1.1.1"), "DATABASE.noindex\\ab\\cd\\1.dcm", true, 10)
+            .unwrap();
+        db.insert_instance(&meta("1", "1.1", "1.1.2"), "C:\\linked\\2.dcm", false, 10)
+            .unwrap();
+        {
+            let conn = db.conn.lock();
+            conn.execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'", [])
+                .unwrap();
+            migrate(&conn).unwrap();
+        }
+        let paths: Vec<(String, bool)> = {
+            let conn = db.conn.lock();
+            let mut stmt = conn
+                .prepare("SELECT path, stored_in_database_folder FROM image ORDER BY id")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(paths[0], ("DATABASE.noindex/ab/cd/1.dcm".to_string(), true));
+        assert_eq!(
+            paths[1],
+            ("C:\\linked\\2.dcm".to_string(), false),
+            "linked absolute paths are left alone"
+        );
     }
 
     #[test]

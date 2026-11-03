@@ -13,6 +13,7 @@ eframe = { workspace = true }
 egui_extras = { workspace = true }
 egui-wgpu = { workspace = true }
 rfd = { workspace = true }
+open = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
@@ -23,3 +24,10 @@ ruthos-core = { workspace = true }
 ruthos-dicom = { workspace = true }
 ruthos-net = { workspace = true }
 ruthos-render = { workspace = true }
+
+# The native menu bar and Finder open events (platform/macos.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.21"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSObject", "NSString", "NSURL"] }
