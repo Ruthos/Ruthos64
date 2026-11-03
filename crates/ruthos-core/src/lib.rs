@@ -11,6 +11,7 @@ pub mod incoming;
 pub mod measure;
 pub mod mmode;
 pub mod model;
+pub mod movie;
 pub mod paths;
 pub mod report;
 pub mod routing;

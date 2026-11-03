@@ -45,6 +45,9 @@ libc = "0.2"
 
 # Storage and files
 rusqlite = { version = "0.41", features = ["bundled"] }
+openh264 = "0.9.9"
+mp4 = "0.14.0"
+bytes = "1"
 directories = "6.0"
 walkdir = "2.5"
 notify = "8.2"

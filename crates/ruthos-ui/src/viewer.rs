@@ -249,6 +249,13 @@ impl Tiling {
     }
 }
 
+/// A movie export running on its own thread.
+struct MovieJob {
+    task: crate::pacs::Task<Result<std::path::PathBuf, String>>,
+    progress: Arc<parking_lot::Mutex<(usize, usize)>>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
 /// One cell of the viewer grid: a series, a position in it and a view.
 #[derive(Clone)]
 pub struct Pane {
@@ -392,6 +399,9 @@ pub struct ViewerState {
     pub playing: bool,
     pub fps: f32,
     last_tick: Option<Instant>,
+    /// A movie being written (the Movie button).
+    movie: Option<MovieJob>,
+    dev_movie_done: bool,
 
     frames: HashMap<FrameKey, Arc<Frame>>,
     frame_order: VecDeque<FrameKey>,
@@ -594,6 +604,8 @@ impl ViewerState {
             playing: false,
             fps: 10.0,
             last_tick: None,
+            movie: None,
+            dev_movie_done: false,
             frames: HashMap::new(),
             frame_order: VecDeque::new(),
             gpu: HashMap::new(),
@@ -912,6 +924,108 @@ impl ViewerState {
 
     fn set_status(&mut self, text: impl Into<String>) {
         self.status = Some((text.into(), Instant::now()));
+    }
+
+    /// Whether there is anything to make a movie of: a loop, or a series
+    /// of more than one image.
+    fn can_export_movie(&self) -> bool {
+        let p = &self.panes[self.active];
+        p.images.len() > 1 || self.current_image().is_some_and(|i| i.number_of_frames > 1)
+    }
+
+    /// Export the current loop (a multi-frame image) or, for single-frame
+    /// images, the series, as an MP4 at the cine speed, with the current
+    /// window and colour table. `to` skips the save dialog. Pressed again
+    /// while writing, it stops.
+    fn export_movie(&mut self, ctx: &egui::Context, shared: &Shared, to: Option<std::path::PathBuf>) {
+        if let Some(job) = &self.movie {
+            job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+        let Some(img) = self.current_image().cloned() else {
+            return;
+        };
+        let p = &self.panes[self.active];
+        let (loop_only, files): (bool, Vec<std::path::PathBuf>) = if img.number_of_frames > 1 {
+            (true, vec![shared.resolve(&img.path)])
+        } else {
+            (false, p.images.iter().map(|i| shared.resolve(&i.path)).collect())
+        };
+        let default_name = format!(
+            "{}_{}{}.mp4",
+            self.study.patient_name.replace([',', ' ', '^'], "_"),
+            self.current_series().display_name().replace(' ', "_"),
+            if loop_only {
+                format!("_{}", p.image_idx + 1)
+            } else {
+                String::new()
+            }
+        );
+        let path = match to {
+            Some(p) => p,
+            None => {
+                let Some(path) = rfd::FileDialog::new()
+                    .set_title("Export movie")
+                    .add_filter("MP4 movie", &["mp4"])
+                    .set_file_name(default_name)
+                    .save_file()
+                else {
+                    return;
+                };
+                path
+            }
+        };
+        let clut = shared
+            .cluts
+            .get(&p.clut)
+            .cloned()
+            .unwrap_or_else(ruthos_dicom::Clut::grayscale);
+        let (center, width) = (p.view.window_center, p.view.window_width);
+        let fps = self.fps;
+        let progress = Arc::new(parking_lot::Mutex::new((0usize, 0usize)));
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (prog, stop, out) = (progress.clone(), cancel.clone(), path.clone());
+        let repaint = ctx.clone();
+        let task = crate::pacs::Task::spawn(ctx, "ruthos-movie", move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ruthos_core::movie::export_dicom_movie(
+                    &out,
+                    &ruthos_core::movie::MovieSource { files },
+                    center,
+                    width,
+                    &clut,
+                    fps,
+                    &|done, total| {
+                        *prog.lock() = (done, total);
+                        repaint.request_repaint();
+                    },
+                    &stop,
+                )
+                .map(|()| out.clone())
+                .map_err(|e| e.to_string())
+            }))
+            .unwrap_or_else(|_| Err("an internal error stopped the movie; see crash.log".into()))
+        });
+        self.movie = Some(MovieJob { task, progress, cancel });
+        self.set_status("Writing movie…");
+    }
+
+    /// Progress and the end of a movie export.
+    fn pump_movie(&mut self) {
+        let Some(job) = &self.movie else { return };
+        if let Some(result) = job.task.take() {
+            self.movie = None;
+            match result {
+                Ok(path) => self.set_status(format!("Movie written to {}", path.display())),
+                Err(e) if e == "cancelled" => self.set_status("Movie cancelled"),
+                Err(e) => self.set_status(format!("Movie not written: {e}")),
+            }
+            return;
+        }
+        let (done, total) = *job.progress.lock();
+        if total > 0 {
+            self.set_status(format!("Writing movie: frame {done} of {total}"));
+        }
     }
 
     // ------------------------------------------------------------- rois
@@ -1991,6 +2105,15 @@ impl ViewerState {
 
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("viewer");
+        self.pump_movie();
+        // Developer option: `RUTHOS_EXPORT_MOVIE=<file.mp4>` writes the
+        // current loop or series as a movie once the viewer is showing it.
+        if !self.dev_movie_done && self.current_key().is_some_and(|k| self.frames.contains_key(&k)) {
+            if let Some(out) = std::env::var_os("RUTHOS_EXPORT_MOVIE") {
+                self.dev_movie_done = true;
+                self.export_movie(&ui.ctx().clone(), shared, Some(out.into()));
+            }
+        }
         if ui.input(|i| i.viewport().focused.unwrap_or(false)) {
             shared
                 .focused_viewer
@@ -2558,6 +2681,19 @@ impl ViewerState {
                 .clicked()
             {
                 self.export_current(shared);
+            }
+            let writing = self.movie.is_some();
+            if ToolbarButton::new(Bitmap::Movie, if writing { "Stop" } else { "Movie" })
+                .enabled(writing || self.can_export_movie())
+                .tooltip(if writing {
+                    "Stop writing the movie"
+                } else {
+                    "Export the loop, or the series, as an MP4 movie at the cine speed"
+                })
+                .show(ui)
+                .clicked()
+            {
+                self.export_movie(&ui.ctx().clone(), shared, None);
             }
             if ToolbarButton::new(Bitmap::ReportCustom, "Report")
                 .tooltip("The report for this study: measurements, findings, key images")

@@ -10,6 +10,9 @@ rust-version.workspace = true
 [dependencies]
 printpdf = { workspace = true }
 rusqlite = { workspace = true }
+openh264 = { workspace = true }
+mp4 = { workspace = true }
+bytes = { workspace = true }
 directories = { workspace = true }
 walkdir = { workspace = true }
 notify = { workspace = true }
