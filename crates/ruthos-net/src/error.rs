@@ -291,7 +291,9 @@ mod tests {
             .with_abstract_syntax("1.2.840.10008.1.1")
             .calling_ae_title("RUTHOS")
             .called_ae_title("NOBODY")
-            .connection_timeout(std::time::Duration::from_secs(2))
+            // Windows retries a refused connection for about two seconds
+            // before reporting it, so the timeout must be longer than that.
+            .connection_timeout(std::time::Duration::from_secs(15))
             .establish_with(&format!("127.0.0.1:{port}"));
         assert_eq!(r.err().map(NetError::from_ul), Some(NetError::Refused));
     }
