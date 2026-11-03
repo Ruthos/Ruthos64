@@ -116,6 +116,15 @@ impl RuthosApp {
         }
 
         let incoming_stop = Arc::new(AtomicBool::new(false));
+        *shared.watch.folders.lock() = settings.watch_folders.clone();
+        ruthos_core::watch::WatchScanner::spawn(
+            db.clone(),
+            paths.clone(),
+            shared.watch.clone(),
+            Duration::from_secs(5),
+            shared.import_tx.clone(),
+            incoming_stop.clone(),
+        );
         IncomingScanner::spawn(
             db,
             paths,
@@ -338,8 +347,9 @@ impl RuthosApp {
             id,
             ViewportBuilder::default()
                 .with_title("Ruthos Preferences")
-                .with_inner_size([640.0, 520.0])
-                .with_min_inner_size([560.0, 420.0])
+                // Wide enough for the seven section buttons.
+                .with_inner_size([720.0, 540.0])
+                .with_min_inner_size([680.0, 420.0])
                 .with_resizable(true),
             |ctx, _class| {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
@@ -543,6 +553,14 @@ impl eframe::App for RuthosApp {
         self.preferences(&ctx);
         self.query_window(&ctx);
         self.router.pump(&ctx, &self.shared);
+        // Watch folders follow Preferences as soon as they are saved.
+        {
+            let wanted = self.shared.settings.lock().watch_folders.clone();
+            let mut current = self.shared.watch.folders.lock();
+            if *current != wanted {
+                *current = wanted;
+            }
+        }
 
         let caught = std::mem::take(&mut *self.shared.errors.lock());
         for msg in caught {

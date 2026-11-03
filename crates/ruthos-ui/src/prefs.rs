@@ -23,6 +23,7 @@ enum Section {
     Listener,
     Pacs,
     Routing,
+    Watch,
     Viewer,
     Measurements,
 }
@@ -35,6 +36,8 @@ pub struct PrefsState {
     pacs_edit: Option<usize>,
     /// The routing rule being edited, by index.
     route_edit: Option<usize>,
+    /// Why the last folder could not be added to the watch list.
+    watch_message: Option<String>,
     pacs_tests: std::collections::HashMap<usize, crate::pacs::Task<Result<std::time::Duration, ruthos_net::NetError>>>,
     pacs_results: std::collections::HashMap<usize, Result<std::time::Duration, ruthos_net::NetError>>,
     pub close_requested: bool,
@@ -53,6 +56,7 @@ impl PrefsState {
             Some("listener") => Section::Listener,
             Some("pacs") => Section::Pacs,
             Some("routing") => Section::Routing,
+            Some("watch") => Section::Watch,
             Some("viewer") => Section::Viewer,
             Some("measurements") => Section::Measurements,
             _ => Section::General,
@@ -63,6 +67,7 @@ impl PrefsState {
             library_editor: LibraryEditor::default(),
             pacs_edit: None,
             route_edit: None,
+            watch_message: None,
             pacs_tests: Default::default(),
             pacs_results: Default::default(),
             close_requested: false,
@@ -101,6 +106,11 @@ impl PrefsState {
                         ),
                         (Section::Pacs, crate::widgets::Icon::Bitmap(Bitmap::Query), "PACS"),
                         (Section::Routing, crate::widgets::Icon::Bitmap(Bitmap::Send), "Routing"),
+                        (
+                            Section::Watch,
+                            crate::widgets::Icon::Bitmap(Bitmap::Import),
+                            "Watch folders",
+                        ),
                         (Section::Viewer, crate::widgets::Icon::Bitmap(Bitmap::Viewer), "Viewer"),
                         (
                             Section::Measurements,
@@ -158,6 +168,7 @@ impl PrefsState {
                         Section::Listener => self.listener(ui),
                         Section::Pacs => self.pacs(ui, shared),
                         Section::Routing => self.routing(ui, shared),
+                        Section::Watch => self.watch_folders(ui, shared),
                         Section::Viewer => self.viewer(ui, shared),
                         Section::Measurements => self.measurements(ui),
                     });
@@ -473,6 +484,87 @@ impl PrefsState {
             );
         }
         Self::hint(ui, "Changes are kept when you press Save.");
+    }
+
+    fn watch_folders(&mut self, ui: &mut Ui, shared: &Shared) {
+        use ruthos_core::watch::{refuse, WatchFolder};
+        Self::heading(ui, "Watch folders");
+        Self::hint(
+            ui,
+            "Ruthos imports new DICOM files that appear in these folders and their subfolders: a modality's export share, a CR reader's output folder, a scanner's drop folder. A file is imported once it has stopped changing, and only once. The files themselves are never moved or deleted.",
+        );
+        ui.add_space(8.0);
+        let status = shared.watch.status.lock().clone();
+        let mut remove = None;
+        if self.draft.watch_folders.is_empty() {
+            Self::hint(ui, "No folders are watched.");
+        }
+        for (i, f) in self.draft.watch_folders.iter_mut().enumerate() {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut f.enabled, "");
+                    // A long path is shortened so Remove stays in view.
+                    let room = (ui.available_width() - 80.0).max(60.0);
+                    ui.add_sized(
+                        [room, 18.0],
+                        egui::Label::new(RichText::new(f.path.display().to_string()).strong()).truncate(),
+                    )
+                    .on_hover_text(f.path.display().to_string());
+                    if ui.button("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut f.copy, true, "Copy files into Ruthos");
+                    ui.radio_value(&mut f.copy, false, "Use them where they are");
+                });
+                let line = match status.get(&f.path) {
+                    _ if !f.enabled => RichText::new("Paused").color(Color32::from_gray(130)),
+                    Some(s) if !s.reachable => RichText::new(format!(
+                        "Not reachable at {}: {}",
+                        s.checked,
+                        s.last_error.clone().unwrap_or_default()
+                    ))
+                    .color(Color32::from_rgb(170, 90, 0)),
+                    Some(s) => RichText::new(format!(
+                        "Checked {}; {} imported since Ruthos started{}",
+                        s.checked,
+                        s.imported,
+                        s.last_error
+                            .as_ref()
+                            .map(|e| format!(". Last problem: {e}"))
+                            .unwrap_or_default()
+                    ))
+                    .color(Color32::from_rgb(30, 120, 50)),
+                    None => RichText::new("Watched once you press Save").color(Color32::from_gray(130)),
+                };
+                ui.label(line.size(12.0));
+            });
+            ui.add_space(4.0);
+        }
+        if let Some(i) = remove {
+            self.draft.watch_folders.remove(i);
+        }
+        if ui.button("Add a folder…").clicked() {
+            if let Some(dir) = rfd::FileDialog::new().set_title("Folder to watch").pick_folder() {
+                if let Some(why) = refuse(&dir, &shared.paths) {
+                    self.watch_message = Some(why);
+                } else if self.draft.watch_folders.iter().any(|f| f.path == dir) {
+                    self.watch_message = Some("That folder is already watched.".into());
+                } else {
+                    self.watch_message = None;
+                    self.draft.watch_folders.push(WatchFolder {
+                        path: dir,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        if let Some(m) = &self.watch_message {
+            ui.label(RichText::new(m).color(Color32::from_rgb(190, 40, 30)));
+        }
+        Self::hint(ui, "Changes take effect when you press Save.");
     }
 
     fn routing(&mut self, ui: &mut Ui, shared: &Shared) {

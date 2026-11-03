@@ -68,6 +68,8 @@ pub struct Shared {
     /// Studies retrieved from a PACS, by Study Instance UID, so routing
     /// never sends a study back where it came from.
     pub retrieved_from: Mutex<HashMap<String, String>>,
+    /// Watch folders: the list the scanner uses and what it found.
+    pub watch: Arc<ruthos_core::watch::WatchState>,
     /// The viewer window that last had keyboard focus, for menu actions.
     pub focused_viewer: AtomicU64,
     /// Studies whose report window should open.
@@ -109,6 +111,7 @@ impl Shared {
             route_inbox: Mutex::new(Vec::new()),
             route_log: Mutex::new(Default::default()),
             retrieved_from: Mutex::new(HashMap::new()),
+            watch: Arc::new(Default::default()),
             focused_viewer: AtomicU64::new(0),
             open_reports: Mutex::new(Vec::new()),
         })

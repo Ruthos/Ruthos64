@@ -403,6 +403,25 @@ impl Database {
         Ok(n > 0)
     }
 
+    /// Whether a watched folder's file was already looked at in this form.
+    pub fn watched_file_seen(&self, path: &str, size: i64, mtime: i64) -> Result<bool> {
+        let n: i64 = self.conn.lock().query_row(
+            "SELECT COUNT(*) FROM watched_file WHERE path = ?1 AND size = ?2 AND mtime = ?3",
+            params![path, size, mtime],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn mark_watched_file(&self, path: &str, size: i64, mtime: i64) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT INTO watched_file (path, size, mtime) VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime",
+            params![path, size, mtime],
+        )?;
+        Ok(())
+    }
+
     pub fn mark_study_opened(&self, id: i64) -> Result<()> {
         self.conn.lock().execute(
             "UPDATE study SET date_opened = ?1 WHERE id = ?2",
@@ -1554,7 +1573,12 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "calibration", "scope_x", "REAL")?;
     add_column_if_missing(conn, "calibration", "scope_y", "REAL")?;
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS roi_value (
+        "CREATE TABLE IF NOT EXISTS watched_file (
+            path TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            mtime INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS roi_value (
             roi_id INTEGER NOT NULL REFERENCES roi(id) ON DELETE CASCADE,
             def_key TEXT NOT NULL,
             value REAL,

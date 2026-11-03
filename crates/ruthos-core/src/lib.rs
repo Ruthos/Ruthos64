@@ -18,6 +18,7 @@ pub mod routing;
 pub mod settings;
 pub mod teaching;
 pub mod thumbs;
+pub mod watch;
 
 pub use db::{Database, StudyFilter};
 pub use import::{ImportEvent, ImportMode, Importer};
