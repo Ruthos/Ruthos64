@@ -527,6 +527,12 @@ pub struct ViewerState {
     last_tick: Option<Instant>,
     /// A movie being written (the Movie button).
     movie: Option<MovieJob>,
+    /// The dial's mode and the indicator (dial/mod.rs).
+    dial: crate::dial::Dial,
+    /// The cell under the pointer and the cells' rectangles, last frame.
+    hover_cell: Option<usize>,
+    cell_rects: Vec<Rect>,
+    dial_script_done: bool,
     dev_movie_done: bool,
 
     frames: HashMap<FrameKey, Arc<Frame>>,
@@ -746,6 +752,10 @@ impl ViewerState {
             fps: 10.0,
             last_tick: None,
             movie: None,
+            dial: crate::dial::Dial::new(&shared.settings.lock().dial),
+            hover_cell: None,
+            cell_rects: Vec::new(),
+            dial_script_done: false,
             dev_movie_done: false,
             frames: HashMap::new(),
             frame_order: VecDeque::new(),
@@ -1357,6 +1367,334 @@ impl ViewerState {
         if histogram {
             self.open_histogram(shared, key, sel);
         }
+    }
+
+    // ------------------------------------------------------------ the dial
+
+    /// What the dial can act on in the active cell.
+    fn dial_context(&self) -> crate::dial::Context {
+        // An image still loading counts as the series' other images do.
+        let greyscale = match self.current_key().and_then(|k| self.frames.get(&k)) {
+            Some(f) => !f.is_color(),
+            None => {
+                let ids: std::collections::HashSet<i64> = self.panes[self.active].images.iter().map(|i| i.id).collect();
+                self.frames
+                    .iter()
+                    .find(|(k, _)| ids.contains(&k.image_id))
+                    .is_none_or(|(_, f)| !f.is_color())
+            }
+        };
+        crate::dial::Context {
+            greyscale,
+            measurement_selected: self.selected_roi.is_some()
+                && self
+                    .current_key()
+                    .and_then(|k| self.rois.get(&k))
+                    .is_some_and(|l| self.selected_roi.is_some_and(|i| i < l.len())),
+            loupe_enabled: self.loupe.enabled,
+        }
+    }
+
+    /// Dial events and the dial's keyboard shortcuts, applied to the cell
+    /// under the pointer (or the active one).
+    fn dial_input(&mut self, ui: &mut Ui, shared: &Shared) {
+        use crate::dial::{DialEvent, DialMode};
+        let settings = shared.settings.lock().dial.clone();
+        let focused = ui.input(|i| i.viewport().focused.unwrap_or(false));
+        let mut events: Vec<DialEvent> = Vec::new();
+        if focused && settings.enabled {
+            let ctx = ui.ctx().clone();
+            let mut host = shared.dial.lock();
+            host.pump(&ctx, &settings);
+            let now = Instant::now();
+            events.extend(
+                host.drain()
+                    .into_iter()
+                    .filter(|(t, _)| now.duration_since(*t) < crate::dial::STALE)
+                    .map(|(_, e)| e),
+            );
+        }
+        // The shortcuts: each names its mode, so it works whatever the
+        // dial's mode is. Taken before the plain arrows and tool letters
+        // see them.
+        let mut keyed: Vec<(DialMode, i64)> = Vec::new();
+        let mut next_mode = false;
+        if !ui.ctx().memory(|m| m.focused().is_some()) {
+            use egui::Modifiers;
+            let cs = Modifiers::CTRL | Modifiers::SHIFT;
+            ui.input_mut(|i| {
+                for (m, k, d) in [
+                    (DialMode::Navigate, Key::ArrowLeft, -1),
+                    (DialMode::Navigate, Key::ArrowRight, 1),
+                    (DialMode::WindowWidth, Key::ArrowDown, -1),
+                    (DialMode::WindowWidth, Key::ArrowUp, 1),
+                    (DialMode::WindowLevel, Key::PageDown, -1),
+                    (DialMode::WindowLevel, Key::PageUp, 1),
+                    (DialMode::LoupeMagnification, Key::Minus, -1),
+                    (DialMode::LoupeMagnification, Key::Plus, 1),
+                    (DialMode::LoupeMagnification, Key::Equals, 1),
+                ] {
+                    while i.consume_key(cs, k) {
+                        keyed.push((m, d));
+                    }
+                }
+                for (k, d) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
+                    while i.consume_key(Modifiers::ALT, k) {
+                        keyed.push((DialMode::MeasurementPoint, d));
+                    }
+                }
+                if i.consume_key(cs, Key::M) {
+                    next_mode = true;
+                }
+            });
+        }
+        if next_mode {
+            events.push(DialEvent::Press);
+        }
+        // Developer option: `RUTHOS_DIAL_EVENTS=rot:10,rot:10,press,rot:-10`
+        // plays dial events once the first image is on screen, and keeps the
+        // indicator up for 20 s so it can be captured.
+        let mut scripted = false;
+        if !self.dial_script_done && self.current_key().is_some_and(|k| self.frames.contains_key(&k)) {
+            self.dial_script_done = true;
+            if let Ok(script) = std::env::var("RUTHOS_DIAL_EVENTS") {
+                for part in script.split(',').map(str::trim) {
+                    match part.split_once(':') {
+                        Some(("rot", d)) => {
+                            if let Ok(d) = d.parse::<f64>() {
+                                events.push(DialEvent::Rotate(d));
+                            }
+                        }
+                        _ if part == "press" => events.push(DialEvent::Press),
+                        _ => {}
+                    }
+                }
+                scripted = true;
+            }
+        }
+        if events.is_empty() && keyed.is_empty() {
+            self.request_indicator_repaint(ui, &settings);
+            return;
+        }
+        // The dial acts on the cell under the pointer, like the wheel.
+        if let Some(k) = self.hover_cell.filter(|k| *k < self.panes.len()) {
+            if k != self.active {
+                self.active = k;
+            }
+        }
+        let now = Instant::now();
+        for ev in events {
+            match ev {
+                DialEvent::Press => {
+                    let cx = self.dial_context();
+                    self.dial.next_mode(&settings, cx);
+                }
+                DialEvent::Choose(m) => self.dial.mode = m,
+                DialEvent::Rotate(deg) => {
+                    let n = self.dial.steps(deg, now, &settings);
+                    if n != 0 {
+                        let mode = self.dial.mode;
+                        self.dial_step(mode, n);
+                    }
+                }
+            }
+            self.dial.shown = Some(now);
+        }
+        for (mode, n) in keyed {
+            self.dial.mode = mode;
+            self.dial_step(mode, n);
+            self.dial.shown = Some(now);
+        }
+        if scripted {
+            self.dial.shown = Some(now + std::time::Duration::from_secs(20));
+            // Developer option: `RUTHOS_VIEWER_SCREENSHOT=<file.png>` saves
+            // this window as drawn, a moment after the script.
+            if let Some(path) = std::env::var_os("RUTHOS_VIEWER_SCREENSHOT") {
+                let ctx = ui.ctx().clone();
+                let vid = self.viewport_id;
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    let save = egui::ScreenshotCallback::new(move |img| {
+                        let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
+                        if let Some(png) = image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, rgba) {
+                            let _ = png.save(&path);
+                        }
+                    });
+                    ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Screenshot(save));
+                    ctx.request_repaint_of(vid);
+                });
+            }
+        }
+        ui.ctx().request_repaint();
+    }
+
+    fn request_indicator_repaint(&self, ui: &Ui, settings: &crate::dial::DialSettings) {
+        if settings.show_indicator && self.dial.shown.is_some_and(|t| t.elapsed() < crate::dial::INDICATOR) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// One or more detents in a mode. A mode that cannot act does nothing.
+    fn dial_step(&mut self, mode: crate::dial::DialMode, n: i64) {
+        use crate::dial::DialMode;
+        if !crate::dial::available(mode, self.dial_context()) {
+            return;
+        }
+        match mode {
+            DialMode::Navigate => {
+                // Reaching for the dial means stopping on a frame.
+                self.playing = false;
+                if self.active_locked() {
+                    return;
+                }
+                if self.tiled_series() {
+                    self.step_block(n);
+                    return;
+                }
+                let p = &mut self.panes[self.active];
+                if p.images.is_empty() {
+                    return;
+                }
+                let idx = p.image_idx.min(p.images.len() - 1);
+                let frames = p.images[idx].number_of_frames.max(1) as usize;
+                if frames > 1 {
+                    p.frame_idx = crate::dial::clamp_step(p.frame_idx as usize, n, frames) as u32;
+                } else {
+                    let next = crate::dial::clamp_step(idx, n, p.images.len());
+                    if next != idx {
+                        p.image_idx = next;
+                        p.frame_idx = 0;
+                        self.selected_roi = None;
+                    }
+                }
+            }
+            DialMode::WindowWidth | DialMode::WindowLevel => {
+                if self.active_locked() {
+                    return;
+                }
+                // The image's own frame, or one of its series while it loads.
+                let ids: std::collections::HashSet<i64> = self.panes[self.active].images.iter().map(|i| i.id).collect();
+                let f = match self.current_key().and_then(|k| self.frames.get(&k)) {
+                    Some(f) => f,
+                    None => match self.frames.iter().find(|(k, _)| ids.contains(&k.image_id)) {
+                        Some((_, f)) => f,
+                        None => return,
+                    },
+                };
+                let range = crate::dial::stored_range(f.meta.bits_stored, f.meta.rescale_slope, f.min, f.max);
+                let view = &mut self.panes[self.active].view;
+                if mode == DialMode::WindowWidth {
+                    view.window_width = (view.window_width + crate::dial::width_step(range) * n as f32).max(1.0);
+                } else {
+                    view.window_center += crate::dial::level_step(range) * n as f32;
+                }
+            }
+            DialMode::MeasurementPoint => {
+                let (Some(key), Some(sel)) = (self.current_key(), self.selected_roi) else {
+                    return;
+                };
+                let Some(roi) = self.rois.get(&key).and_then(|l| l.get(sel)) else {
+                    return;
+                };
+                let handles = roi.handles();
+                if handles.is_empty() {
+                    return;
+                }
+                let h = self.active_handle.min(handles.len() - 1);
+                let before = roi.kind.clone();
+                let axis = crate::dial::point_axis(&roi.kind, h);
+                let target = handles[h] + axis * (crate::dial::POINT_STEP * n as f32);
+                // A run of detents is one undo step.
+                let fresh = self
+                    .dial
+                    .last_point_edit
+                    .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(1));
+                if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(sel)) {
+                    roi.set_handle(h, target);
+                }
+                if fresh {
+                    self.push_undo(key, sel, before);
+                }
+                self.dial.last_point_edit = Some(Instant::now());
+                self.dirty_rois.insert(key);
+            }
+            DialMode::LoupeMagnification => {
+                self.loupe.magnification =
+                    crate::dial::next_magnification(&crate::loupe::MAGNIFICATIONS, self.loupe.magnification, n);
+            }
+        }
+    }
+
+    /// The indicator's text: the mode and its current value.
+    fn dial_text(&self) -> String {
+        use crate::dial::DialMode;
+        let p = &self.panes[self.active];
+        match self.dial.mode {
+            DialMode::Navigate => match p.image() {
+                Some(img) if img.number_of_frames > 1 => {
+                    format!("Frame {} of {}", p.frame_idx + 1, img.number_of_frames)
+                }
+                _ => format!("Image {} of {}", p.image_idx + 1, p.images.len()),
+            },
+            DialMode::WindowWidth => format!("Width {:.0}", p.view.window_width),
+            DialMode::WindowLevel => format!("Level {:.0}", p.view.window_center),
+            DialMode::MeasurementPoint => {
+                let key = self.current_key();
+                let roi = key
+                    .zip(self.selected_roi)
+                    .and_then(|(k, i)| self.rois.get(&k).and_then(|l| l.get(i)));
+                let frame = key.and_then(|k| self.frames.get(&k));
+                match (roi, frame) {
+                    (Some(r), Some(f)) => {
+                        let name = r.name.clone().unwrap_or_else(|| kind_label(&r.kind).to_string());
+                        let value = r.value_text(f).replace('\n', "  ");
+                        if value.is_empty() {
+                            format!("{name} point")
+                        } else {
+                            format!("{name} point, {value}")
+                        }
+                    }
+                    _ => "Measurement point: select a measurement".into(),
+                }
+            }
+            DialMode::LoupeMagnification => format!("Loupe {}\u{d7}", self.loupe.magnification as u32),
+        }
+    }
+
+    /// The mode indicator at the top centre of the active cell, fading 1.5 s
+    /// after the last press or turn.
+    fn draw_dial_indicator(&self, ui: &Ui, shared: &Shared) {
+        if !shared.settings.lock().dial.show_indicator {
+            return;
+        }
+        let Some(shown) = self.dial.shown else { return };
+        let age = shown.elapsed();
+        if age >= crate::dial::INDICATOR {
+            return;
+        }
+        let Some(rect) = self.cell_rects.get(self.active) else {
+            return;
+        };
+        let fade = 1.0 - (age.as_secs_f32() - 1.2).max(0.0) / 0.3;
+        let text = format!("{}   {}", self.dial.mode.label(), self.dial_text());
+        // On the foreground layer, so the image drawn later sits beneath it.
+        let painter = ui
+            .ctx()
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::unique(("ruthos-dial-indicator", self.id)),
+            ))
+            .with_clip_rect(*rect);
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(14.0), Color32::WHITE);
+        let size = galley.size() + Vec2::new(20.0, 10.0);
+        let r = Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 14.0 + size.y / 2.0), size);
+        painter.rect_filled(r, 6.0, Color32::from_black_alpha((180.0 * fade) as u8));
+        painter.galley(
+            r.min + Vec2::new(10.0, 5.0),
+            galley,
+            Color32::from_white_alpha((255.0 * fade) as u8),
+        );
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
     }
 
     /// Whether there is anything to make a movie of: a loop, or a series
@@ -2626,6 +2964,7 @@ impl ViewerState {
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("viewer");
         self.pump_movie();
+        self.dial_input(ui, shared);
         let ctx = ui.ctx().clone();
         self.text_prompt_window(&ctx);
         self.roi_manager_window(&ctx);
@@ -2682,6 +3021,7 @@ impl ViewerState {
         self.pump_loader(shared);
         self.tick_cine(ui);
         self.keyboard(ui, shared);
+        self.draw_dial_indicator(ui, shared);
 
         let dark = true;
         egui::Panel::top(("viewer-toolbar", self.id))
@@ -3650,6 +3990,11 @@ impl ViewerState {
                 )
             })
             .collect();
+
+        self.hover_cell = ui
+            .input(|i| i.pointer.hover_pos())
+            .and_then(|p| rects.iter().position(|r| r.contains(p)));
+        self.cell_rects = rects.clone();
 
         // A press or a wheel turn in another cell makes it the active one
         // before any tool runs, so scrolling follows the pointer.

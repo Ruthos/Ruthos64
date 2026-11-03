@@ -10,6 +10,7 @@ pub mod anonymize;
 pub mod app;
 pub mod browser;
 pub mod crash;
+pub mod dial;
 pub mod histogram;
 pub mod horos_import;
 pub mod icons;

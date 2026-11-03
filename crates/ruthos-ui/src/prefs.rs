@@ -41,6 +41,10 @@ pub struct PrefsState {
     pacs_tests: std::collections::HashMap<usize, crate::pacs::Task<Result<std::time::Duration, ruthos_net::NetError>>>,
     pacs_results: std::collections::HashMap<usize, Result<std::time::Duration, ruthos_net::NetError>>,
     pub close_requested: bool,
+    /// The dial settings when the window opened. Dial changes apply at
+    /// once, so the user can turn the dial and compare; closing without
+    /// saving puts these back.
+    dial_original: ruthos_core::settings::DialSettings,
     /// The saved settings, handed to the app to apply.
     pub saved: Option<Settings>,
     note: Option<String>,
@@ -71,12 +75,20 @@ impl PrefsState {
             pacs_tests: Default::default(),
             pacs_results: Default::default(),
             close_requested: false,
+            dial_original: shared.settings.lock().dial.clone(),
             saved: None,
             note: None,
         }
     }
 
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
+        self.show_inner(ui, shared);
+        if self.close_requested {
+            shared.settings.lock().dial = self.dial_original.clone();
+        }
+    }
+
+    fn show_inner(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.style_mut().visuals = theme::browser_visuals();
         if ui.input(|i| i.viewport().close_requested()) {
             self.close_requested = true;
@@ -567,6 +579,72 @@ impl PrefsState {
         Self::hint(ui, "Changes take effect when you press Save.");
     }
 
+    /// The dial: Surface Dial, ASUS Dial or the DialPad (Windows only).
+    fn dial_section(&mut self, ui: &mut Ui, shared: &Shared) {
+        use ruthos_core::settings::DialMode;
+        Self::heading(ui, "Dial");
+        let before = self.draft.dial.clone();
+        let d = &mut self.draft.dial;
+        ui.checkbox(&mut d.enabled, "Use a dial (Surface Dial, ASUS Dial or ProArt DialPad)");
+        ui.add_enabled_ui(d.enabled, |ui| {
+            ui.label("A press cycles through");
+            ui.horizontal_wrapped(|ui| {
+                for m in DialMode::ALL {
+                    let mut on = d.modes.contains(&m);
+                    if ui.checkbox(&mut on, m.label()).changed() {
+                        if on {
+                            d.modes.push(m);
+                        } else if d.modes.len() > 1 {
+                            d.modes.retain(|x| *x != m);
+                        }
+                        d.modes.sort_by_key(|x| DialMode::ALL.iter().position(|y| y == x));
+                    }
+                }
+            });
+            if !d.modes.contains(&d.start_mode) {
+                d.start_mode = d.modes[0];
+            }
+            egui::Grid::new("prefs-dial")
+                .num_columns(2)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("Mode at start");
+                    egui::ComboBox::from_id_salt("prefs-dial-start")
+                        .selected_text(d.start_mode.label())
+                        .width(170.0)
+                        .show_ui(ui, |ui| {
+                            for m in d.modes.clone() {
+                                ui.selectable_value(&mut d.start_mode, m, m.label());
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("Degrees per step");
+                    ui.horizontal(|ui| {
+                        for v in [5u32, 10, 15, 20] {
+                            ui.selectable_value(&mut d.degrees_per_step, v, format!("{v}°"));
+                        }
+                    });
+                    ui.end_row();
+                });
+            ui.checkbox(
+                &mut d.accelerate,
+                "Fast turns in Navigate move five frames or images a step",
+            );
+            ui.checkbox(&mut d.reverse, "Reverse direction");
+            ui.checkbox(&mut d.show_indicator, "Show the mode and value on the image");
+        });
+        Self::hint(
+            ui,
+            "Navigate steps frames in a loop and images in a stack; width and level steps are a fixed share of the image's value range, so the right-drag sets the window and the dial refines it. Set the ASUS Dial to Microsoft Wheel Device for the dial to appear here, or use the keyboard shortcuts in docs/dial.md. Dial settings apply at once; Save keeps them.",
+        );
+        if self.draft.dial != before {
+            shared.settings.lock().dial = self.draft.dial.clone();
+        }
+        if let Some(e) = shared.dial.lock().last_error() {
+            Self::hint(ui, &format!("Windows did not give Ruthos a dial for one window: {e}"));
+        }
+    }
+
     fn routing(&mut self, ui: &mut Ui, shared: &Shared) {
         use ruthos_core::routing::{RouteRule, RouteSource};
         Self::heading(ui, "Routing");
@@ -769,6 +847,10 @@ impl PrefsState {
                 }
             });
         Self::hint(ui, "Applied to new viewer windows. The CLUT menu changes it per cell.");
+        if cfg!(windows) {
+            ui.add_space(16.0);
+            self.dial_section(ui, shared);
+        }
     }
 
     fn measurements(&mut self, ui: &mut Ui) {
@@ -851,6 +933,7 @@ impl PrefsState {
                     notes.push("the thumbnail size");
                 }
                 self.saved = Some(self.draft.clone());
+                self.dial_original = self.draft.dial.clone();
                 if notes.is_empty() {
                     self.close_requested = true;
                 } else {

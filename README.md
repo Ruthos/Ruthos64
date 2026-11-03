@@ -44,6 +44,19 @@ The annotation layout follows the Horos defaults:
 
 Colour lookup tables and volume-rendering presets are read directly from the Horos definition files, so "Hot Iron", "Jet", "VR Bones" and the rest look the same.
 
+## The dial
+
+On Windows, a Surface Dial, an ASUS Dial or a ProArt DialPad (set to Microsoft Wheel Device) steps frames and slices and fine-tunes window width and level, a measurement point and the loupe. A press changes the mode; Preferences > Viewer > Dial sets it up. Every action also has a keyboard shortcut, and a DialPad that cannot act as a wheel device can be mapped to them in ProArt Creator Hub. See `docs/dial.md`.
+
+| Action | Anticlockwise | Clockwise |
+|---|---|---|
+| Navigate | Ctrl+Shift+Left | Ctrl+Shift+Right |
+| Window width | Ctrl+Shift+Down | Ctrl+Shift+Up |
+| Window level | Ctrl+Shift+Page Down | Ctrl+Shift+Page Up |
+| Measurement point | Alt+Left | Alt+Right |
+| Loupe magnification | Ctrl+Shift+Minus | Ctrl+Shift+Plus |
+| Next mode | | Ctrl+Shift+M |
+
 ## Roadmap
 
 Work is organised in tiers. Each tier is usable on its own.

@@ -31,3 +31,17 @@ muda = "0.21"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder"] }
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSObject", "NSString", "NSURL"] }
+
+# The dial (Surface Dial, ASUS Dial and DialPad) through RadialController
+# (dial/windows.rs). Already in the build through wgpu and winit.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "UI_Input",
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+    "Win32_UI_Input_Radial",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.62"
+windows-collections = "0.3"

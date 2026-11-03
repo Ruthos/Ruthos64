@@ -52,6 +52,71 @@ pub struct Settings {
     pub routing_rules: Vec<crate::routing::RouteRule>,
     /// Folders whose new DICOM files are imported (Preferences > Watch folders).
     pub watch_folders: Vec<crate::watch::WatchFolder>,
+    /// The rotary dial (Surface Dial, ASUS Dial and DialPad); Windows only.
+    pub dial: DialSettings,
+}
+
+/// What a turn of the dial adjusts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DialMode {
+    /// A frame in a multi-frame image, otherwise an image in the series.
+    Navigate,
+    WindowWidth,
+    WindowLevel,
+    /// The selected measurement's active handle.
+    MeasurementPoint,
+    LoupeMagnification,
+}
+
+impl DialMode {
+    /// Every mode, in the order a press cycles through them.
+    pub const ALL: [DialMode; 5] = [
+        DialMode::Navigate,
+        DialMode::WindowWidth,
+        DialMode::WindowLevel,
+        DialMode::MeasurementPoint,
+        DialMode::LoupeMagnification,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DialMode::Navigate => "Navigate",
+            DialMode::WindowWidth => "Window width",
+            DialMode::WindowLevel => "Window level",
+            DialMode::MeasurementPoint => "Measurement point",
+            DialMode::LoupeMagnification => "Loupe magnification",
+        }
+    }
+}
+
+/// Preferences > Viewer > Dial.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DialSettings {
+    pub enabled: bool,
+    /// The modes a press cycles through, in `DialMode::ALL` order.
+    pub modes: Vec<DialMode>,
+    pub start_mode: DialMode,
+    /// 5, 10, 15 or 20.
+    pub degrees_per_step: u32,
+    /// Fast turns in Navigate move five frames or images a step.
+    pub accelerate: bool,
+    pub reverse: bool,
+    pub show_indicator: bool,
+}
+
+impl Default for DialSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            modes: DialMode::ALL.to_vec(),
+            start_mode: DialMode::Navigate,
+            degrees_per_step: 10,
+            accelerate: true,
+            reverse: false,
+            show_indicator: true,
+        }
+    }
 }
 
 /// A PACS (or another viewer's archive) as Ruthos knows it.
@@ -146,6 +211,7 @@ impl Default for Settings {
             pacs_nodes: Vec::new(),
             routing_rules: Vec::new(),
             watch_folders: Vec::new(),
+            dial: DialSettings::default(),
         }
     }
 }

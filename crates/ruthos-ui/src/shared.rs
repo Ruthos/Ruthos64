@@ -76,6 +76,8 @@ pub struct Shared {
     pub open_reports: Mutex<Vec<i64>>,
     /// Series to open in an MPR window: (study, series).
     pub open_mpr: Mutex<Vec<(i64, i64)>>,
+    /// The dial's controllers and events (Windows; nothing elsewhere).
+    pub dial: Mutex<crate::dial::DialHost>,
 }
 
 impl Shared {
@@ -117,6 +119,7 @@ impl Shared {
             focused_viewer: AtomicU64::new(0),
             open_reports: Mutex::new(Vec::new()),
             open_mpr: Mutex::new(Vec::new()),
+            dial: Mutex::new(Default::default()),
         })
     }
 

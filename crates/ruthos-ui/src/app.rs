@@ -605,6 +605,9 @@ impl eframe::App for RuthosApp {
         self.preferences(&ctx);
         self.query_window(&ctx);
         self.router.pump(&ctx, &self.shared);
+        // The dial follows the foreground window (dial/windows.rs).
+        let dial_settings = self.shared.settings.lock().dial.clone();
+        self.shared.dial.lock().pump(&ctx, &dial_settings);
         // Watch folders follow Preferences as soon as they are saved.
         {
             let wanted = self.shared.settings.lock().watch_folders.clone();

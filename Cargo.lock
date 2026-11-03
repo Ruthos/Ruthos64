@@ -4802,6 +4802,9 @@ dependencies = [
  "ruthos-net",
  "ruthos-render",
  "tracing",
+ "windows",
+ "windows-collections",
+ "windows-core",
 ]
 
 [[package]]
