@@ -423,6 +423,57 @@ pub struct UsRegion {
 }
 
 impl UsRegion {
+    /// Region Spatial Format (0018,6012) in words.
+    pub fn format_name(&self) -> &'static str {
+        match self.spatial_format {
+            1 => "2D",
+            2 => "M-mode",
+            3 => "Spectral Doppler",
+            4 => "Waveform",
+            5 => "Graphics",
+            _ => "Unspecified",
+        }
+    }
+
+    /// Physical Units (0018,6024 / 0018,6026) as the abbreviation and what
+    /// the axis measures.
+    pub fn unit_name(units: u16) -> (&'static str, &'static str) {
+        match units {
+            0 => ("", "no unit"),
+            1 => ("%", "percent"),
+            2 => ("dB", "level"),
+            3 => ("cm", "distance"),
+            4 => ("s", "time"),
+            5 => ("Hz", "frequency"),
+            6 => ("dB/s", "level over time"),
+            7 => ("cm/s", "velocity"),
+            8 => ("cm\u{b2}", "area"),
+            9 => ("cm\u{b2}/s", "area over time"),
+            10 => ("cm\u{b3}", "volume"),
+            11 => ("cm\u{b3}/s", "flow"),
+            12 => ("\u{b0}", "angle"),
+            _ => ("?", "unknown unit"),
+        }
+    }
+
+    /// One axis's scale in the units a clinician reads: mm and ms rather
+    /// than cm and s. `delta` is the Physical Delta for that axis.
+    pub fn describe_axis(units: u16, delta: f64) -> String {
+        let (unit, what) = Self::unit_name(units);
+        match units {
+            0 => "not calibrated".to_string(),
+            3 => format!("{:.3} mm per pixel ({what})", delta.abs() * 10.0),
+            4 => format!("{:.2} ms per pixel ({what})", delta.abs() * 1000.0),
+            _ => format!("{:.4} {unit} per pixel ({what})", delta.abs()),
+        }
+    }
+
+    /// The image row of the Doppler baseline, where the velocity is the
+    /// reference value (usually zero).
+    pub fn baseline_row(&self) -> Option<i64> {
+        self.is_velocity_y().then_some(self.y0 + self.ref_y0)
+    }
+
     /// Velocity in cm/s down the region (spectral Doppler).
     pub fn is_velocity_y(&self) -> bool {
         self.units_y == 7 && self.delta_y != 0.0
@@ -550,6 +601,23 @@ impl Getter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn region_axes_read_in_clinical_units() {
+        assert_eq!(UsRegion::describe_axis(4, 0.0073937), "7.39 ms per pixel (time)");
+        assert_eq!(UsRegion::describe_axis(7, 3.9832), "3.9832 cm/s per pixel (velocity)");
+        assert_eq!(UsRegion::describe_axis(3, 0.10219), "1.022 mm per pixel (distance)");
+        let r = UsRegion {
+            y0: 126,
+            ref_y0: 190,
+            units_y: 7,
+            delta_y: 3.98,
+            spatial_format: 3,
+            ..Default::default()
+        };
+        assert_eq!(r.baseline_row(), Some(316));
+        assert_eq!(r.format_name(), "Spectral Doppler");
+    }
 
     #[test]
     fn patient_name_display() {

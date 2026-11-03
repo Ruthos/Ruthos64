@@ -1583,29 +1583,39 @@ impl ViewerState {
                             ui.end_row();
                         }
                     });
+                let pointer_region = self
+                    .mouse_pixel
+                    .and_then(|p| meta.us_region_index_at(p.0 as f64, p.1 as f64));
                 for (i, r) in meta.us_regions.iter().enumerate() {
-                    let units = |u: u16| match u {
-                        3 => "cm",
-                        4 => "s",
-                        0 => "none",
-                        _ => "other",
-                    };
+                    let here = pointer_region == Some(i);
+                    let colour = if here { Color32::from_gray(235) } else { Color32::from_gray(170) };
                     ui.label(
                         egui::RichText::new(format!(
-                            "  Region {}: x {}..{} y {}..{}, {} across ({:.5}), {} down ({:.5})",
+                            "Region {} \u{b7} {}{}: x {}\u{2013}{}, y {}\u{2013}{}",
                             i + 1,
+                            r.format_name(),
+                            if here { " (under the pointer)" } else { "" },
                             r.x0,
                             r.x1,
                             r.y0,
-                            r.y1,
-                            units(r.units_x),
-                            r.delta_x,
-                            units(r.units_y),
-                            r.delta_y
+                            r.y1
                         ))
-                        .size(11.5)
-                        .color(Color32::from_gray(170)),
+                        .size(12.0)
+                        .strong()
+                        .color(colour),
                     );
+                    let mut detail = format!(
+                        "    across: {}\n    down: {}",
+                        ruthos_dicom::UsRegion::describe_axis(r.units_x, r.delta_x),
+                        ruthos_dicom::UsRegion::describe_axis(r.units_y, r.delta_y)
+                    );
+                    if let Some(row) = r.baseline_row() {
+                        detail.push_str(&format!(
+                            "\n    baseline: image row {row} (reference pixel y {}, {:.2} cm/s)",
+                            r.ref_y0, r.ref_value_y
+                        ));
+                    }
+                    ui.label(egui::RichText::new(detail).size(11.5).color(colour));
                 }
                 ui.separator();
                 let scale = meta.image_scale();
@@ -1630,7 +1640,20 @@ impl ViewerState {
                             ));
                         }
                         None => {
-                            ui.label("Under the pointer: time axis, lengths are vertical only");
+                            let (x, y) = (p.0 as f64, p.1 as f64);
+                            match meta.velocity_at(x, y) {
+                                Some(v) => {
+                                    ui.label(format!(
+                                        "Under the pointer: spectral Doppler, {:.2} m/s. A point measures velocity; a line measures time.",
+                                        v.abs()
+                                    ));
+                                }
+                                None => {
+                                    ui.label(
+                                        "Under the pointer: M-mode. A line measures depth down and time across.",
+                                    );
+                                }
+                            }
                         }
                         _ => {}
                     }
