@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use egui::{Align2, Color32, FontId, Key, PointerButton, Pos2, Rect, Sense, Ui, Vec2, ViewportId};
 
-use ruthos_core::{ImageRow, SeriesRow, StudyRow};
+use ruthos_core::{ImageRow, MeasurementSet, SeriesRow, StudyRow};
 
 use ruthos_dicom::Frame;
 use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTransform};
@@ -25,7 +25,7 @@ use crate::icons;
 use crate::theme;
 use crate::icons::Bitmap;
 use crate::widgets::{
-    menu_check, menu_heading, menu_item, menu_item_enabled, shadow_text, thumbnail_cell, tool_menu_row, toolbar_caption,
+    menu_check, menu_heading, menu_item, menu_item_enabled, menu_item_shortcut, shadow_text, thumbnail_cell, tool_menu_row, toolbar_caption,
     toolbar_separator, ToolbarButton,
 };
 
@@ -89,6 +89,38 @@ impl Tool {
     }
 
     /// The Horos artwork for the tool.
+    /// Single-key shortcut, as shown in the Measurements menu.
+    pub fn shortcut(self) -> &'static str {
+        match self {
+            Tool::WindowLevel => "W",
+            Tool::Move => "M",
+            Tool::Zoom => "Z",
+            Tool::Rotate => "T",
+            Tool::Length => "L",
+            Tool::Angle => "A",
+            Tool::Rectangle => "B",
+            Tool::Oval => "E",
+            Tool::Arrow => "N",
+            Tool::Point => "P",
+        }
+    }
+
+    pub fn from_key(key: Key) -> Option<Tool> {
+        Some(match key {
+            Key::W => Tool::WindowLevel,
+            Key::M => Tool::Move,
+            Key::Z => Tool::Zoom,
+            Key::T => Tool::Rotate,
+            Key::L => Tool::Length,
+            Key::A => Tool::Angle,
+            Key::B => Tool::Rectangle,
+            Key::E => Tool::Oval,
+            Key::N => Tool::Arrow,
+            Key::P => Tool::Point,
+            _ => return None,
+        })
+    }
+
     pub fn bitmap(self) -> Bitmap {
         match self {
             Tool::WindowLevel => Bitmap::Wlww,
@@ -262,6 +294,15 @@ pub struct ViewerState {
     dev_selected: bool,
     /// Loupe settings, refreshed from Preferences each frame.
     loupe: LoupeSettings,
+    /// Measurement sets from Preferences, refreshed each frame.
+    sets: Vec<MeasurementSet>,
+    /// The set the Measurements menu names from.
+    current_set: usize,
+    show_rois: bool,
+    show_labels: bool,
+    basis_panel: bool,
+    /// A Measurements menu choice to carry out once `Shared` is at hand.
+    pending_menu: Option<MenuAction>,
     /// Where the loupe shows this frame, set by input handling.
     loupe_target: Option<LoupeTarget>,
     /// Previous geometry of edited measurements, newest last.
@@ -310,6 +351,28 @@ struct UndoEntry {
     id: Option<i64>,
     index: usize,
     kind: RoiKind,
+}
+
+/// What the Measurements menu (toolbar and right-click) can do. Both menus
+/// are drawn from the same list and the choice runs once per frame.
+#[derive(Debug, Clone, PartialEq)]
+enum MenuAction {
+    SetTool(Tool),
+    SetSet(usize),
+    Name(String),
+    NamePopup,
+    Undo,
+    DeleteSelected,
+    DeleteAll,
+    Calibrate,
+    RemoveCalibration,
+    ToggleBasisPanel,
+    ToggleRois,
+    ToggleLabels,
+    CopyValues,
+    AddToReport,
+    OpenReport,
+    Fit,
 }
 
 /// The popup that assigns a ROI to a named measurement.
@@ -386,6 +449,13 @@ impl ViewerState {
             dev_selected: false,
             loupe: LoupeSettings::default(),
             loupe_target: None,
+            sets: Vec::new(),
+            current_set: 0,
+            show_rois: true,
+            show_labels: true,
+            // Developer option: `RUTHOS_BASIS_PANEL=1` opens the calibration basis panel.
+            basis_panel: std::env::var_os("RUTHOS_BASIS_PANEL").is_some(),
+            pending_menu: None,
             undo: Vec::new(),
             playing: false,
             fps: 10.0,
@@ -884,6 +954,326 @@ impl ViewerState {
         self.dirty_rois.insert(key);
     }
 
+    /// The Measurements menu. The toolbar menu and the right-click menu are
+    /// both drawn from here; `with_view` adds the view items the right-click
+    /// menu carries.
+    fn measurements_menu(&mut self, ui: &mut Ui, with_view: bool) {
+        let key = self.current_key();
+        let selected = key.and_then(|k| self.rois.get(&k)).and_then(|l| self.selected_roi.and_then(|i| l.get(i)));
+        let has_selected = selected.is_some();
+        let selected_is_length = matches!(selected.map(|r| &r.kind), Some(RoiKind::Length { .. }));
+        let any_rois = key.and_then(|k| self.rois.get(&k)).is_some_and(|l| !l.is_empty());
+        let has_hand = key.and_then(|k| self.frames.get(&k)).is_some_and(|f| f.meta.hand_calibration.is_some() || f.meta.user_calibrated)
+            || self
+                .current_image()
+                .and_then(|i| ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique(("has-cal", i.id)))))
+                .unwrap_or(false);
+        let locked = self.active_locked();
+        let mut action: Option<MenuAction> = None;
+        let mut pick = |ui: &mut Ui, a: MenuAction| {
+            action = Some(a);
+            ui.close();
+        };
+
+        ui.menu_button("Tools", |ui| {
+            for t in Tool::ALL {
+                if menu_item_shortcut(ui, t.label(), t.shortcut(), self.tool == t, true).clicked() {
+                    pick(ui, MenuAction::SetTool(t));
+                }
+            }
+        });
+        if !self.sets.is_empty() {
+            ui.menu_button("Measurement set", |ui| {
+                for (i, set) in self.sets.iter().enumerate() {
+                    if menu_item(ui, set.name.as_str(), self.current_set == i).clicked() {
+                        pick(ui, MenuAction::SetSet(i));
+                    }
+                }
+            });
+        }
+        ui.add_enabled_ui(has_selected && !locked, |ui| {
+            ui.menu_button("Name selected measurement", |ui| {
+                let current = selected.and_then(|r| r.name.clone());
+                if let Some(set) = self.sets.get(self.current_set) {
+                    menu_heading(ui, &set.name);
+                    for item in &set.items {
+                        if menu_item(ui, item.as_str(), current.as_deref() == Some(item.as_str())).clicked() {
+                            pick(ui, MenuAction::Name(item.clone()));
+                        }
+                    }
+                    ui.separator();
+                }
+                if menu_item(ui, "Other name…", false).clicked() {
+                    pick(ui, MenuAction::NamePopup);
+                }
+            });
+        });
+        ui.separator();
+        if menu_item_shortcut(ui, "Undo edit", "Ctrl+Z", false, !self.undo.is_empty() && !locked).clicked() {
+            pick(ui, MenuAction::Undo);
+        }
+        if menu_item_shortcut(ui, "Delete selected", "Delete", false, has_selected && !locked).clicked() {
+            pick(ui, MenuAction::DeleteSelected);
+        }
+        if menu_item_enabled(ui, "Delete all on this image", false, any_rois && !locked).clicked() {
+            pick(ui, MenuAction::DeleteAll);
+        }
+        ui.separator();
+        ui.menu_button("Calibration", |ui| {
+            if menu_item_enabled(ui, "Calibrate from selected length…", false, selected_is_length).clicked() {
+                pick(ui, MenuAction::Calibrate);
+            }
+            if menu_item_enabled(ui, "Remove hand calibration", false, has_hand).clicked() {
+                pick(ui, MenuAction::RemoveCalibration);
+            }
+            if menu_item(ui, "Show calibration basis", self.basis_panel).clicked() {
+                pick(ui, MenuAction::ToggleBasisPanel);
+            }
+        });
+        ui.separator();
+        if menu_item(ui, "Show measurements", self.show_rois).clicked() {
+            pick(ui, MenuAction::ToggleRois);
+        }
+        if menu_item(ui, "Show labels", self.show_labels).clicked() {
+            pick(ui, MenuAction::ToggleLabels);
+        }
+        ui.separator();
+        if menu_item_shortcut(ui, "Copy values", "Ctrl+C", false, any_rois).clicked() {
+            pick(ui, MenuAction::CopyValues);
+        }
+        if menu_item_enabled(ui, "Add to report", false, has_selected).clicked() {
+            pick(ui, MenuAction::AddToReport);
+        }
+        if menu_item(ui, "Open report", false).clicked() {
+            pick(ui, MenuAction::OpenReport);
+        }
+        if with_view {
+            ui.separator();
+            if menu_item_shortcut(ui, "Fit image to window", "F", false, true).clicked() {
+                pick(ui, MenuAction::Fit);
+            }
+        }
+        if action.is_some() {
+            self.pending_menu = action;
+        }
+    }
+
+    /// Carry out the Measurements menu choice made this frame.
+    fn run_menu_action(&mut self, ui: &mut Ui, shared: &Shared) {
+        let Some(action) = self.pending_menu.take() else { return };
+        let key = self.current_key();
+        match action {
+            MenuAction::SetTool(t) => {
+                self.tool = t;
+                self.drag_draft = None;
+                self.angle_draft = None;
+                self.set_status(format!("Tool: {}", t.label()));
+            }
+            MenuAction::SetSet(i) => {
+                self.current_set = i;
+                if let Some(set) = self.sets.get(i) {
+                    self.set_status(format!("Measurement set: {}", set.name));
+                }
+            }
+            MenuAction::Name(name) => {
+                if let (Some(key), Some(sel)) = (key, self.selected_roi) {
+                    if let Some(roi) = self.rois.get_mut(&key).and_then(|l| l.get_mut(sel)) {
+                        roi.name = Some(name.clone());
+                        self.dirty_rois.insert(key);
+                        self.set_status(format!("Named {name}"));
+                    }
+                }
+            }
+            MenuAction::NamePopup => self.open_name_popup(ui),
+            MenuAction::Undo => self.undo_edit(),
+            MenuAction::DeleteSelected => {
+                if let (Some(key), Some(sel)) = (key, self.selected_roi) {
+                    if let Some(list) = self.rois.get_mut(&key) {
+                        if sel < list.len() {
+                            list.remove(sel);
+                            self.dirty_rois.insert(key);
+                        }
+                    }
+                    self.selected_roi = None;
+                }
+            }
+            MenuAction::DeleteAll => {
+                if let Some(key) = key {
+                    self.rois.remove(&key);
+                    self.selected_roi = None;
+                    self.dirty_rois.insert(key);
+                }
+            }
+            MenuAction::Calibrate => {
+                if let (Some(px), Some(img)) = (self.selected_length_px(), self.current_image()) {
+                    self.calibrate = Some(CalibrateDraft {
+                        image_id: img.id,
+                        pixel_length: px,
+                        known_mm: String::new(),
+                        apply_to_series: self.panes[self.active].images.len() > 1,
+                        scope: self.calibration_scope(),
+                    });
+                }
+            }
+            MenuAction::RemoveCalibration => {
+                if let Some(img) = self.current_image() {
+                    self.pending_clear_calibration = Some(img.id);
+                }
+            }
+            MenuAction::ToggleBasisPanel => self.basis_panel = !self.basis_panel,
+            MenuAction::ToggleRois => self.show_rois = !self.show_rois,
+            MenuAction::ToggleLabels => self.show_labels = !self.show_labels,
+            MenuAction::CopyValues => {
+                let text = self.values_tsv();
+                let n = text.lines().count().saturating_sub(1);
+                ui.ctx().copy_text(text);
+                self.set_status(format!("Copied {n} measurement{}", if n == 1 { "" } else { "s" }));
+            }
+            MenuAction::AddToReport => {
+                let named = key
+                    .and_then(|k| self.rois.get(&k))
+                    .and_then(|l| self.selected_roi.and_then(|i| l.get(i)))
+                    .is_some_and(|r| r.name.is_some());
+                if named {
+                    self.flush_rois(shared);
+                    shared.open_reports.lock().push(self.study.id);
+                } else {
+                    self.set_status("Name the measurement; named measurements go into the report");
+                    self.open_name_popup(ui);
+                }
+            }
+            MenuAction::OpenReport => {
+                self.flush_rois(shared);
+                shared.open_reports.lock().push(self.study.id);
+            }
+            MenuAction::Fit => self.panes[self.active].fit_pending = true,
+        }
+    }
+
+    /// Open the naming popup for the selected measurement, at its label if
+    /// it is on screen, else at the pointer.
+    fn open_name_popup(&mut self, ui: &Ui) {
+        let (Some(key), Some(sel)) = (self.current_key(), self.selected_roi) else { return };
+        let at_label = self.label_hits.iter().find(|(k, i, _)| *k == key && *i == sel).map(|(_, _, r)| r.left_bottom());
+        let pos = at_label
+            .or_else(|| ui.input(|i| i.pointer.latest_pos()))
+            .unwrap_or_else(|| ui.ctx().content_rect().center());
+        self.assign = Some(AssignPopup { key, index: sel, pos, custom: String::new() });
+    }
+
+    /// Every measurement on the current frame as tab-separated text:
+    /// name, value, unit, basis.
+    fn values_tsv(&self) -> String {
+        let mut out = String::from("Name\tValue\tUnit\tBasis\n");
+        let Some(key) = self.current_key() else { return out };
+        let Some(frame) = self.frames.get(&key) else { return out };
+        for roi in self.rois.get(&key).into_iter().flatten() {
+            let m = roi.measure(frame);
+            let name = roi.name.clone().unwrap_or_else(|| kind_label(&roi.kind).to_string());
+            let value = m.value.map(|v| format!("{v:.2}")).unwrap_or_default();
+            let basis = m.basis.map(|b| b.label()).or(m.issue.map(|i| i.label())).unwrap_or("");
+            out.push_str(&format!("{name}\t{value}\t{}\t{basis}\n", m.unit));
+        }
+        out
+    }
+
+    /// The calibration basis panel: what the file says about scale and
+    /// which basis the viewer chose for the current image.
+    fn basis_panel(&mut self, ui: &mut Ui) {
+        if !self.basis_panel {
+            return;
+        }
+        let Some(key) = self.current_key() else { return };
+        let Some(frame) = self.frames.get(&key).cloned() else { return };
+        let meta = &frame.meta;
+        let mut open = true;
+        egui::Window::new("Calibration basis")
+            .id(egui::Id::unique(("basis-panel", self.id)))
+            .open(&mut open)
+            .resizable(false)
+            .default_width(360.0)
+            .show(ui.ctx(), |ui| {
+                let pair = |v: Option<[f64; 2]>| v.map(|s| format!("{:.4} \\ {:.4} mm", s[0], s[1])).unwrap_or_else(|| "absent".into());
+                let rows: Vec<(String, String)> = vec![
+                    ("Modality".into(), meta.modality.clone()),
+                    ("Pixel Spacing (0028,0030)".into(), pair(meta.pixel_spacing_tag)),
+                    ("Imager Pixel Spacing (0018,1164)".into(), pair(meta.imager_pixel_spacing)),
+                    (
+                        "Magnification Factor (0018,1114)".into(),
+                        meta.magnification_factor.map(|m| format!("{m:.3}")).unwrap_or_else(|| "absent".into()),
+                    ),
+                    (
+                        "Calibration Type (0028,0A02)".into(),
+                        if meta.pixel_spacing_calibration_type.is_empty() { "absent".into() } else { meta.pixel_spacing_calibration_type.clone() },
+                    ),
+                    (
+                        "Ultrasound regions (0018,6011)".into(),
+                        if meta.us_regions.is_empty() { "none".into() } else { format!("{}", meta.us_regions.len()) },
+                    ),
+                    (
+                        "Hand calibration".into(),
+                        meta.hand_calibration
+                            .as_ref()
+                            .map(|h| {
+                                let scope = h.region.map(|r| format!(", region {}", r + 1)).unwrap_or_default();
+                                format!("{:.4} \\ {:.4} mm{scope}", h.spacing[0], h.spacing[1])
+                            })
+                            .unwrap_or_else(|| "none".into()),
+                    ),
+                ];
+                egui::Grid::new("basis-grid").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
+                    for (k, v) in &rows {
+                        ui.label(egui::RichText::new(k).color(Color32::from_gray(170)));
+                        ui.label(v);
+                        ui.end_row();
+                    }
+                });
+                for (i, r) in meta.us_regions.iter().enumerate() {
+                    let units = |u: u16| match u {
+                        3 => "cm",
+                        4 => "s",
+                        0 => "none",
+                        _ => "other",
+                    };
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "  Region {}: x {}..{} y {}..{}, {} across ({:.5}), {} down ({:.5})",
+                            i + 1,
+                            r.x0,
+                            r.x1,
+                            r.y0,
+                            r.y1,
+                            units(r.units_x),
+                            r.delta_x,
+                            units(r.units_y),
+                            r.delta_y
+                        ))
+                        .size(11.5)
+                        .color(Color32::from_gray(170)),
+                    );
+                }
+                ui.separator();
+                let scale = meta.image_scale();
+                ui.label(egui::RichText::new(format!("Chosen basis: {}", scale.basis.label())).strong());
+                ui.label(format!("{:.4} \\ {:.4} mm per pixel at the image centre", scale.spacing[0], scale.spacing[1]));
+                ui.label(egui::RichText::new(scale.basis.explanation()).size(11.5).color(Color32::from_gray(170)));
+                if let Some(p) = self.mouse_pixel {
+                    match meta.scale_at(p.0 as f64, p.1 as f64) {
+                        Some(s) if s.basis != scale.basis => {
+                            ui.label(format!("Under the pointer: {} ({:.4} \\ {:.4} mm)", s.basis.label(), s.spacing[0], s.spacing[1]));
+                        }
+                        None => {
+                            ui.label("Under the pointer: time axis, lengths are vertical only");
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        if !open {
+            self.basis_panel = false;
+        }
+    }
+
     /// The popup under a clicked measurement label.
     fn assign_popup(&mut self, ui: &mut Ui, shared: &Shared) {
         let Some(popup) = &self.assign else { return };
@@ -1046,7 +1436,14 @@ impl ViewerState {
 
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("viewer");
-        self.loupe = LoupeSettings::from(&*shared.settings.lock());
+        {
+            let st = shared.settings.lock();
+            self.loupe = LoupeSettings::from(&*st);
+            self.sets = st.measurement_sets.clone();
+        }
+        if self.current_set >= self.sets.len() {
+            self.current_set = 0;
+        }
         ui.style_mut().visuals = theme::viewer_visuals();
         if ui.input(|i| i.viewport().close_requested()) {
             self.persist_series_display(shared);
@@ -1084,6 +1481,8 @@ impl ViewerState {
             .frame(egui::Frame::NONE.fill(Color32::BLACK))
             .show(ui, |ui| self.image_area(ui, shared));
 
+        self.run_menu_action(ui, shared);
+        self.basis_panel(ui);
         self.assign_popup(ui, shared);
         self.calibrate_modal(ui, shared);
         self.flush_rois(shared);
@@ -1443,23 +1842,15 @@ impl ViewerState {
                     }
                 }
             }
-            let selected_length = self.selected_length_px();
-            if ToolbarButton::new(Bitmap::Length, "Calibrate")
-                .enabled(selected_length.is_some())
-                .tooltip("Draw a Length over something of known size, select it, then set its real length to calibrate this image")
-                .show(ui)
-                .clicked()
-            {
-                if let (Some(px), Some(img)) = (selected_length, self.current_image()) {
-                    self.calibrate = Some(CalibrateDraft {
-                        image_id: img.id,
-                        pixel_length: px,
-                        known_mm: String::new(),
-                        apply_to_series: self.panes[self.active].images.len() > 1,
-                        scope: self.calibration_scope(),
-                    });
-                }
-            }
+            // Measurements menu
+            ui.vertical(|ui| {
+                ui.add_space(2.0);
+                let icon = icons::image(ui.ctx(), Bitmap::Length, 18.0);
+                ui.menu_button((icon, egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
+                    self.measurements_menu(ui, false);
+                });
+                toolbar_caption(ui, "Measurements");
+            });
             if ToolbarButton::new(Bitmap::Export, "Export").tooltip("Export the current image as PNG or JPEG").show(ui).clicked() {
                 self.export_current(shared);
             }
@@ -1583,6 +1974,24 @@ impl ViewerState {
                 self.undo_edit();
             }
             return;
+        }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::C)) {
+            self.pending_menu = Some(MenuAction::CopyValues);
+            return;
+        }
+        // Single-letter tool shortcuts, as listed in the Measurements menu.
+        let plain = ui.input(|i| i.modifiers.is_none());
+        if plain {
+            let picked = ui.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none() => Tool::from_key(*key),
+                    _ => None,
+                })
+            });
+            if let Some(t) = picked {
+                self.pending_menu = Some(MenuAction::SetTool(t));
+                return;
+            }
         }
         // With a measurement selected, Tab and the arrows edit its points.
         if self.selected_roi.is_some() && !self.active_locked() {
@@ -1934,11 +2343,11 @@ impl ViewerState {
                 }
             }
         }
-        let hidden = self.study.teaching_answer_key && !self.reveal_answers;
+        let hidden = (self.study.teaching_answer_key && !self.reveal_answers) || !self.show_rois;
         if let Some(list) = self.rois.get(&key).filter(|_| !hidden) {
             for (i, roi) in list.iter().enumerate() {
                 let sel = active && self.selected_roi == Some(i);
-                let label = roi.draw(&painter, &transform, &frame, roi_color(sel), sel);
+                let label = roi.draw_opts(&painter, &transform, &frame, roi_color(sel), sel, self.show_labels);
                 if sel {
                     roi.draw_handles(&painter, &transform, Some(self.active_handle), roi_color(true));
                 }
@@ -2125,51 +2534,11 @@ impl ViewerState {
             self.panes[self.active].fit_pending = true;
         }
 
-        // Right-click menu: calibration and ROI housekeeping.
-        let selected_length = self.selected_length_px();
-        let current_image_id = self.current_image().map(|i| i.id);
-        let has_calibration = current_image_id
-            .and_then(|id| ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique(("has-cal", id)))))
-            .unwrap_or(false);
-        let mut open_calibrate = false;
-        let mut clear_calibration = false;
-        let mut delete_all = false;
+        // Right-click menu: the Measurements menu, plus the view.
         response.context_menu(|ui| {
-            if menu_item_enabled(ui, "Calibrate from selected length…", false, selected_length.is_some()).clicked() {
-                open_calibrate = true;
-                ui.close();
-            }
-            if menu_item_enabled(ui, "Remove user calibration", false, has_calibration || frame.meta.pixel_spacing_is_calibrated).clicked() {
-                clear_calibration = true;
-                ui.close();
-            }
-            ui.separator();
-            if menu_item(ui, "Delete all measurements on this image", false).clicked() {
-                delete_all = true;
-                ui.close();
-            }
-            if menu_item(ui, "Fit image to window", false).clicked() {
-                self.panes[self.active].fit_pending = true;
-                ui.close();
-            }
+            self.measurements_menu(ui, true);
         });
-        if open_calibrate {
-            if let (Some(px), Some(id)) = (selected_length, current_image_id) {
-                self.calibrate = Some(CalibrateDraft {
-                    image_id: id,
-                    pixel_length: px,
-                    known_mm: String::new(),
-                    apply_to_series: self.panes[self.active].images.len() > 1,
-                    scope: self.calibration_scope(),
-                });
-            }
-        }
-        if clear_calibration {
-            if let Some(id) = current_image_id {
-                self.pending_clear_calibration = Some(id);
-            }
-        }
-        if delete_all {
+        if false {
             self.rois.remove(key);
             self.selected_roi = None;
             self.dirty_rois.insert(*key);
@@ -2363,6 +2732,18 @@ fn parse_tiling(v: &str) -> Option<Tiling> {
     };
     let (r, c) = grid.split_once('x')?;
     Some(Tiling { mode, rows: r.parse().ok()?, cols: c.parse().ok()? })
+}
+
+/// The plain name of a measurement kind, for unnamed rows in copied values.
+fn kind_label(kind: &RoiKind) -> &'static str {
+    match kind {
+        RoiKind::Length { .. } => "Length",
+        RoiKind::Angle { .. } => "Angle",
+        RoiKind::Rect { .. } => "Rectangle",
+        RoiKind::Oval { .. } => "Oval",
+        RoiKind::Arrow { .. } => "Arrow",
+        RoiKind::Point { .. } => "Point",
+    }
 }
 
 fn steps_nonzero(steps: f32) -> bool {

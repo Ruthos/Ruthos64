@@ -474,8 +474,21 @@ pub fn menu_item(ui: &mut Ui, text: impl Into<egui::WidgetText>, selected: bool)
 }
 
 pub fn menu_item_enabled(ui: &mut Ui, text: impl Into<egui::WidgetText>, selected: bool, enabled: bool) -> Response {
+    menu_item_full(ui, text, "", selected, enabled)
+}
+
+/// A menu row with a keyboard shortcut shown at the right.
+pub fn menu_item_shortcut(ui: &mut Ui, text: impl Into<egui::WidgetText>, shortcut: &str, selected: bool, enabled: bool) -> Response {
+    menu_item_full(ui, text, shortcut, selected, enabled)
+}
+
+fn menu_item_full(ui: &mut Ui, text: impl Into<egui::WidgetText>, shortcut: &str, selected: bool, enabled: bool) -> Response {
     let galley = text.into().into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
-    let width = menu_item_width(ui, galley.size().x + 44.0);
+    let shortcut_galley = (!shortcut.is_empty()).then(|| {
+        egui::WidgetText::from(egui::RichText::new(shortcut).size(11.5)).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button)
+    });
+    let extra = shortcut_galley.as_ref().map(|g| g.size().x + 24.0).unwrap_or(0.0);
+    let width = menu_item_width(ui, galley.size().x + 44.0 + extra);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 24.0), if enabled { Sense::click() } else { Sense::hover() });
     if ui.is_rect_visible(rect) {
         let dark = ui.visuals().dark_mode;
@@ -503,6 +516,11 @@ pub fn menu_item_enabled(ui: &mut Ui, text: impl Into<egui::WidgetText>, selecte
             ui.painter().galley_with_override_text_color(pos, galley, color);
         } else {
             ui.painter().galley(pos, galley, color);
+        }
+        if let Some(g) = shortcut_galley {
+            let c = if hovered { Color32::from_white_alpha(200) } else { Color32::from_gray(140) };
+            let pos = Pos2::new(rect.right() - 12.0 - g.size().x, rect.center().y - g.size().y / 2.0);
+            ui.painter().galley_with_override_text_color(pos, g, c);
         }
     }
     response

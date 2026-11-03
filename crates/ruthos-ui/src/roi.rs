@@ -10,7 +10,6 @@ use ruthos_dicom::{Frame, MeasureIssue, SpacingBasis};
 use ruthos_render::ViewTransform;
 
 use crate::theme;
-use crate::widgets::shadow_text;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoiKind {
@@ -402,6 +401,19 @@ impl Roi {
     /// Draw the ROI and its label. Returns the label's screen rectangle, the
     /// click target for assigning the measurement a name.
     pub fn draw(&self, painter: &Painter, t: &ViewTransform, frame: &Frame, color: Color32, selected: bool) -> Option<Rect> {
+        self.draw_opts(painter, t, frame, color, selected, true)
+    }
+
+    /// Draw with or without the value label. Without it, the returned label
+    /// rectangle is empty so nothing can be clicked.
+    pub fn draw_opts(&self, painter: &Painter, t: &ViewTransform, frame: &Frame, color: Color32, selected: bool, labels: bool) -> Option<Rect> {
+        let shadow_text = |painter: &Painter, pos: Pos2, anchor: Align2, text: &str, font: FontId, color: Color32| -> Rect {
+            if labels {
+                crate::widgets::shadow_text(painter, pos, anchor, text, font, color)
+            } else {
+                Rect::NOTHING
+            }
+        };
         let stroke = Stroke::new(1.5, color);
         let pts: Vec<Pos2> = self.points().into_iter().map(|p| t.image_to_screen(p)).collect();
         let font = FontId::proportional(12.0);
