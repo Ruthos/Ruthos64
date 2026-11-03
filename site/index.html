@@ -162,10 +162,10 @@
       first for veterinary practice and teaching, from equine echocardiography to digital radiography.
     </p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/Ruthos-0.1.0-alpha-win64.zip">Download for Windows (64-bit)</a>
+      <a class="btn primary" href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.1-alpha/Ruthos-0.1.1-alpha-win64.zip">Download for Windows (64-bit)</a>
       <a class="btn" href="https://github.com/Ruthos/Ruthos64">Source on GitHub</a>
     </div>
-    <p class="meta">Version 0.1.0-alpha · Windows 10 version 1809 or later, 64-bit (x86-64) · 13 MB zip, nothing to install</p>
+    <p class="meta">Version 0.1.1-alpha · Windows 10 version 1809 or later, 64-bit (x86-64) · 13 MB zip, nothing to install</p>
     <figure class="shot">
       <img src="img/viewer-echo.jpg" width="1920" height="1163"
            alt="The Ruthos 2D viewer with two echocardiography loops side by side: a long-axis view with named Ao and VSD measurements, and a colour Doppler view.">
@@ -181,7 +181,7 @@
         <div class="card"><h3>Patient archive</h3><p>Import folders, files or drag-and-drop. A DICOM listener files what modalities send. Albums, smart albums, search, filters, thumbnails and a preview pane, as in Horos.</p></div>
         <div class="card"><h3>GPU viewer</h3><p>Window and level, the Horos colour tables, zoom, pan, rotate, flip, cine at the file's frame rate, and tiling of a series or of a whole study with per-cell locks.</p></div>
         <div class="card"><h3>Codecs</h3><p>Uncompressed, RLE, JPEG baseline, 12-bit and lossless, JPEG-LS and JPEG 2000, and files without a DICOM meta header.</p></div>
-        <div class="card"><h3>Measurements that state their scale</h3><p>Every length, angle and area says whether its millimetres come from an ultrasound region, a calibrated detector, the patient plane or a hand calibration.</p></div>
+        <div class="card"><h3>One caliper for 2D, M-mode and Doppler</h3><p>Distance in 2D, depth and time in M-mode, time, velocity and slope in spectral Doppler, all from the scale the scanner records. Name a measurement RR interval, PHT or VSD and the right quantity is stored.</p></div>
         <div class="card"><h3>Reports</h3><p>A report per study with named measurements, the LV M-mode block, calculations, findings and key images, exported to PDF.</p></div>
         <div class="card"><h3>Teaching copies</h3><p>Anonymisation by allowlist with derived identifiers, shifted dates and reviewed pixel masks, checked by an independent verification pass before anything is written.</p></div>
       </div>
@@ -196,7 +196,7 @@
       <div class="split">
         <div>
           <h3>Calibrated from the scanner</h3>
-          <p>Ultrasound lengths use the physical scale the scanner records for each region of the image. In an M-mode or Doppler strip, where time runs across, only vertical lengths are measured, and a line that crosses two regions is refused.</p>
+          <p>Ultrasound measurements use the physical scale the scanner records for each region of the image: centimetres in the 2D sector, depth and time in an M-mode strip, velocity and time in a spectral Doppler strip, with the Doppler baseline. A line that crosses two regions is refused, and every value says where its scale came from.</p>
           <p>Measurements can be named from your own sets (LV M-mode, 2D echo, radiography, orthopaedics) and carried into the report.</p>
         </div>
         <img src="img/database-echo.jpg" width="1920" height="1117" loading="lazy"
@@ -207,9 +207,9 @@
         <img src="img/viewer-ct.png" width="1250" height="780" loading="lazy"
              alt="The Ruthos viewer showing a head CT slice from the public CQ500 dataset with the Horos-style corner annotations.">
         <div>
-          <h3>Editing, loupe and LV M-mode</h3>
-          <p>Every measurement has handles you can drag or nudge a pixel at a time, with undo. A magnified loupe follows the pointer while you place a point. The LV M-mode tool takes four depths down one time column and gives IVS, LVID, LVFW and fractional shortening.</p>
-          <p>A library of definitions and calculations (Teichholz volumes, LA/Ao, VHS) can be edited, shared as a file and imported by colleagues.</p>
+          <h3>LV dimensions, areas and editing</h3>
+          <p>The LV tool takes four points along one line, in M-mode or 2D, and gives IVS, LVID, LVFW and fractional shortening, for as many cycles as you measure, with the mean in the report. Rectangle, ellipse and polygon areas work on colour images. Every point can be dragged anywhere, nudged a pixel at a time, or undone, with a magnified loupe while you place it.</p>
+          <p>A library of definitions and calculations (Teichholz volumes, LA/Ao, E/A, peak gradients, heart rate, MVA by pressure half-time, VHS) can be edited, shared as a file and imported by colleagues.</p>
         </div>
       </div>
     </div>
@@ -222,7 +222,7 @@
       <table>
         <thead><tr><th>Platform</th><th>Status</th><th>Get it</th></tr></thead>
         <tbody>
-          <tr><td>Windows 10 (1809) and 11, 64-bit (x86-64)</td><td class="ok">0.1.0-alpha available</td><td><a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/Ruthos-0.1.0-alpha-win64.zip"><strong>Ruthos-0.1.0-alpha-win64.zip</strong></a> (13 MB) · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/SHA256SUMS.txt">SHA256SUMS.txt</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">all releases</a></td></tr>
+          <tr><td>Windows 10 (1809) and 11, 64-bit (x86-64)</td><td class="ok">0.1.1-alpha available</td><td><a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.1-alpha/Ruthos-0.1.1-alpha-win64.zip"><strong>Ruthos-0.1.1-alpha-win64.zip</strong></a> (13 MB) · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.1-alpha/SHA256SUMS.txt">SHA256SUMS.txt</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">all releases</a></td></tr>
           <tr><td>macOS 11 and later, Apple Silicon and Intel</td><td class="plan">In preparation; the code already builds and tests on macOS</td><td>Not yet</td></tr>
           <tr><td>Linux, 64-bit</td><td class="plan">Builds and tests in CI; community supported</td><td><a href="https://github.com/Ruthos/Ruthos64#building">Build from source</a></td></tr>
         </tbody>
@@ -232,8 +232,8 @@
         <div>
           <h3>Install</h3>
           <ol class="steps">
-            <li>Download <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/Ruthos-0.1.0-alpha-win64.zip">Ruthos-0.1.0-alpha-win64.zip</a> and unzip it anywhere.</li>
-            <li>This alpha is not code-signed yet, so Windows SmartScreen may say it protected your PC: choose <em>More info</em>, then <em>Run anyway</em>. A PC with Smart App Control switched on will refuse it until the signed release.</li>
+            <li>Download <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.1-alpha/Ruthos-0.1.1-alpha-win64.zip">Ruthos-0.1.1-alpha-win64.zip</a> and unzip it anywhere.</li>
+            <li>Releases are not code-signed yet, so Windows SmartScreen may say it protected your PC: choose <em>More info</em>, then <em>Run anyway</em>. A PC with Smart App Control switched on will refuse it until signed releases begin.</li>
             <li>Run <code>ruthos.exe</code>. Nothing is installed and no administrator rights are needed.</li>
             <li>To receive from a modality, turn the listener on in Preferences &gt; Listener (AE title RUTHOS, port 11112) and allow Ruthos through Windows Firewall.</li>
           </ol>
@@ -250,7 +250,7 @@
 
       <h3 style="margin-top:32px">Verify a download</h3>
       <p class="sub" style="margin-bottom:12px">Every release lists SHA-256 checksums in <code>SHA256SUMS.txt</code>, and each file carries a GitHub build-provenance attestation recording the commit and workflow that built it.</p>
-      <pre>gh attestation verify Ruthos-0.1.0-alpha-win64.zip --repo Ruthos/Ruthos64</pre>
+      <pre>gh attestation verify Ruthos-0.1.1-alpha-win64.zip --repo Ruthos/Ruthos64</pre>
     </div>
   </section>
 
@@ -302,7 +302,7 @@
           <li>Committers and reviewers: Mark Bowen</li>
           <li>Approvers of signing requests: Mark Bowen</li>
         </ul>
-        <p class="sub" style="font-size:15px">The first alpha is not yet signed; Windows SmartScreen warns on first run. Signed builds follow from the next version.</p>
+        <p class="sub" style="font-size:15px">Code signing is not set up yet: current alpha releases are unsigned, so Windows SmartScreen warns on first run and Smart App Control refuses them. Signed builds through the SignPath Foundation follow once the project is accepted.</p>
       </div>
       <div>
         <h2>Privacy</h2>
@@ -329,7 +329,7 @@
 <footer>
   <div class="wrap">
     <span>Ruthos, by the Ruthos contributors. LGPL-3.0-only.</span>
-    <span><a href="https://github.com/Ruthos/Ruthos64">GitHub</a> · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.0-alpha/Ruthos-0.1.0-alpha-win64.zip">Download (64-bit)</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">Releases</a> · <a href="#signing">Code signing policy</a> · <a href="#signing">Privacy</a></span>
+    <span><a href="https://github.com/Ruthos/Ruthos64">GitHub</a> · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.1-alpha/Ruthos-0.1.1-alpha-win64.zip">Download (64-bit)</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">Releases</a> · <a href="#signing">Code signing policy</a> · <a href="#signing">Privacy</a></span>
   </div>
 </footer>
 
