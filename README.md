@@ -4,7 +4,7 @@
 
 Ruthos is a community project to bring the Horos / OsiriX experience to Windows: the same database window, the same 2D viewer, the same tools, the same corner annotations, built as a single native binary on a modern GPU stack. It is not a port of Horos. Horos is Objective-C and Cocoa to the bone, so Ruthos re-implements its feature set and user interface on top of Rust libraries.
 
-> **Status: alpha.** It works end to end on real studies and is rough in places. Today it is a patient archive with a working 2D viewer: import folders, files or pictures, a DICOM listener that receives from modalities straight into the archive, a Horos-style database window with albums, smart albums, thumbnails and a preview pane, a GPU viewer with window/level, CLUTs, zoom, pan, rotate, flip, cine, tiling, calibrated measurements (DICOM and ultrasound regions), named measurements and reports to PDF. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
+> **Status: alpha.** It works end to end on real studies and is rough in places. Tier 1, the complete 2D viewer, is done: a patient archive that imports folders, files, pictures, watch folders and whole Horos databases; a DICOM listener, PACS query/retrieve, send and automatic routing; a Horos-style database window with albums, smart albums, thumbnails and a preview pane; a GPU viewer with window/level, CLUTs, zoom, pan, rotate, flip, cine, tiling and the Horos measurement tools, calibrated from DICOM and ultrasound regions, with ROI Manager, ROI Info, histograms and plots; reports to PDF; anonymised teaching copies; and export to DICOM, PNG, JPEG and MP4. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
 
 ![The database window](docs/screenshots/database.png)
 
@@ -40,7 +40,7 @@ The annotation layout follows the Horos defaults:
 | Bottom right | MRI timing (TE/TR), field strength, acquisition date |
 | Edge midpoints | Orientation letters |
 
-**Tool palette.** The 2D tools from Horos: window/level, zoom, pan, rotate, length, angle, Cobb angle, dynamic angle, rectangle, oval, open and closed polygon, pencil, point, text, arrow, brush ROI, repulsor and ROI selector.
+**Tool palette.** The 2D tools from Horos: window/level, zoom, pan, rotate, caliper (length, time, velocity), LV dimensions, angle, Cobb angle, dynamic angle, rectangle, ellipse, open and closed polygon, pencil, point, text, arrow, brush ROI and repulsor; selecting, moving and editing any measurement by its handles.
 
 Colour lookup tables and volume-rendering presets are read directly from the Horos definition files, so "Hot Iron", "Jet", "VR Bones" and the rest look the same.
 
@@ -48,21 +48,21 @@ Colour lookup tables and volume-rendering presets are read directly from the Hor
 
 Work is organised in tiers. Each tier is usable on its own.
 
-### Tier 1: a complete 2D viewer
+### Tier 1: a complete 2D viewer (done)
 
-- ### Import files and folders into a local database; watch folders
-- ### Database window with albums, smart albums, search and filters
-- ### 2D viewer: window/level, presets, CLUTs, zoom, pan, rotate, flip, scroll, cine
-- ### Multi-series tiling, sync and propagate settings
-- ### Measurement and ROI tools with the ROI inspector and ROI manager
+- Import files and folders into a local database; watch folders
+- Import an existing Horos or OsiriX database, including albums, smart albums, comments, status and key images (see `docs/moving-from-horos.md`)
+- Database window with albums, smart albums, search and filters
+- 2D viewer: window/level, presets, CLUTs, zoom, pan, rotate, flip, scroll, cine
+- Multi-series tiling, sync and propagate settings
+- Measurement and ROI tools with ROI Info and the ROI Manager
 - Key images, comments and study state
-- Hounsfield and pixel value readout, histograms and plots
-- DICOM listener (C-STORE SCP), send (C-STORE SCU), query/retrieve (C-FIND, C-MOVE), echo
+- Pixel value readout, histograms and line plots
+- DICOM listener (C-STORE SCP), send (C-STORE SCU), query/retrieve (C-FIND, C-GET, C-MOVE), echo and automatic routing (see `docs/pacs.md`)
 - Export to DICOM, JPEG, PNG and MP4
-- ### Measurements with a stated scale basis, editable handles with undo, a GPU loupe, a Measurements menu, an LV M-mode tool with fractional shortening, and a library of definitions, sets and calculations with JSON import and export (see `docs/measurements.md`)
-- ### Anonymisation for teaching: allowlist header profile, derived UIDs, shifted dates, ultrasound-region and template pixel masking with review, named teaching cases, sidecar for measurements, independent verification pass (see `docs/anonymiser.md`)
-- ### Preferences window
-- Import an existing Horos database folder, including albums, comments and key images
+- Measurements with a stated scale basis, editable handles with undo, a GPU loupe, a Measurements menu, an LV tool with fractional shortening in M-mode and 2D, and a library of definitions, sets and calculations with JSON import and export (see `docs/measurements.md`)
+- Anonymisation for teaching: allowlist header profile, derived UIDs, shifted dates, ultrasound-region and template pixel masking with review, named teaching cases, sidecar for measurements, independent verification pass (see `docs/anonymiser.md`)
+- Preferences window
 
 ### Tier 2: 3D
 
