@@ -1,22 +1,15 @@
-# Ruthos 0.1.3-alpha
+# Ruthos 0.1.4-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
-## New in 0.1.3-alpha
+## New in 0.1.4-alpha
 
-This release completes Tier 1 of the roadmap, the complete 2D viewer.
+- **MPR: orthogonal and oblique.** The MPR button in the viewer opens a CT, MR or cone-beam series as three linked planes (axial, coronal and sagittal for an axial study) meeting at a crosshair. Drag a coloured line to move that plane, the crossing to move two, or a round handle to tilt the planes into oblique views; the wheel steps through a plane. Thick slabs up to 60 mm with MIP, MinIP or mean. Each pane names its plane, gives its position and labels its edges; the status line reads the value and patient position under the pointer. The guide is `docs/mpr.md`.
+- **The dial** (Windows). A Surface Dial, an ASUS Dial or a ProArt DialPad set to Microsoft Wheel Device steps frames and slices and fine-tunes window width and level, a measurement point and the loupe; a press changes the mode and the mode and value show on the image. Turn it on and choose its modes in Preferences > Viewer > Dial. Every action also has a keyboard shortcut (Ctrl+Shift with the arrows and page keys, Alt+Left/Right, Ctrl+Shift+M), and a DialPad that cannot act as a wheel device can be mapped to them in ProArt Creator Hub. The guide is `docs/dial.md`.
 
-- **Import a Horos database.** File > Import Horos Database reads a Horos or OsiriX library (the Horos Data folder copied from the Mac) and brings its studies over with their albums, smart albums, comments, status, key images and the dates they were added. You can copy the images into Ruthos or use them where they are. Horos's files are never changed, and running the import again only adds what is new. Smart albums whose rule Ruthos cannot express yet are listed with the rule; Horos report files and Horos's own saved measurements are counted and left behind. The guide is `docs/moving-from-horos.md`.
-- **Export a movie.** The Movie button in the viewer saves the current loop, or the series, as an MP4 (H.264) at the cine speed with the current window and colour table, for PowerPoint, teaching and messages.
-- **More tools:** Cobb angle, the angle between two lines (Horos's dynamic angle), open polygon (a length along a curve), pencil (a freehand outline), brush (paint a region; Alt erases, [ and ] size it), text notes, and the repulsor for reshaping outlines.
-- **ROI Manager and ROI Info** (Measurements menu). The manager lists every measurement on the image to select or delete; ROI Info shows the selected one's name, value, pixel count, mean, SD, min and max, area, perimeter and scale.
-- **Histogram and plot.** The histogram of the values inside an area, the values along a line or open polygon, or the whole image's histogram, with the mean and SD marked; on CT the values are Hounsfield units. Copy values puts the numbers on the clipboard.
-- **Watch folders** (Preferences > Watch folders). New DICOM files that appear in folders you choose (a modality's export share, a CR reader's output folder) are imported automatically, once each, after they have finished copying. The files are never moved or deleted.
+## Previously, in 0.1.3-alpha
 
-## Previously, in 0.1.2-alpha
-
-- PACS set-up with presets and a connection test, Query/Retrieve by study and series, Send, and automatic routing.
-- Anonymise for Teaching no longer stalls verifying large echo loops, and Cancel works.
+- Import of a whole Horos or OsiriX database, MP4 movies of loops, the remaining Horos 2D tools with ROI Manager and ROI Info, histograms and line plots, and watch folders.
 
 ## What works
 
@@ -24,6 +17,7 @@ This release completes Tier 1 of the roadmap, the complete 2D viewer.
 - **PACS.** Connection test, Query/Retrieve by study and series (C-FIND, C-GET, C-MOVE), Send (C-STORE) with conversion where needed, and automatic routing rules, all set up in Preferences with plain-language errors. The user guide is `docs/pacs.md`.
 - **Codecs.** Uncompressed, RLE, deflate, JPEG baseline and 12-bit, JPEG lossless, JPEG-LS and JPEG 2000. Files without a meta header are accepted.
 - **Viewer.** GPU window/level and the Horos colour lookup tables, zoom, pan, rotate, flip, cine at the file's frame rate, tiling of a series or of a study, per-cell lock, Horos corner annotations, key images, export to PNG, JPEG and MP4.
+- **MPR.** Orthogonal and oblique planes through CT, MR and cone-beam series, with thick slab MIP, MinIP and mean.
 - **Measurements.** Caliper (distance, time, velocity), LV dimensions in M-mode and 2D with fractional shortening, angle, Cobb angle, angle between two lines, open polygon, rectangle, ellipse, polygon, pencil and brush areas, arrow, point and text, with ROI Manager, ROI Info, histograms and line plots. Every value states its scale basis (ultrasound region, calibrated pixel spacing, patient plane, estimated magnification, detector plane, hand calibration or uncalibrated) and the report flags values that are not at the patient's scale. Handles on every measurement with keyboard nudging and undo, a GPU loupe while placing points, a Measurements menu, and a library of definitions, sets and calculations (Teichholz, LA/Ao, VHS and more) that is edited in Preferences and shared as JSON.
 - **Reports.** A report per study with the named measurements, the LV M-mode block, calculations, findings and conclusion, exported to PDF with the key images.
 - **Anonymisation for teaching.** Teaching copies built by allowlist with derived UIDs, shifted dates, pixel masking of ultrasound regions or saved templates with review, a named teaching case register, a sidecar that carries measurements, and an independent verification pass before anything is written.
@@ -52,7 +46,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.3-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.4-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed yet: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
