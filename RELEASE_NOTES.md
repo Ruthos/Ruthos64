@@ -1,22 +1,25 @@
-# Ruthos 0.1.1-alpha
+# Ruthos 0.1.2-alpha
 
 The first public build of Ruthos, a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
-## New in 0.1.1-alpha
+## New in 0.1.2-alpha
 
-- **One caliper, many quantities.** The Length tool is now the Caliper. In a 2D image it measures distance; in an M-mode strip depth and time; in a spectral Doppler strip time, the velocity at each end and the slope. A point in a Doppler strip gives velocity and the 4v² gradient. The scale comes from the ultrasound regions the scanner writes.
-- **The name decides what is recorded.** Name a caliper RR interval and the time is stored (with the heart rate shown); AR or MV pressure half-time and the half-time is stored with its slope; VSD and the distance is stored. Where a quantity is not available the label says so instead of recording something else.
-- **LV dimensions in 2D as well as M-mode,** with several sets per image. Each systole pairs with its diastole (left to right in M-mode, across frames in a 2D loop), FS is shown per set, and the report gives every set and the mean.
-- **Measurement points move freely.** Drag an end anywhere to rotate, shorten or lengthen a line; LV inner points stay on the line. Grabbing a point now works first time: the press position is used, not where the pointer is once the drag starts.
-- **Areas:** rectangle, ellipse and a new polygon, computed from the outline, so colour ultrasound shows an area too.
-- **Tools and Measurements menus side by side:** Tools holds the mouse tools and one Measure row; Measurements picks what Measure draws.
-- **Doppler set and calculations:** MV E and A, deceleration time and slope, MV and AR pressure half-time, Ao, PA, MR, TR and AR Vmax, RR interval; E/A, heart rate, MVA by pressure half-time and peak gradients. Repeated measurements are averaged in the report.
-- The calibration basis panel names every unit and shows the Doppler baseline.
-- **Fixed:** the anonymiser occasionally refused a valid teaching copy when the random date shift moved one date exactly onto another original date of the study (a study date onto the birth date, say). A correctly shifted date is now recognised as such; an unshifted original date is still refused.
+- **PACS set-up without the jargon.** Preferences > PACS shows this computer's AE title, address and port, with a button that copies them as a message for your PACS administrator. Add a PACS from a preset (Orthanc, Horos or OsiriX, dcm4chee, Conquest), press Test, and Ruthos says what worked or what to change.
+- **Query/Retrieve.** One search box for patient name or ID or accession, date presets and modality. Each result shows whether the study is already in the database, with retrieval progress, Cancel, Retry with the reason, and Open once imported. Retrieval uses C-GET, or C-MOVE when the listener is on.
+- **Browse by series.** The arrow beside a study lists its series with modality, description and image count, each with its own Retrieve.
+- **Send to a PACS** from the database window, with progress and the reason for any image the PACS refused. Compressed images are converted when the PACS accepts only uncompressed ones.
+- **Automatic routing** (Preferences > Routing). Rules read as a sentence: when images arrive over the network (or from any import), of these modalities, send them to this PACS. A study is sent once it has been quiet for five seconds, failures are retried three times, and a study retrieved from a PACS is never sent back to it. Recent activity lists what happened.
+- **Fixed:** Anonymise for Teaching could sit at "verifying" for a very long time on a study of large echo loops, and Cancel did nothing. Verification now skips pixel data (24 loops, 860 MB, in under a second), shows progress image by image, and Cancel stops the copy and cleans up.
+
+## Previously, in 0.1.1-alpha
+
+- One caliper for distance, time and velocity in 2D, M-mode and spectral Doppler; the measurement name decides what is recorded.
+- LV dimensions in 2D as well as M-mode, several sets per image; measurement points that move freely; polygon areas; the Doppler set and calculations; Tools and Measurements menus side by side.
 
 ## What works
 
 - **Archive.** Import folders, files or drag-and-drop; a DICOM listener (C-STORE SCP, AE title RUTHOS, port 11112), off until you turn it on in Preferences, that files what modalities send; a Horos-style database window with albums, smart albums, the built-in Horos albums, search and filters, series thumbnails and a preview pane.
+- **PACS.** Connection test, Query/Retrieve by study and series (C-FIND, C-GET, C-MOVE), Send (C-STORE) with conversion where needed, and automatic routing rules, all set up in Preferences with plain-language errors. The user guide is `docs/pacs.md`.
 - **Codecs.** Uncompressed, RLE, deflate, JPEG baseline and 12-bit, JPEG lossless, JPEG-LS and JPEG 2000. Files without a meta header are accepted.
 - **Viewer.** GPU window/level and the Horos colour lookup tables, zoom, pan, rotate, flip, cine at the file's frame rate, tiling of a series or of a study, per-cell lock, Horos corner annotations, key images, export to PNG and JPEG.
 - **Measurements.** Caliper (distance, time, velocity), LV dimensions in M-mode and 2D with fractional shortening, angle, rectangle, ellipse and polygon areas, arrow and point. Every value states its scale basis (ultrasound region, calibrated pixel spacing, patient plane, estimated magnification, detector plane, hand calibration or uncalibrated) and the report flags values that are not at the patient's scale. Handles on every measurement with keyboard nudging and undo, a GPU loupe while placing points, a Measurements menu, and a library of definitions, sets and calculations (Teichholz, LA/Ao, VHS and more) that is edited in Preferences and shared as JSON.
@@ -27,7 +30,7 @@ The first public build of Ruthos, a Horos-inspired DICOM viewer and patient arch
 
 ## Not yet
 
-- DICOM send and query/retrieve.
+- Query by worklist (Modality Worklist) and storage commitment.
 - Importing an existing Horos database.
 - Anything 3D.
 - A signed installer. This build is an unsigned zip: Windows SmartScreen will warn on first run, and a PC with Smart App Control in enforce mode will refuse it. Building from source avoids both.
@@ -47,7 +50,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.1-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.2-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed yet: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
