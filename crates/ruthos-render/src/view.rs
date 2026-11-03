@@ -61,7 +61,11 @@ impl ViewTransform {
             rect,
             image_w,
             image_h,
-            aspect: if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 },
+            aspect: if aspect.is_finite() && aspect > 0.0 {
+                aspect
+            } else {
+                1.0
+            },
             state,
         }
     }
@@ -184,11 +188,13 @@ mod tests {
     #[test]
     fn loupe_centres_the_point_and_scales() {
         let rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(400.0, 300.0));
-        let mut state = ViewState::default();
-        state.zoom = 1.5;
-        state.pan = Vec2::new(7.0, -3.0);
-        state.rotation_deg = 90.0;
-        state.flip_horizontal = true;
+        let state = ViewState {
+            zoom: 1.5,
+            pan: Vec2::new(7.0, -3.0),
+            rotation_deg: 90.0,
+            flip_horizontal: true,
+            ..Default::default()
+        };
         let t = ViewTransform::new(rect, 512, 512, 1.0, state);
         let loupe_rect = Rect::from_min_size(Pos2::new(600.0, 100.0), Vec2::splat(160.0));
         let centre = Vec2::new(123.25, 400.5);

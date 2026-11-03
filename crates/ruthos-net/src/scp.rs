@@ -32,11 +32,26 @@ pub struct ListenerConfig {
 
 #[derive(Debug, Clone)]
 pub enum NetEvent {
-    Started { port: u16, ae_title: String },
-    Association { peer_ae: String, peer_addr: String },
-    Stored { path: PathBuf, sop_instance_uid: String, peer_ae: String },
-    Echo { peer_ae: String },
-    Released { peer_ae: String, stored: usize },
+    Started {
+        port: u16,
+        ae_title: String,
+    },
+    Association {
+        peer_ae: String,
+        peer_addr: String,
+    },
+    Stored {
+        path: PathBuf,
+        sop_instance_uid: String,
+        peer_ae: String,
+    },
+    Echo {
+        peer_ae: String,
+    },
+    Released {
+        peer_ae: String,
+        stored: usize,
+    },
     Error(String),
     Stopped,
 }
@@ -213,10 +228,16 @@ fn handle_association(stream: TcpStream, config: &ListenerConfig, tx: &Sender<Ne
                                         data: bytes,
                                     }],
                                 })?;
-                                let _ = tx.send(NetEvent::Echo { peer_ae: peer_ae.clone() });
+                                let _ = tx.send(NetEvent::Echo {
+                                    peer_ae: peer_ae.clone(),
+                                });
                             } else {
                                 msgid = cmd.element(tags::MESSAGE_ID)?.to_int()?;
-                                sop_class_uid = cmd.element(tags::AFFECTED_SOP_CLASS_UID)?.to_str()?.trim_end_matches('\0').to_string();
+                                sop_class_uid = cmd
+                                    .element(tags::AFFECTED_SOP_CLASS_UID)?
+                                    .to_str()?
+                                    .trim_end_matches('\0')
+                                    .to_string();
                                 sop_instance_uid = cmd
                                     .element(tags::AFFECTED_SOP_INSTANCE_UID)?
                                     .to_str()?
@@ -304,7 +325,11 @@ fn store_instance<A: Association>(
         .ok_or_else(|| anyhow::anyhow!("unknown transfer syntax {ts_uid}"))?;
 
     let obj = InMemDicomObject::read_dataset_with_ts(data, ts)?;
-    let sop_class = obj.element(tags::SOP_CLASS_UID)?.to_str()?.trim_end_matches('\0').to_string();
+    let sop_class = obj
+        .element(tags::SOP_CLASS_UID)?
+        .to_str()?
+        .trim_end_matches('\0')
+        .to_string();
     let sop_instance = obj
         .element(tags::SOP_INSTANCE_UID)
         .ok()
@@ -332,7 +357,13 @@ fn store_instance<A: Association>(
 fn safe_filename(s: &str) -> String {
     let cleaned: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if cleaned.is_empty() {
         format!("instance-{}", std::process::id())
@@ -350,18 +381,34 @@ fn create_cstore_response(
     InMemDicomObject::command_from_element_iter([
         DataElement::new(tags::AFFECTED_SOP_CLASS_UID, VR::UI, dicom_value!(Str, sop_class_uid)),
         DataElement::new(tags::COMMAND_FIELD, VR::US, dicom_value!(U16, [0x8001])),
-        DataElement::new(tags::MESSAGE_ID_BEING_RESPONDED_TO, VR::US, dicom_value!(U16, [message_id])),
+        DataElement::new(
+            tags::MESSAGE_ID_BEING_RESPONDED_TO,
+            VR::US,
+            dicom_value!(U16, [message_id]),
+        ),
         DataElement::new(tags::COMMAND_DATA_SET_TYPE, VR::US, dicom_value!(U16, [0x0101])),
         DataElement::new(tags::STATUS, VR::US, dicom_value!(U16, [status])),
-        DataElement::new(tags::AFFECTED_SOP_INSTANCE_UID, VR::UI, dicom_value!(Str, sop_instance_uid)),
+        DataElement::new(
+            tags::AFFECTED_SOP_INSTANCE_UID,
+            VR::UI,
+            dicom_value!(Str, sop_instance_uid),
+        ),
     ])
 }
 
 fn create_cecho_response(message_id: u16) -> InMemDicomObject<StandardDataDictionary> {
     InMemDicomObject::command_from_element_iter([
-        DataElement::new(tags::AFFECTED_SOP_CLASS_UID, VR::UI, dicom_value!(Str, uids::VERIFICATION)),
+        DataElement::new(
+            tags::AFFECTED_SOP_CLASS_UID,
+            VR::UI,
+            dicom_value!(Str, uids::VERIFICATION),
+        ),
         DataElement::new(tags::COMMAND_FIELD, VR::US, dicom_value!(U16, [0x8030])),
-        DataElement::new(tags::MESSAGE_ID_BEING_RESPONDED_TO, VR::US, dicom_value!(U16, [message_id])),
+        DataElement::new(
+            tags::MESSAGE_ID_BEING_RESPONDED_TO,
+            VR::US,
+            dicom_value!(U16, [message_id]),
+        ),
         DataElement::new(tags::COMMAND_DATA_SET_TYPE, VR::US, dicom_value!(U16, [0x0101])),
         DataElement::new(tags::STATUS, VR::US, dicom_value!(U16, [0x0000])),
     ])

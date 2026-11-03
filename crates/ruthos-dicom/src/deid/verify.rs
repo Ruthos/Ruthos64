@@ -54,7 +54,18 @@ pub struct Finding {
     pub overridable: bool,
 }
 
-const STRING_VRS: [VR; 10] = [VR::PN, VR::LO, VR::SH, VR::ST, VR::LT, VR::UT, VR::CS, VR::AE, VR::UC, VR::UR];
+const STRING_VRS: [VR; 10] = [
+    VR::PN,
+    VR::LO,
+    VR::SH,
+    VR::ST,
+    VR::LT,
+    VR::UT,
+    VR::CS,
+    VR::AE,
+    VR::UC,
+    VR::UR,
+];
 
 fn text_of(obj: &InMemDicomObject, tag: Tag) -> Vec<String> {
     obj.get(tag)
@@ -88,13 +99,19 @@ pub fn collect_context(src: &InMemDicomObject) -> VerifyContext {
             push_words(&mut ctx.tokens, &v);
         }
     }
-    for tag in [tags::PATIENT_ID, OTHER_PATIENT_IDS, tags::ACCESSION_NUMBER, tags::INSTITUTION_NAME, tags::STATION_NAME, tags::DEVICE_SERIAL_NUMBER] {
+    for tag in [
+        tags::PATIENT_ID,
+        OTHER_PATIENT_IDS,
+        tags::ACCESSION_NUMBER,
+        tags::INSTITUTION_NAME,
+        tags::STATION_NAME,
+        tags::DEVICE_SERIAL_NUMBER,
+    ] {
         for v in text_of(src, tag) {
             let v = v.trim();
             if !v.is_empty() && !ctx.tokens.iter().any(|t| t.eq_ignore_ascii_case(v)) {
                 ctx.tokens.push(v.to_string());
             }
-
         }
     }
     if let Some(seq) = src.get(OTHER_PATIENT_IDS_SEQUENCE).and_then(|e| e.value().items()) {
@@ -112,7 +129,8 @@ pub fn collect_context(src: &InMemDicomObject) -> VerifyContext {
         .flat_map(|t| text_of(src, *t))
         .map(|v| v.trim().to_string())
         .collect();
-    ctx.tokens.retain(|t| !retained.iter().any(|r| r.eq_ignore_ascii_case(t) || token_hit(t, r)));
+    ctx.tokens
+        .retain(|t| !retained.iter().any(|r| r.eq_ignore_ascii_case(t) || token_hit(t, r)));
     collect_uids_and_dates(src, &mut ctx);
     ctx
 }
@@ -181,7 +199,13 @@ pub fn verify_text(label: &str, text: &str, ctx: &VerifyContext, overridable: bo
     }
     for u in &ctx.original_uids {
         if text.contains(u.as_str()) {
-            out.push(Finding { file: String::new(), path: label.to_string(), what: "original UID".into(), matched: u.clone(), overridable: false });
+            out.push(Finding {
+                file: String::new(),
+                path: label.to_string(),
+                what: "original UID".into(),
+                matched: u.clone(),
+                overridable: false,
+            });
         }
     }
     out
@@ -193,7 +217,13 @@ pub fn verify_file(path: &Path, ctx: &VerifyContext) -> Vec<Finding> {
     let obj = match crate::open::open_any(path, None) {
         Ok(o) => o,
         Err(e) => {
-            return vec![Finding { file, path: String::new(), what: format!("cannot be read back: {e}"), matched: String::new(), overridable: false }];
+            return vec![Finding {
+                file,
+                path: String::new(),
+                what: format!("cannot be read back: {e}"),
+                matched: String::new(),
+                overridable: false,
+            }];
         }
     };
     let mut out = Vec::new();
@@ -201,7 +231,13 @@ pub fn verify_file(path: &Path, ctx: &VerifyContext) -> Vec<Finding> {
     let meta = obj.meta();
     let msi = meta.media_storage_sop_instance_uid.trim_end_matches('\0').trim();
     if ctx.original_uids.contains(msi) {
-        out.push(Finding { file: file.clone(), path: "(0002,0003)".into(), what: "original UID".into(), matched: msi.to_string(), overridable: false });
+        out.push(Finding {
+            file: file.clone(),
+            path: "(0002,0003)".into(),
+            what: "original UID".into(),
+            matched: msi.to_string(),
+            overridable: false,
+        });
     }
     check_dataset(&obj, "", &file, ctx, &mut out);
     out
@@ -221,7 +257,13 @@ fn check_dataset(obj: &InMemDicomObject, prefix: &str, file: &str, ctx: &VerifyC
             } else {
                 "attribute not on the allowlist"
             };
-            out.push(Finding { file: file.into(), path: path.clone(), what: what.into(), matched: String::new(), overridable: false });
+            out.push(Finding {
+                file: file.into(),
+                path: path.clone(),
+                what: what.into(),
+                matched: String::new(),
+                overridable: false,
+            });
             continue;
         }
         match e.value() {
@@ -238,21 +280,39 @@ fn check_dataset(obj: &InMemDicomObject, prefix: &str, file: &str, ctx: &VerifyC
                     for u in &values {
                         let u = u.trim_end_matches('\0').trim();
                         if ctx.original_uids.contains(u) {
-                            out.push(Finding { file: file.into(), path: path.clone(), what: "original UID".into(), matched: u.to_string(), overridable: false });
+                            out.push(Finding {
+                                file: file.into(),
+                                path: path.clone(),
+                                what: "original UID".into(),
+                                matched: u.to_string(),
+                                overridable: false,
+                            });
                         }
                     }
                 } else if vr == VR::DA {
                     for d in &values {
                         let digits: String = d.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
                         if ctx.original_dates.contains(&digits) {
-                            out.push(Finding { file: file.into(), path: path.clone(), what: "original date".into(), matched: digits, overridable: false });
+                            out.push(Finding {
+                                file: file.into(),
+                                path: path.clone(),
+                                what: "original date".into(),
+                                matched: digits,
+                                overridable: false,
+                            });
                         }
                     }
                 } else if vr == VR::DT {
                     for d in &values {
                         let digits: String = d.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
                         if ctx.original_dates.contains(&digits) {
-                            out.push(Finding { file: file.into(), path: path.clone(), what: "original date".into(), matched: digits, overridable: false });
+                            out.push(Finding {
+                                file: file.into(),
+                                path: path.clone(),
+                                what: "original date".into(),
+                                matched: digits,
+                                overridable: false,
+                            });
                         }
                     }
                 } else if STRING_VRS.contains(&vr) {

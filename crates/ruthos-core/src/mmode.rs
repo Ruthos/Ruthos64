@@ -66,11 +66,21 @@ pub fn pair_rows(rows: Vec<MmodeRow>) -> Vec<MmodePair> {
         let pair = match pairs.iter_mut().find(|p| p.series_id == row.series_id) {
             Some(p) => p,
             None => {
-                pairs.push(MmodePair { series_id: row.series_id, series_label: row.series_label.clone(), diastole: None, systole: None, fs_percent: None });
+                pairs.push(MmodePair {
+                    series_id: row.series_id,
+                    series_label: row.series_label.clone(),
+                    diastole: None,
+                    systole: None,
+                    fs_percent: None,
+                });
                 pairs.last_mut().unwrap()
             }
         };
-        let slot = if row.phase == 's' { &mut pair.systole } else { &mut pair.diastole };
+        let slot = if row.phase == 's' {
+            &mut pair.systole
+        } else {
+            &mut pair.diastole
+        };
         let newer = match slot {
             Some(cur) => (row.date_modified, row.roi_id) > (cur.date_modified, cur.roi_id),
             None => true,
@@ -115,20 +125,44 @@ mod tests {
             phase,
             date_modified: when,
             values: vec![
-                RoiValue { def_key: keys[0].into(), value: Some(10.0), unit: "mm".into(), basis: Some("ultrasound-region".into()) },
-                RoiValue { def_key: keys[1].into(), value: Some(lvid), unit: "mm".into(), basis: Some("ultrasound-region".into()) },
-                RoiValue { def_key: keys[2].into(), value: Some(9.0), unit: "mm".into(), basis: Some("ultrasound-region".into()) },
+                RoiValue {
+                    def_key: keys[0].into(),
+                    value: Some(10.0),
+                    unit: "mm".into(),
+                    basis: Some("ultrasound-region".into()),
+                },
+                RoiValue {
+                    def_key: keys[1].into(),
+                    value: Some(lvid),
+                    unit: "mm".into(),
+                    basis: Some("ultrasound-region".into()),
+                },
+                RoiValue {
+                    def_key: keys[2].into(),
+                    value: Some(9.0),
+                    unit: "mm".into(),
+                    basis: Some("ultrasound-region".into()),
+                },
             ],
         }
     }
 
     #[test]
     fn pairs_latest_lines_per_series_and_computes_fs() {
-        let rows = vec![row(1, 7, 'd', 100, 48.0), row(2, 7, 's', 110, 30.0), row(3, 7, 'd', 120, 50.0), row(4, 8, 'd', 50, 40.0)];
+        let rows = vec![
+            row(1, 7, 'd', 100, 48.0),
+            row(2, 7, 's', 110, 30.0),
+            row(3, 7, 'd', 120, 50.0),
+            row(4, 8, 'd', 50, 40.0),
+        ];
         let pairs = pair_rows(rows);
         assert_eq!(pairs.len(), 2);
         let p = &pairs[0];
-        assert_eq!(p.diastole.as_ref().unwrap().roi_id, 3, "the most recently edited diastole wins");
+        assert_eq!(
+            p.diastole.as_ref().unwrap().roi_id,
+            3,
+            "the most recently edited diastole wins"
+        );
         assert_eq!(p.systole.as_ref().unwrap().roi_id, 2);
         assert!((p.fs_percent.unwrap() - 40.0).abs() < 1e-9);
         assert_eq!(pairs[1].fs_percent, None, "no systole, no FS");

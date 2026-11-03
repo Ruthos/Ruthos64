@@ -32,7 +32,15 @@ pub struct LibraryEditor {
 
 impl Default for LibraryEditor {
     fn default() -> Self {
-        Self { tab: Tab::Definitions, sel_def: None, sel_set: None, sel_calc: None, set_text: None, pending_import: None, note: None }
+        Self {
+            tab: Tab::Definitions,
+            sel_def: None,
+            sel_set: None,
+            sel_calc: None,
+            set_text: None,
+            pending_import: None,
+            note: None,
+        }
     }
 }
 
@@ -44,11 +52,15 @@ fn grey(text: impl Into<String>) -> RichText {
 }
 
 fn red(text: impl Into<String>) -> RichText {
-    RichText::new(text.into()).size(12.0).color(Color32::from_rgb(180, 40, 30))
+    RichText::new(text.into())
+        .size(12.0)
+        .color(Color32::from_rgb(180, 40, 30))
 }
 
 fn green(text: impl Into<String>) -> RichText {
-    RichText::new(text.into()).size(12.0).color(Color32::from_rgb(30, 120, 50))
+    RichText::new(text.into())
+        .size(12.0)
+        .color(Color32::from_rgb(30, 120, 50))
 }
 
 impl LibraryEditor {
@@ -56,14 +68,23 @@ impl LibraryEditor {
     pub fn flush(&mut self, user: &mut Library) {
         if let Some((name, text)) = self.set_text.take() {
             if let Some(set) = user.sets.iter_mut().find(|s| s.name == name) {
-                set.keys = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
+                set.keys = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(String::from)
+                    .collect();
             }
         }
     }
 
     pub fn show(&mut self, ui: &mut Ui, user: &mut Library) {
         ui.horizontal(|ui| {
-            for (tab, label) in [(Tab::Definitions, "Definitions"), (Tab::Sets, "Sets"), (Tab::Calculations, "Calculations")] {
+            for (tab, label) in [
+                (Tab::Definitions, "Definitions"),
+                (Tab::Sets, "Sets"),
+                (Tab::Calculations, "Calculations"),
+            ] {
                 if ui.selectable_label(self.tab == tab, label).clicked() {
                     self.flush(user);
                     self.tab = tab;
@@ -90,7 +111,14 @@ impl LibraryEditor {
         ui.add_space(8.0);
         let problems = measure::validate(&measure::effective(user));
         if let Some(p) = problems.first() {
-            ui.label(red(format!("{p}{}", if problems.len() > 1 { format!(" (and {} more)", problems.len() - 1) } else { String::new() })));
+            ui.label(red(format!(
+                "{p}{}",
+                if problems.len() > 1 {
+                    format!(" (and {} more)", problems.len() - 1)
+                } else {
+                    String::new()
+                }
+            )));
         }
     }
 
@@ -99,26 +127,39 @@ impl LibraryEditor {
     fn definitions(&mut self, ui: &mut Ui, user: &mut Library, effective: &Library) {
         ui.label(grey("What can be measured. Built-in entries are read-only: edit a copy to change one, delete the copy to restore it."));
         ui.add_space(4.0);
-        egui::ScrollArea::vertical().id_salt("defs-list").max_height(190.0).show(ui, |ui| {
-            for d in &effective.definitions {
-                let custom = user.definition(&d.key).is_some();
-                let builtin = measure::is_builtin_definition(&d.key);
-                let tag = match (builtin, custom) {
-                    (true, true) => "  (built-in, edited)",
-                    (true, false) => "  (built-in)",
-                    _ => "",
-                };
-                let text = format!("{:<28} {}{}", d.key, d.label, tag);
-                if ui.selectable_label(self.sel_def.as_deref() == Some(&d.key), RichText::new(text).monospace().size(12.0)).clicked() {
-                    self.sel_def = Some(d.key.clone());
+        egui::ScrollArea::vertical()
+            .id_salt("defs-list")
+            .max_height(190.0)
+            .show(ui, |ui| {
+                for d in &effective.definitions {
+                    let custom = user.definition(&d.key).is_some();
+                    let builtin = measure::is_builtin_definition(&d.key);
+                    let tag = match (builtin, custom) {
+                        (true, true) => "  (built-in, edited)",
+                        (true, false) => "  (built-in)",
+                        _ => "",
+                    };
+                    let text = format!("{:<28} {}{}", d.key, d.label, tag);
+                    if ui
+                        .selectable_label(
+                            self.sel_def.as_deref() == Some(&d.key),
+                            RichText::new(text).monospace().size(12.0),
+                        )
+                        .clicked()
+                    {
+                        self.sel_def = Some(d.key.clone());
+                    }
                 }
-            }
-        });
+            });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.button("New definition").clicked() {
                 let key = unique_key(effective, "custom.new");
-                user.definitions.push(Definition { key: key.clone(), label: "New measurement".into(), ..Default::default() });
+                user.definitions.push(Definition {
+                    key: key.clone(),
+                    label: "New measurement".into(),
+                    ..Default::default()
+                });
                 self.sel_def = Some(key);
             }
             let Some(sel) = self.sel_def.clone() else { return };
@@ -132,7 +173,11 @@ impl LibraryEditor {
             if ui.button("Duplicate").clicked() {
                 if let Some(d) = effective.definition(&sel).cloned() {
                     let key = unique_key(effective, &format!("{}_copy", d.key));
-                    user.definitions.push(Definition { key: key.clone(), label: format!("{} (copy)", d.label), ..d });
+                    user.definitions.push(Definition {
+                        key: key.clone(),
+                        label: format!("{} (copy)", d.label),
+                        ..d
+                    });
                     self.sel_def = Some(key);
                 }
             }
@@ -149,53 +194,87 @@ impl LibraryEditor {
         ui.add_space(6.0);
         let Some(sel) = self.sel_def.clone() else { return };
         if let Some(i) = user.definitions.iter().position(|d| d.key == sel) {
-            let others: Vec<String> = effective.definitions.iter().map(|d| d.key.clone()).filter(|k| *k != sel).collect();
+            let others: Vec<String> = effective
+                .definitions
+                .iter()
+                .map(|d| d.key.clone())
+                .filter(|k| *k != sel)
+                .collect();
             let d = &mut user.definitions[i];
-            egui::Grid::new("def-form").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                ui.label("Key");
-                let r = ui.add(egui::TextEdit::singleline(&mut d.key).desired_width(260.0));
-                if r.changed() {
-                    self.sel_def = Some(d.key.clone());
-                }
-                ui.end_row();
-                ui.label("Label");
-                ui.add(egui::TextEdit::singleline(&mut d.label).desired_width(260.0));
-                ui.end_row();
-                ui.label("Tool");
-                egui::ComboBox::from_id_salt("def-tool").selected_text(d.tool.clone()).width(140.0).show_ui(ui, |ui| {
-                    for t in TOOLS {
-                        ui.selectable_value(&mut d.tool, t.to_string(), t);
+            egui::Grid::new("def-form")
+                .num_columns(2)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("Key");
+                    let r = ui.add(egui::TextEdit::singleline(&mut d.key).desired_width(260.0));
+                    if r.changed() {
+                        self.sel_def = Some(d.key.clone());
                     }
-                });
-                ui.end_row();
-                ui.label("Quantity");
-                egui::ComboBox::from_id_salt("def-quantity").selected_text(d.quantity.clone()).width(140.0).show_ui(ui, |ui| {
-                    for q in QUANTITIES {
-                        ui.selectable_value(&mut d.quantity, q.to_string(), q);
+                    ui.end_row();
+                    ui.label("Label");
+                    ui.add(egui::TextEdit::singleline(&mut d.label).desired_width(260.0));
+                    ui.end_row();
+                    ui.label("Tool");
+                    egui::ComboBox::from_id_salt("def-tool")
+                        .selected_text(d.tool.clone())
+                        .width(140.0)
+                        .show_ui(ui, |ui| {
+                            for t in TOOLS {
+                                ui.selectable_value(&mut d.tool, t.to_string(), t);
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("Quantity");
+                    egui::ComboBox::from_id_salt("def-quantity")
+                        .selected_text(d.quantity.clone())
+                        .width(140.0)
+                        .show_ui(ui, |ui| {
+                            for q in QUANTITIES {
+                                ui.selectable_value(&mut d.quantity, q.to_string(), q);
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("Unit");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut d.unit)
+                            .desired_width(80.0)
+                            .hint_text("mm, deg, mm2"),
+                    );
+                    ui.end_row();
+                    ui.label("Decimals");
+                    ui.add(egui::DragValue::new(&mut d.decimals).range(0..=4));
+                    ui.end_row();
+                    ui.label("Coded concept");
+                    let mut concept = d.concept.clone().unwrap_or_default();
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut concept)
+                                .desired_width(200.0)
+                                .hint_text("LN:29436-3 (optional)"),
+                        )
+                        .changed()
+                    {
+                        d.concept = (!concept.trim().is_empty()).then(|| concept.trim().to_string());
                     }
+                    ui.end_row();
+                    ui.label("Species");
+                    let mut species = d.species.clone().unwrap_or_default();
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut species)
+                                .desired_width(200.0)
+                                .hint_text("any"),
+                        )
+                        .changed()
+                    {
+                        d.species = (!species.trim().is_empty()).then(|| species.trim().to_string());
+                    }
+                    ui.end_row();
                 });
-                ui.end_row();
-                ui.label("Unit");
-                ui.add(egui::TextEdit::singleline(&mut d.unit).desired_width(80.0).hint_text("mm, deg, mm2"));
-                ui.end_row();
-                ui.label("Decimals");
-                ui.add(egui::DragValue::new(&mut d.decimals).range(0..=4));
-                ui.end_row();
-                ui.label("Coded concept");
-                let mut concept = d.concept.clone().unwrap_or_default();
-                if ui.add(egui::TextEdit::singleline(&mut concept).desired_width(200.0).hint_text("LN:29436-3 (optional)")).changed() {
-                    d.concept = (!concept.trim().is_empty()).then(|| concept.trim().to_string());
-                }
-                ui.end_row();
-                ui.label("Species");
-                let mut species = d.species.clone().unwrap_or_default();
-                if ui.add(egui::TextEdit::singleline(&mut species).desired_width(200.0).hint_text("any")).changed() {
-                    d.species = (!species.trim().is_empty()).then(|| species.trim().to_string());
-                }
-                ui.end_row();
-            });
             if !measure::valid_key(&d.key) {
-                ui.label(red("The key must be lower-case letters, digits, dots and underscores, like lv.lvidd"));
+                ui.label(red(
+                    "The key must be lower-case letters, digits, dots and underscores, like lv.lvidd",
+                ));
             } else if others.contains(&d.key) {
                 ui.label(red("Another definition already has this key"));
             } else if d.label.trim().is_empty() {
@@ -204,46 +283,57 @@ impl LibraryEditor {
                 ui.label(green("Valid"));
             }
         } else if let Some(d) = effective.definition(&sel) {
-            egui::Grid::new("def-view").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                for (k, v) in [
-                    ("Key", d.key.clone()),
-                    ("Label", d.label.clone()),
-                    ("Tool", d.tool.clone()),
-                    ("Quantity", d.quantity.clone()),
-                    ("Unit", d.unit.clone()),
-                    ("Decimals", d.decimals.to_string()),
-                    ("Coded concept", d.concept.clone().unwrap_or_else(|| "none".into())),
-                    ("Species", d.species.clone().unwrap_or_else(|| "any".into())),
-                ] {
-                    ui.label(grey(k));
-                    ui.label(v);
-                    ui.end_row();
-                }
-            });
+            egui::Grid::new("def-view")
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    for (k, v) in [
+                        ("Key", d.key.clone()),
+                        ("Label", d.label.clone()),
+                        ("Tool", d.tool.clone()),
+                        ("Quantity", d.quantity.clone()),
+                        ("Unit", d.unit.clone()),
+                        ("Decimals", d.decimals.to_string()),
+                        ("Coded concept", d.concept.clone().unwrap_or_else(|| "none".into())),
+                        ("Species", d.species.clone().unwrap_or_else(|| "any".into())),
+                    ] {
+                        ui.label(grey(k));
+                        ui.label(v);
+                        ui.end_row();
+                    }
+                });
         }
     }
 
     // ---------------------------------------------------------------- sets
 
     fn sets(&mut self, ui: &mut Ui, user: &mut Library, effective: &Library) {
-        ui.label(grey("Groups of definitions offered when naming a measurement. One key per line, in the order shown."));
+        ui.label(grey(
+            "Groups of definitions offered when naming a measurement. One key per line, in the order shown.",
+        ));
         ui.add_space(4.0);
-        egui::ScrollArea::vertical().id_salt("sets-list").max_height(150.0).show(ui, |ui| {
-            for s in &effective.sets {
-                let custom = user.set(&s.name).is_some();
-                let builtin = measure::is_builtin_set(&s.name);
-                let tag = match (builtin, custom) {
-                    (true, true) => "  (built-in, edited)",
-                    (true, false) => "  (built-in)",
-                    _ => "",
-                };
-                let text = format!("{}  ({} measurements){tag}", s.name, s.keys.len());
-                if ui.selectable_label(self.sel_set.as_deref() == Some(&s.name), text).clicked() {
-                    self.flush(user);
-                    self.sel_set = Some(s.name.clone());
+        egui::ScrollArea::vertical()
+            .id_salt("sets-list")
+            .max_height(150.0)
+            .show(ui, |ui| {
+                for s in &effective.sets {
+                    let custom = user.set(&s.name).is_some();
+                    let builtin = measure::is_builtin_set(&s.name);
+                    let tag = match (builtin, custom) {
+                        (true, true) => "  (built-in, edited)",
+                        (true, false) => "  (built-in)",
+                        _ => "",
+                    };
+                    let text = format!("{}  ({} measurements){tag}", s.name, s.keys.len());
+                    if ui
+                        .selectable_label(self.sel_set.as_deref() == Some(&s.name), text)
+                        .clicked()
+                    {
+                        self.flush(user);
+                        self.sel_set = Some(s.name.clone());
+                    }
                 }
-            }
-        });
+            });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.button("New set").clicked() {
@@ -254,7 +344,10 @@ impl LibraryEditor {
                     name = format!("New set {n}");
                     n += 1;
                 }
-                user.sets.push(Set { name: name.clone(), keys: Vec::new() });
+                user.sets.push(Set {
+                    name: name.clone(),
+                    keys: Vec::new(),
+                });
                 self.sel_set = Some(name);
             }
             let Some(sel) = self.sel_set.clone() else { return };
@@ -269,7 +362,10 @@ impl LibraryEditor {
                 self.flush(user);
                 if let Some(s) = effective.set(&sel).cloned() {
                     let name = format!("{} (copy)", s.name);
-                    user.sets.push(Set { name: name.clone(), keys: s.keys });
+                    user.sets.push(Set {
+                        name: name.clone(),
+                        keys: s.keys,
+                    });
                     self.sel_set = Some(name);
                 }
             }
@@ -294,27 +390,53 @@ impl LibraryEditor {
             ui.horizontal(|ui| {
                 ui.label("Name");
                 let mut new_name = user.sets[i].name.clone();
-                if ui.add(egui::TextEdit::singleline(&mut new_name).desired_width(240.0)).changed() && !new_name.trim().is_empty() {
+                if ui
+                    .add(egui::TextEdit::singleline(&mut new_name).desired_width(240.0))
+                    .changed()
+                    && !new_name.trim().is_empty()
+                {
                     user.sets[i].name = new_name.clone();
                     *name = new_name.clone();
                     self.sel_set = Some(new_name);
                 }
             });
             ui.label("Keys, one per line");
-            ui.add(egui::TextEdit::multiline(text).desired_width(320.0).desired_rows(6).font(egui::TextStyle::Monospace));
-            let unknown: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty() && effective.definition(l).is_none()).collect();
+            ui.add(
+                egui::TextEdit::multiline(text)
+                    .desired_width(320.0)
+                    .desired_rows(6)
+                    .font(egui::TextStyle::Monospace),
+            );
+            let unknown: Vec<&str> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && effective.definition(l).is_none())
+                .collect();
             if unknown.is_empty() {
                 ui.label(green("All keys known"));
             } else {
-                ui.label(red(format!("Unknown key{}: {}", if unknown.len() == 1 { "" } else { "s" }, unknown.join(", "))));
+                ui.label(red(format!(
+                    "Unknown key{}: {}",
+                    if unknown.len() == 1 { "" } else { "s" },
+                    unknown.join(", ")
+                )));
             }
             ui.label(grey(format!(
                 "Available: {}",
-                effective.definitions.iter().map(|d| d.key.as_str()).collect::<Vec<_>>().join("  ")
+                effective
+                    .definitions
+                    .iter()
+                    .map(|d| d.key.as_str())
+                    .collect::<Vec<_>>()
+                    .join("  ")
             )));
         } else if let Some(s) = effective.set(&sel) {
             for k in &s.keys {
-                ui.label(RichText::new(format!("{:<28} {}", k, effective.label(k))).monospace().size(12.0));
+                ui.label(
+                    RichText::new(format!("{:<28} {}", k, effective.label(k)))
+                        .monospace()
+                        .size(12.0),
+                );
             }
         }
     }
@@ -324,26 +446,39 @@ impl LibraryEditor {
     fn calculations(&mut self, ui: &mut Ui, user: &mut Library, effective: &Library) {
         ui.label(grey("Numbers derived from measurements. Expressions use keys, numbers, + − × ÷, ^, parentheses, sqrt, abs, min and max."));
         ui.add_space(4.0);
-        egui::ScrollArea::vertical().id_salt("calcs-list").max_height(150.0).show(ui, |ui| {
-            for c in &effective.calculations {
-                let custom = user.calculation(&c.key).is_some();
-                let builtin = measure::is_builtin_calculation(&c.key);
-                let tag = match (builtin, custom) {
-                    (true, true) => "  (built-in, edited)",
-                    (true, false) => "  (built-in)",
-                    _ => "",
-                };
-                let text = format!("{:<22} {}{}", c.key, c.label, tag);
-                if ui.selectable_label(self.sel_calc.as_deref() == Some(&c.key), RichText::new(text).monospace().size(12.0)).clicked() {
-                    self.sel_calc = Some(c.key.clone());
+        egui::ScrollArea::vertical()
+            .id_salt("calcs-list")
+            .max_height(150.0)
+            .show(ui, |ui| {
+                for c in &effective.calculations {
+                    let custom = user.calculation(&c.key).is_some();
+                    let builtin = measure::is_builtin_calculation(&c.key);
+                    let tag = match (builtin, custom) {
+                        (true, true) => "  (built-in, edited)",
+                        (true, false) => "  (built-in)",
+                        _ => "",
+                    };
+                    let text = format!("{:<22} {}{}", c.key, c.label, tag);
+                    if ui
+                        .selectable_label(
+                            self.sel_calc.as_deref() == Some(&c.key),
+                            RichText::new(text).monospace().size(12.0),
+                        )
+                        .clicked()
+                    {
+                        self.sel_calc = Some(c.key.clone());
+                    }
                 }
-            }
-        });
+            });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.button("New calculation").clicked() {
                 let key = unique_calc_key(effective, "custom.calc");
-                user.calculations.push(Calculation { key: key.clone(), label: "New calculation".into(), ..Default::default() });
+                user.calculations.push(Calculation {
+                    key: key.clone(),
+                    label: "New calculation".into(),
+                    ..Default::default()
+                });
                 self.sel_calc = Some(key);
             }
             let Some(sel) = self.sel_calc.clone() else { return };
@@ -357,7 +492,11 @@ impl LibraryEditor {
             if ui.button("Duplicate").clicked() {
                 if let Some(c) = effective.calculation(&sel).cloned() {
                     let key = unique_calc_key(effective, &format!("{}_copy", c.key));
-                    user.calculations.push(Calculation { key: key.clone(), label: format!("{} (copy)", c.label), ..c });
+                    user.calculations.push(Calculation {
+                        key: key.clone(),
+                        label: format!("{} (copy)", c.label),
+                        ..c
+                    });
                     self.sel_calc = Some(key);
                 }
             }
@@ -374,40 +513,66 @@ impl LibraryEditor {
         ui.add_space(6.0);
         let Some(sel) = self.sel_calc.clone() else { return };
         if let Some(i) = user.calculations.iter().position(|c| c.key == sel) {
-            let others: Vec<String> = effective.calculations.iter().map(|c| c.key.clone()).filter(|k| *k != sel).collect();
+            let others: Vec<String> = effective
+                .calculations
+                .iter()
+                .map(|c| c.key.clone())
+                .filter(|k| *k != sel)
+                .collect();
             let c = &mut user.calculations[i];
-            egui::Grid::new("calc-form").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                ui.label("Key");
-                if ui.add(egui::TextEdit::singleline(&mut c.key).desired_width(260.0)).changed() {
-                    self.sel_calc = Some(c.key.clone());
-                }
-                ui.end_row();
-                ui.label("Label");
-                ui.add(egui::TextEdit::singleline(&mut c.label).desired_width(260.0));
-                ui.end_row();
-                ui.label("Expression");
-                ui.add(egui::TextEdit::singleline(&mut c.expression).desired_width(420.0).font(egui::TextStyle::Monospace));
-                ui.end_row();
-                ui.label("Lengths in");
-                ui.horizontal(|ui| {
-                    for u in ["mm", "cm"] {
-                        ui.selectable_value(&mut c.input_unit, u.to_string(), u);
+            egui::Grid::new("calc-form")
+                .num_columns(2)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("Key");
+                    if ui
+                        .add(egui::TextEdit::singleline(&mut c.key).desired_width(260.0))
+                        .changed()
+                    {
+                        self.sel_calc = Some(c.key.clone());
                     }
+                    ui.end_row();
+                    ui.label("Label");
+                    ui.add(egui::TextEdit::singleline(&mut c.label).desired_width(260.0));
+                    ui.end_row();
+                    ui.label("Expression");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut c.expression)
+                            .desired_width(420.0)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    ui.end_row();
+                    ui.label("Lengths in");
+                    ui.horizontal(|ui| {
+                        for u in ["mm", "cm"] {
+                            ui.selectable_value(&mut c.input_unit, u.to_string(), u);
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("Result unit");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut c.result_unit)
+                            .desired_width(80.0)
+                            .hint_text("%, ml, none"),
+                    );
+                    ui.end_row();
+                    ui.label("Decimals");
+                    ui.add(egui::DragValue::new(&mut c.decimals).range(0..=4));
+                    ui.end_row();
+                    ui.label("Scope");
+                    let mut scope = c.scope.clone().unwrap_or_default();
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut scope)
+                                .desired_width(200.0)
+                                .hint_text("echo, thorax, canine… (optional)"),
+                        )
+                        .changed()
+                    {
+                        c.scope = (!scope.trim().is_empty()).then(|| scope.trim().to_string());
+                    }
+                    ui.end_row();
                 });
-                ui.end_row();
-                ui.label("Result unit");
-                ui.add(egui::TextEdit::singleline(&mut c.result_unit).desired_width(80.0).hint_text("%, ml, none"));
-                ui.end_row();
-                ui.label("Decimals");
-                ui.add(egui::DragValue::new(&mut c.decimals).range(0..=4));
-                ui.end_row();
-                ui.label("Scope");
-                let mut scope = c.scope.clone().unwrap_or_default();
-                if ui.add(egui::TextEdit::singleline(&mut scope).desired_width(200.0).hint_text("echo, thorax, canine… (optional)")).changed() {
-                    c.scope = (!scope.trim().is_empty()).then(|| scope.trim().to_string());
-                }
-                ui.end_row();
-            });
             if !measure::valid_key(&c.key) {
                 ui.label(red("The key must be lower-case letters, digits, dots and underscores"));
             } else if others.contains(&c.key) || effective.definition(&c.key).is_some() {
@@ -419,21 +584,31 @@ impl LibraryEditor {
                 };
             }
         } else if let Some(c) = effective.calculation(&sel) {
-            egui::Grid::new("calc-view").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                for (k, v) in [
-                    ("Key", c.key.clone()),
-                    ("Label", c.label.clone()),
-                    ("Expression", c.expression.clone()),
-                    ("Lengths in", c.input_unit.clone()),
-                    ("Result unit", if c.result_unit.is_empty() { "none".into() } else { c.result_unit.clone() }),
-                    ("Decimals", c.decimals.to_string()),
-                    ("Scope", c.scope.clone().unwrap_or_else(|| "any".into())),
-                ] {
-                    ui.label(grey(k));
-                    ui.label(v);
-                    ui.end_row();
-                }
-            });
+            egui::Grid::new("calc-view")
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    for (k, v) in [
+                        ("Key", c.key.clone()),
+                        ("Label", c.label.clone()),
+                        ("Expression", c.expression.clone()),
+                        ("Lengths in", c.input_unit.clone()),
+                        (
+                            "Result unit",
+                            if c.result_unit.is_empty() {
+                                "none".into()
+                            } else {
+                                c.result_unit.clone()
+                            },
+                        ),
+                        ("Decimals", c.decimals.to_string()),
+                        ("Scope", c.scope.clone().unwrap_or_else(|| "any".into())),
+                    ] {
+                        ui.label(grey(k));
+                        ui.label(v);
+                        ui.end_row();
+                    }
+                });
             match measure::describe_calculation(effective, c) {
                 Ok(text) => ui.label(grey(text)),
                 Err(e) => ui.label(red(e)),
@@ -454,16 +629,31 @@ impl LibraryEditor {
         };
         let lib = measure::effective(user);
         match std::fs::write(&path, lib.to_json()) {
-            Ok(()) => self.note = Some(format!("Exported {} definitions, {} sets and {} calculations to {}", lib.definitions.len(), lib.sets.len(), lib.calculations.len(), path.display())),
+            Ok(()) => {
+                self.note = Some(format!(
+                    "Exported {} definitions, {} sets and {} calculations to {}",
+                    lib.definitions.len(),
+                    lib.sets.len(),
+                    lib.calculations.len(),
+                    path.display()
+                ))
+            }
             Err(e) => self.note = Some(format!("Could not export: {e}")),
         }
     }
 
     fn import_prompt(&mut self, user: &Library) {
-        let Some(path) = rfd::FileDialog::new().set_title("Import measurement library").add_filter("JSON", &["json"]).pick_file() else {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Import measurement library")
+            .add_filter("JSON", &["json"])
+            .pick_file()
+        else {
             return;
         };
-        let incoming: Library = match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Library::from_json(&t)) {
+        let incoming: Library = match std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| Library::from_json(&t))
+        {
             Ok(l) => l,
             Err(e) => {
                 self.note = Some(format!("Could not read {}: {e}", path.display()));
@@ -480,7 +670,9 @@ impl LibraryEditor {
     }
 
     fn import_modal(&mut self, ui: &mut Ui, user: &mut Library) {
-        let Some((path, incoming, report)) = self.pending_import.as_ref() else { return };
+        let Some((path, incoming, report)) = self.pending_import.as_ref() else {
+            return;
+        };
         let (path, incoming, report) = (path.clone(), incoming.clone(), report.clone());
         let mut decision: Option<bool> = None;
         egui::Modal::new(egui::Id::unique("import-library")).show(ui.ctx(), |ui| {

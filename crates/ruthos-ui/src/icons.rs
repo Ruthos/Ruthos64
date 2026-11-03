@@ -84,16 +84,21 @@ pub fn install(ctx: &egui::Context) {
     let mut text_faces: Vec<String> = Vec::new();
 
     if let Some(segoe) = load_system_font(&["segoeui.ttf"]) {
-        fonts.font_data.insert("segoe".to_string(), std::sync::Arc::new(egui::FontData::from_owned(segoe)));
+        fonts.font_data.insert(
+            "segoe".to_string(),
+            std::sync::Arc::new(egui::FontData::from_owned(segoe)),
+        );
         text_faces.push("segoe".to_string());
     }
-    fonts
-        .font_data
-        .insert("inter".to_string(), std::sync::Arc::new(egui::FontData::from_static(INTER_BYTES)));
+    fonts.font_data.insert(
+        "inter".to_string(),
+        std::sync::Arc::new(egui::FontData::from_static(INTER_BYTES)),
+    );
     text_faces.push("inter".to_string());
-    fonts
-        .font_data
-        .insert("phosphor".to_string(), std::sync::Arc::new(egui::FontData::from_static(FONT_BYTES)));
+    fonts.font_data.insert(
+        "phosphor".to_string(),
+        std::sync::Arc::new(egui::FontData::from_static(FONT_BYTES)),
+    );
 
     let proportional = fonts.families.entry(egui::FontFamily::Proportional).or_default();
     for (i, face) in text_faces.iter().enumerate() {
@@ -104,7 +109,9 @@ pub fn install(ctx: &egui::Context) {
 }
 
 fn load_system_font(candidates: &[&str]) -> Option<Vec<u8>> {
-    let windir = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+    let windir = std::env::var_os("WINDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "C:\\Windows".into());
     for name in candidates {
         let path = windir.join("Fonts").join(name);
         if let Ok(bytes) = std::fs::read(&path) {
@@ -327,7 +334,11 @@ pub fn texture(ctx: &egui::Context, which: Bitmap) -> egui::TextureId {
             egui::ColorImage::filled([2, 2], egui::Color32::TRANSPARENT)
         }
     };
-    let handle = ctx.load_texture(format!("horos-icon-{}", which.name()), image, egui::TextureOptions::LINEAR);
+    let handle = ctx.load_texture(
+        format!("horos-icon-{}", which.name()),
+        image,
+        egui::TextureOptions::LINEAR,
+    );
     let tex = handle.id();
     ctx.data_mut(|d| d.insert_temp(id, handle));
     tex
@@ -335,5 +346,8 @@ pub fn texture(ctx: &egui::Context, which: Bitmap) -> egui::TextureId {
 
 /// A bitmap icon as an image atom for buttons and menu titles.
 pub fn image(ctx: &egui::Context, which: Bitmap, size: f32) -> egui::Image<'static> {
-    egui::Image::from_texture(egui::load::SizedTexture::new(texture(ctx, which), egui::Vec2::splat(size)))
+    egui::Image::from_texture(egui::load::SizedTexture::new(
+        texture(ctx, which),
+        egui::Vec2::splat(size),
+    ))
 }

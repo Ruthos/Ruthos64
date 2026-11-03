@@ -62,7 +62,11 @@ pub fn echo(host: &str, port: u16, called_ae: &str, calling_ae: &str, timeout: D
 
 fn create_echo_command(message_id: u16) -> InMemDicomObject<StandardDataDictionary> {
     InMemDicomObject::command_from_element_iter([
-        DataElement::new(tags::AFFECTED_SOP_CLASS_UID, VR::UI, dicom_value!(Str, uids::VERIFICATION)),
+        DataElement::new(
+            tags::AFFECTED_SOP_CLASS_UID,
+            VR::UI,
+            dicom_value!(Str, uids::VERIFICATION),
+        ),
         DataElement::new(tags::COMMAND_FIELD, VR::US, dicom_value!(U16, [0x0030])),
         DataElement::new(tags::MESSAGE_ID, VR::US, dicom_value!(U16, [message_id])),
         DataElement::new(tags::COMMAND_DATA_SET_TYPE, VR::US, dicom_value!(U16, [0x0101])),

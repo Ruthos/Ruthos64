@@ -139,9 +139,17 @@ fn wgpu_configuration() -> egui_wgpu::WgpuConfiguration {
 fn select_adapter(adapters: &[wgpu::Adapter], _surface: Option<&wgpu::Surface<'_>>) -> Result<wgpu::Adapter, String> {
     for a in adapters {
         let info = a.get_info();
-        tracing::info!("graphics adapter: {} ({:?}, {:?}, driver {})", info.name, info.backend, info.device_type, info.driver);
+        tracing::info!(
+            "graphics adapter: {} ({:?}, {:?}, driver {})",
+            info.name,
+            info.backend,
+            info.device_type,
+            info.driver
+        );
     }
-    let want_software = std::env::var("RUTHOS_RENDERER").map(|v| v.eq_ignore_ascii_case("software")).unwrap_or(false);
+    let want_software = std::env::var("RUTHOS_RENDERER")
+        .map(|v| v.eq_ignore_ascii_case("software"))
+        .unwrap_or(false);
     let rank = |a: &wgpu::Adapter| -> (u8, u8) {
         let info = a.get_info();
         let class = match info.device_type {
@@ -152,7 +160,11 @@ fn select_adapter(adapters: &[wgpu::Adapter], _surface: Option<&wgpu::Surface<'_
             wgpu::DeviceType::Other => 4,
         };
         let class = if want_software {
-            if info.device_type == wgpu::DeviceType::Cpu { 0 } else { class + 1 }
+            if info.device_type == wgpu::DeviceType::Cpu {
+                0
+            } else {
+                class + 1
+            }
         } else {
             class
         };
@@ -170,6 +182,11 @@ fn select_adapter(adapters: &[wgpu::Adapter], _surface: Option<&wgpu::Surface<'_
         .cloned()
         .ok_or_else(|| "no graphics adapter found on DirectX 12, Vulkan or OpenGL".to_string())?;
     let info = best.get_info();
-    tracing::info!("using graphics adapter: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
+    tracing::info!(
+        "using graphics adapter: {} ({:?}, {:?})",
+        info.name,
+        info.backend,
+        info.device_type
+    );
     Ok(best)
 }

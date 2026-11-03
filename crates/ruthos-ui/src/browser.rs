@@ -15,7 +15,9 @@ use egui_extras::{Column, TableBuilder};
 
 use ruthos_core::db::StudySort;
 use ruthos_core::import::ImportSummary;
-use ruthos_core::{AlbumRow, DateFilter, ImageRow, ImportEvent, ImportMode, Importer, SeriesRow, StudyFilter, StudyRow};
+use ruthos_core::{
+    AlbumRow, DateFilter, ImageRow, ImportEvent, ImportMode, Importer, SeriesRow, StudyFilter, StudyRow,
+};
 use ruthos_dicom::Frame;
 use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTransform};
 
@@ -60,13 +62,27 @@ enum RowKind {
     Series(usize, usize),
 }
 
+// A modal is one value at a time; the picture form's size does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum Modal {
     DeleteStudy(i64),
-    NewAlbum { name: String },
-    RenameAlbum { id: i64, name: String },
-    EditComment { study_id: i64, text: String },
-    ImportPictures { files: Vec<PathBuf>, info: ruthos_dicom::sc::PictureInfo, add_to_selected: bool },
+    NewAlbum {
+        name: String,
+    },
+    RenameAlbum {
+        id: i64,
+        name: String,
+    },
+    EditComment {
+        study_id: i64,
+        text: String,
+    },
+    ImportPictures {
+        files: Vec<PathBuf>,
+        info: ruthos_dicom::sc::PictureInfo,
+        add_to_selected: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -161,14 +177,36 @@ impl BrowserState {
     /// The built-in albums, recomputed with the database.
     fn builtin_albums(&self, shared: &Shared) -> Vec<BuiltinAlbum> {
         let mut list = vec![
-            ("Cases with comments".to_string(), StudyFilter { has_comment: true, ..Default::default() }),
-            ("Just Added (last hour)".to_string(), StudyFilter { added_within_secs: Some(3600), ..Default::default() }),
-            ("Just Opened (today)".to_string(), StudyFilter { opened_within_secs: Some(24 * 3600), ..Default::default() }),
+            (
+                "Cases with comments".to_string(),
+                StudyFilter {
+                    has_comment: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "Just Added (last hour)".to_string(),
+                StudyFilter {
+                    added_within_secs: Some(3600),
+                    ..Default::default()
+                },
+            ),
+            (
+                "Just Opened (today)".to_string(),
+                StudyFilter {
+                    opened_within_secs: Some(24 * 3600),
+                    ..Default::default()
+                },
+            ),
         ];
         for m in &self.modalities {
             list.push((
                 format!("Today {m}"),
-                StudyFilter { modality: m.clone(), date: DateFilter::Today, ..Default::default() },
+                StudyFilter {
+                    modality: m.clone(),
+                    date: DateFilter::Today,
+                    ..Default::default()
+                },
             ));
         }
         list.into_iter()
@@ -219,8 +257,18 @@ impl BrowserState {
         self.albums = shared.db.albums().unwrap_or_default();
         self.modalities = shared.db.modalities().unwrap_or_default();
         self.counts = shared.db.counts().unwrap_or((0, 0, 0));
-        self.reports = shared.db.studies_with_reports().unwrap_or_default().into_iter().collect();
-        self.teaching_sources = shared.db.teaching_source_uids().unwrap_or_default().into_iter().collect();
+        self.reports = shared
+            .db
+            .studies_with_reports()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        self.teaching_sources = shared
+            .db
+            .teaching_source_uids()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         self.builtin_albums = self.builtin_albums(shared);
         if self.selected_builtin.is_some_and(|i| i >= self.builtin_albums.len()) {
             self.selected_builtin = None;
@@ -257,8 +305,16 @@ impl BrowserState {
                             "Imported {} image{}{}{}",
                             summary.imported,
                             if summary.imported == 1 { "" } else { "s" },
-                            if summary.duplicates > 0 { format!(", {} already in the database", summary.duplicates) } else { String::new() },
-                            if summary.errors.is_empty() { String::new() } else { format!(", {} could not be read", summary.errors.len()) },
+                            if summary.duplicates > 0 {
+                                format!(", {} already in the database", summary.duplicates)
+                            } else {
+                                String::new()
+                            },
+                            if summary.errors.is_empty() {
+                                String::new()
+                            } else {
+                                format!(", {} could not be read", summary.errors.len())
+                            },
                         );
                         self.set_status(msg);
                         for (path, err) in summary.errors.iter().take(20) {
@@ -267,7 +323,7 @@ impl BrowserState {
                     }
                     for id in &summary.touched_study_ids {
                         self.series_cache.remove(id);
-                        if let Some(series) = shared.db.series_for_study(*id).ok() {
+                        if let Ok(series) = shared.db.series_for_study(*id) {
                             for s in series {
                                 shared.thumb_textures.lock().remove(&s.id);
                                 shared.thumbs.invalidate(s.id);
@@ -293,24 +349,30 @@ impl BrowserState {
         let db = shared.db.clone();
         let paths = shared.paths.clone();
         let tx = shared.import_tx.clone();
-        let out_dir = paths.temp_dir().join(format!("pictures-{}", ruthos_dicom::sc::new_uid()));
+        let out_dir = paths
+            .temp_dir()
+            .join(format!("pictures-{}", ruthos_dicom::sc::new_uid()));
         self.import_progress = Some((0, files.len(), "Converting pictures…".to_string()));
         std::thread::Builder::new()
             .name("ruthos-pictures".into())
-            .spawn(move || match ruthos_dicom::sc::convert_pictures(&files, &info, &out_dir) {
-                Ok(written) => {
-                    let importer = Importer::new(db, paths);
-                    let handle = importer.spawn(written, ImportMode::Move, tx);
-                    let _ = handle.join();
-                    let _ = std::fs::remove_dir_all(&out_dir);
-                }
-                Err(e) => {
-                    let mut summary = ImportSummary::default();
-                    summary.errors.push((out_dir.clone(), format!("picture conversion failed: {e}")));
-                    let _ = tx.send(ImportEvent::Finished(summary));
-                    let _ = std::fs::remove_dir_all(&out_dir);
-                }
-            })
+            .spawn(
+                move || match ruthos_dicom::sc::convert_pictures(&files, &info, &out_dir) {
+                    Ok(written) => {
+                        let importer = Importer::new(db, paths);
+                        let handle = importer.spawn(written, ImportMode::Move, tx);
+                        let _ = handle.join();
+                        let _ = std::fs::remove_dir_all(&out_dir);
+                    }
+                    Err(e) => {
+                        let mut summary = ImportSummary::default();
+                        summary
+                            .errors
+                            .push((out_dir.clone(), format!("picture conversion failed: {e}")));
+                        let _ = tx.send(ImportEvent::Finished(summary));
+                        let _ = std::fs::remove_dir_all(&out_dir);
+                    }
+                },
+            )
             .expect("spawn picture import thread");
     }
 
@@ -318,7 +380,11 @@ impl BrowserState {
         if sources.is_empty() {
             return;
         }
-        let mode = if shared.settings.lock().copy_files_on_import { ImportMode::Copy } else { ImportMode::Link };
+        let mode = if shared.settings.lock().copy_files_on_import {
+            ImportMode::Copy
+        } else {
+            ImportMode::Link
+        };
         let importer = Importer::new(shared.db.clone(), shared.paths.clone());
         importer.spawn(sources, mode, shared.import_tx.clone());
         self.import_progress = Some((0, 0, String::new()));
@@ -352,22 +418,34 @@ impl BrowserState {
                     .stroke(theme::toolbar_stroke(false))
                     .inner_margin(egui::Margin::symmetric(6, 3)),
             )
-            .show(ui, |ui| { theme::paint_toolbar_background(ui, false, egui::vec2(6.0, 3.0)); self.toolbar(ui, shared) });
+            .show(ui, |ui| {
+                theme::paint_toolbar_background(ui, false, egui::vec2(6.0, 3.0));
+                self.toolbar(ui, shared)
+            });
 
         egui::Panel::bottom("browser-status")
             .exact_size(24.0)
-            .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT).inner_margin(egui::Margin::symmetric(10, 3)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(Color32::TRANSPARENT)
+                    .inner_margin(egui::Margin::symmetric(10, 3)),
+            )
             .show(ui, |ui| self.status_bar(ui, shared));
 
         self.update_preview(shared);
         if self.selected_study.is_some() {
             egui::Panel::bottom("browser-thumbs")
                 .exact_size(theme::PREVIEW_HEIGHT)
-                .frame(egui::Frame::NONE.fill(Color32::from_rgb(228, 228, 228)).inner_margin(egui::Margin::symmetric(8, 4)))
+                .frame(
+                    egui::Frame::NONE
+                        .fill(Color32::from_rgb(228, 228, 228))
+                        .inner_margin(egui::Margin::symmetric(8, 4)),
+                )
                 .show(ui, |ui| {
                     let avail = ui.available_rect_before_wrap();
                     let preview_w = (avail.width() * 0.42).clamp(260.0, 640.0);
-                    let strip = egui::Rect::from_min_max(avail.min, Pos2::new(avail.right() - preview_w - 8.0, avail.bottom()));
+                    let strip =
+                        egui::Rect::from_min_max(avail.min, Pos2::new(avail.right() - preview_w - 8.0, avail.bottom()));
                     let pane = egui::Rect::from_min_max(Pos2::new(avail.right() - preview_w, avail.top()), avail.max);
                     let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip));
                     self.thumbnail_strip(&mut strip_ui, shared);
@@ -379,7 +457,11 @@ impl BrowserState {
             egui::Panel::left("browser-sources")
                 .default_size(210.0)
                 .size_range(160.0..=320.0)
-                .frame(egui::Frame::NONE.fill(Color32::from_rgb(230, 232, 236)).inner_margin(egui::Margin::same(8)))
+                .frame(
+                    egui::Frame::NONE
+                        .fill(Color32::from_rgb(230, 232, 236))
+                        .inner_margin(egui::Margin::same(8)),
+                )
                 .show(ui, |ui| self.source_list(ui, shared));
         }
 
@@ -412,9 +494,16 @@ impl BrowserState {
 
     /// Open the anonymiser for a study; a teaching copy is re-exported unchanged.
     fn start_anonymize(&mut self, shared: &Shared, study_id: i64) {
-        let Some(study) = self.studies.iter().find(|s| s.id == study_id).cloned() else { return };
+        let Some(study) = self.studies.iter().find(|s| s.id == study_id).cloned() else {
+            return;
+        };
         if study.teaching_reference.is_some() {
-            let Some(dir) = rfd::FileDialog::new().set_title("Folder for the teaching copy").pick_folder() else { return };
+            let Some(dir) = rfd::FileDialog::new()
+                .set_title("Folder for the teaching copy")
+                .pick_folder()
+            else {
+                return;
+            };
             match ruthos_core::teaching::reexport_copy(&shared.db, &shared.paths, study.id, &dir) {
                 Ok(p) => self.set_status(format!("Teaching copy written to {}", p.display())),
                 Err(e) => self.set_status(format!("Could not export: {e}")),
@@ -426,15 +515,27 @@ impl BrowserState {
 
     fn toolbar(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.horizontal(|ui| {
-            if ToolbarButton::new(icons::SIDEBAR, "Sidebar").tooltip("Show or hide the source list").show(ui).clicked() {
+            if ToolbarButton::new(icons::SIDEBAR, "Sidebar")
+                .tooltip("Show or hide the source list")
+                .show(ui)
+                .clicked()
+            {
                 self.sidebar_visible = !self.sidebar_visible;
             }
-            if ToolbarButton::new(Bitmap::Import, "Import").tooltip("Import a folder of DICOM files (a CD, a USB stick, an export)").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Import, "Import")
+                .tooltip("Import a folder of DICOM files (a CD, a USB stick, an export)")
+                .show(ui)
+                .clicked()
+            {
                 if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM folder").pick_folders() {
                     self.start_import(shared, paths);
                 }
             }
-            if ToolbarButton::new(Bitmap::ImportImages, "Import Files").tooltip("Import individual DICOM files").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::ImportImages, "Import Files")
+                .tooltip("Import individual DICOM files")
+                .show(ui)
+                .clicked()
+            {
                 if let Some(paths) = rfd::FileDialog::new().set_title("Import DICOM files").pick_files() {
                     self.start_import(shared, paths);
                 }
@@ -455,7 +556,10 @@ impl BrowserState {
                         max_edge: Some(4096),
                         ..Default::default()
                     };
-                    if let Some(study) = self.selected_study.and_then(|id| self.studies.iter().find(|s| s.id == id)) {
+                    if let Some(study) = self
+                        .selected_study
+                        .and_then(|id| self.studies.iter().find(|s| s.id == id))
+                    {
                         info.patient_name = study.patient_name.clone();
                         info.patient_id = study.patient_id.clone();
                         info.birth_date = study.patient_birth_date.clone().unwrap_or_default();
@@ -464,7 +568,11 @@ impl BrowserState {
                         info.breed = study.patient_breed.clone().unwrap_or_default();
                         info.responsible_person = study.responsible_person.clone().unwrap_or_default();
                     }
-                    self.modal = Some(Modal::ImportPictures { files, info, add_to_selected: false });
+                    self.modal = Some(Modal::ImportPictures {
+                        files,
+                        info,
+                        add_to_selected: false,
+                    });
                 }
             }
             let has_sel = self.selected_study.is_some();
@@ -476,25 +584,51 @@ impl BrowserState {
             {
                 self.export_selected(shared);
             }
-            ToolbarButton::new(Bitmap::Query, "Query").enabled(false).tooltip("PACS query/retrieve is next on the Tier 1 list").show(ui);
-            ToolbarButton::new(Bitmap::Send, "Send").enabled(false).tooltip("Send to PACS is next on the Tier 1 list").show(ui);
-            if ToolbarButton::new(Bitmap::Anonymize, "Anonymize").enabled(has_sel).tooltip("Make a de-identified teaching copy of the selected study").show(ui).clicked() {
+            ToolbarButton::new(Bitmap::Query, "Query")
+                .enabled(false)
+                .tooltip("PACS query/retrieve is next on the Tier 1 list")
+                .show(ui);
+            ToolbarButton::new(Bitmap::Send, "Send")
+                .enabled(false)
+                .tooltip("Send to PACS is next on the Tier 1 list")
+                .show(ui);
+            if ToolbarButton::new(Bitmap::Anonymize, "Anonymize")
+                .enabled(has_sel)
+                .tooltip("Make a de-identified teaching copy of the selected study")
+                .show(ui)
+                .clicked()
+            {
                 if let Some(id) = self.selected_study {
                     self.start_anonymize(shared, id);
                 }
             }
-            if ToolbarButton::new(Bitmap::Trash, "Delete").enabled(has_sel).tooltip("Delete the selected study").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Trash, "Delete")
+                .enabled(has_sel)
+                .tooltip("Delete the selected study")
+                .show(ui)
+                .clicked()
+            {
                 if let Some(id) = self.selected_study {
                     self.modal = Some(Modal::DeleteStudy(id));
                 }
             }
             toolbar_separator(ui);
-            if ToolbarButton::new(Bitmap::Viewer, "2D Viewer").enabled(has_sel).tooltip("Open the selected study").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Viewer, "2D Viewer")
+                .enabled(has_sel)
+                .tooltip("Open the selected study")
+                .show(ui)
+                .clicked()
+            {
                 if let Some(id) = self.selected_study {
                     self.open_requests.push((id, self.selected_series));
                 }
             }
-            if ToolbarButton::new(Bitmap::ReportCustom, "Report").enabled(has_sel).tooltip("Open the report for the selected study").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::ReportCustom, "Report")
+                .enabled(has_sel)
+                .tooltip("Open the report for the selected study")
+                .show(ui)
+                .clicked()
+            {
                 if let Some(id) = self.selected_study {
                     shared.open_reports.lock().push(id);
                 }
@@ -525,20 +659,23 @@ impl BrowserState {
                     StudySort::PatientId => "Patient ID",
                     StudySort::Modality => "Modality",
                 };
-                egui::ComboBox::from_id_salt("sort-popup").selected_text(label).width(SORT_W - 4.0).show_ui(ui, |ui| {
-                    for (s, l) in [
-                        (StudySort::DateAddedDesc, "Date added"),
-                        (StudySort::StudyDateDesc, "Study date"),
-                        (StudySort::PatientName, "Patient name"),
-                        (StudySort::PatientId, "Patient ID"),
-                        (StudySort::Modality, "Modality"),
-                    ] {
-                        if ui.selectable_label(self.filter.sort == s, l).clicked() {
-                            self.filter.sort = s;
-                            changed = true;
+                egui::ComboBox::from_id_salt("sort-popup")
+                    .selected_text(label)
+                    .width(SORT_W - 4.0)
+                    .show_ui(ui, |ui| {
+                        for (s, l) in [
+                            (StudySort::DateAddedDesc, "Date added"),
+                            (StudySort::StudyDateDesc, "Study date"),
+                            (StudySort::PatientName, "Patient name"),
+                            (StudySort::PatientId, "Patient ID"),
+                            (StudySort::Modality, "Modality"),
+                        ] {
+                            if ui.selectable_label(self.filter.sort == s, l).clicked() {
+                                self.filter.sort = s;
+                                changed = true;
+                            }
                         }
-                    }
-                });
+                    });
             });
             ui.vertical(|ui| {
                 ui.set_width(DATE_W);
@@ -560,19 +697,26 @@ impl BrowserState {
                 ui.set_width(MOD_W);
                 ui.add_space(4.0);
                 toolbar_caption(ui, "Modality");
-                let text = if self.filter.modality.is_empty() { "All".to_string() } else { self.filter.modality.clone() };
-                egui::ComboBox::from_id_salt("modality-filter").selected_text(text).width(MOD_W - 4.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(self.filter.modality.is_empty(), "All").clicked() {
-                        self.filter.modality.clear();
-                        changed = true;
-                    }
-                    for m in &self.modalities.clone() {
-                        if ui.selectable_label(&self.filter.modality == m, m).clicked() {
-                            self.filter.modality = m.clone();
+                let text = if self.filter.modality.is_empty() {
+                    "All".to_string()
+                } else {
+                    self.filter.modality.clone()
+                };
+                egui::ComboBox::from_id_salt("modality-filter")
+                    .selected_text(text)
+                    .width(MOD_W - 4.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(self.filter.modality.is_empty(), "All").clicked() {
+                            self.filter.modality.clear();
                             changed = true;
                         }
-                    }
-                });
+                        for m in &self.modalities.clone() {
+                            if ui.selectable_label(&self.filter.modality == m, m).clicked() {
+                                self.filter.modality = m.clone();
+                                changed = true;
+                            }
+                        }
+                    });
             });
             ui.vertical(|ui| {
                 ui.set_width(search_w);
@@ -601,7 +745,15 @@ impl BrowserState {
         }
         let builtins = self.builtin_albums.clone();
         for (i, b) in builtins.iter().enumerate() {
-            if source_row(ui, Bitmap::SmartAlbum, &b.name, Some(b.count), self.selected_builtin == Some(i)).clicked() {
+            if source_row(
+                ui,
+                Bitmap::SmartAlbum,
+                &b.name,
+                Some(b.count),
+                self.selected_builtin == Some(i),
+            )
+            .clicked()
+            {
                 self.selected_builtin = Some(i);
                 self.selected_album = None;
                 self.dirty = true;
@@ -611,7 +763,11 @@ impl BrowserState {
         ui.horizontal(|ui| {
             source_header(ui, "ALBUMS");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(icons::rich(icons::PLUS, 13.0)).small()).on_hover_text("New album").clicked() {
+                if ui
+                    .add(egui::Button::new(icons::rich(icons::PLUS, 13.0)).small())
+                    .on_hover_text("New album")
+                    .clicked()
+                {
                     self.modal = Some(Modal::NewAlbum { name: String::new() });
                 }
             });
@@ -621,8 +777,18 @@ impl BrowserState {
             ui.label(RichText::new("No albums yet").size(11.5).color(Color32::from_gray(140)));
         }
         for album in &albums {
-            let glyph = if album.is_smart { Bitmap::SmartAlbum } else { Bitmap::Album };
-            let r = source_row(ui, glyph, &album.name, Some(album.number_of_studies), self.selected_album == Some(album.id));
+            let glyph = if album.is_smart {
+                Bitmap::SmartAlbum
+            } else {
+                Bitmap::Album
+            };
+            let r = source_row(
+                ui,
+                glyph,
+                &album.name,
+                Some(album.number_of_studies),
+                self.selected_album == Some(album.id),
+            );
             if r.clicked() {
                 self.selected_album = Some(album.id);
                 self.selected_builtin = None;
@@ -630,7 +796,10 @@ impl BrowserState {
             }
             r.context_menu(|ui| {
                 if menu_item(ui, "Rename…", false).clicked() {
-                    self.modal = Some(Modal::RenameAlbum { id: album.id, name: album.name.clone() });
+                    self.modal = Some(Modal::RenameAlbum {
+                        id: album.id,
+                        name: album.name.clone(),
+                    });
                     ui.close();
                 }
                 if menu_item(ui, "Delete album", false).clicked() {
@@ -663,7 +832,10 @@ impl BrowserState {
         let r = source_row(ui, glyph, &text, Some(net.received as i64), false);
         let mut tip = String::new();
         if net.running {
-            tip.push_str(&format!("DICOM listener running. AE title {}, port {}.\n", net.ae_title, net.port));
+            tip.push_str(&format!(
+                "DICOM listener running. AE title {}, port {}.\n",
+                net.ae_title, net.port
+            ));
             tip.push_str("Point your X-ray system or PACS at this computer's IP address.\n");
         } else {
             tip.push_str("The DICOM listener is not running.\n");
@@ -677,11 +849,18 @@ impl BrowserState {
         r.on_hover_text(tip);
 
         ui.add_space(8.0);
-        if source_row(ui, icons::SMART_ALBUM, "Preferences…", None, false).on_hover_text("Settings (Ctrl+,)").clicked() {
+        if source_row(ui, icons::SMART_ALBUM, "Preferences…", None, false)
+            .on_hover_text("Settings (Ctrl+,)")
+            .clicked()
+        {
             shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         ui.add_space(4.0);
-        ui.label(RichText::new(format!("{}", shared.paths.root.display())).size(10.0).color(Color32::from_gray(130)));
+        ui.label(
+            RichText::new(format!("{}", shared.paths.root.display()))
+                .size(10.0)
+                .color(Color32::from_gray(130)),
+        );
         if let Some(note) = shared.renderer_note.lock().clone() {
             ui.add_space(4.0);
             ui.label(RichText::new(note).size(10.0).color(Color32::from_rgb(190, 120, 20)));
@@ -794,7 +973,13 @@ impl BrowserState {
                             let is_exp = expanded.contains(&s.id);
                             row.col(|ui| {
                                 let glyph = if is_exp { icons::CARET_DOWN } else { icons::CARET_RIGHT };
-                                if ui.add(egui::Label::new(icons::rich(glyph, 13.0).color(Color32::from_gray(90))).sense(Sense::click())).clicked() {
+                                if ui
+                                    .add(
+                                        egui::Label::new(icons::rich(glyph, 13.0).color(Color32::from_gray(90)))
+                                            .sense(Sense::click()),
+                                    )
+                                    .clicked()
+                                {
                                     actions.push(Action::ToggleExpand(s.id));
                                 }
                             });
@@ -827,20 +1012,34 @@ impl BrowserState {
                                     continue;
                                 }
                                 row.col(|ui| {
-                                    let mut rt = RichText::new(text).color(if is_sel { Color32::WHITE } else { text_color });
+                                    let mut rt =
+                                        RichText::new(text).color(if is_sel { Color32::WHITE } else { text_color });
                                     if ci == 0 {
                                         rt = rt.strong();
                                         if s.teaching_reference.is_some() {
-                                            ui.label(icons::rich(icons::ANONYMIZE, 13.0).color(if is_sel { Color32::WHITE } else { Color32::from_gray(90) }))
-                                                .on_hover_text(format!("Teaching copy {}", s.teaching_reference.clone().unwrap_or_default()));
+                                            ui.label(icons::rich(icons::ANONYMIZE, 13.0).color(if is_sel {
+                                                Color32::WHITE
+                                            } else {
+                                                Color32::from_gray(90)
+                                            }))
+                                            .on_hover_text(format!(
+                                                "Teaching copy {}",
+                                                s.teaching_reference.clone().unwrap_or_default()
+                                            ));
                                         }
                                     }
                                     ui.label(rt);
                                     if ci == 0 && teaching_sources.contains(&s.study_instance_uid) {
-                                        let r = ui.label(icons::rich(icons::ANONYMIZE, 11.0).color(Color32::from_rgb(190, 120, 20)));
+                                        let r = ui.label(
+                                            icons::rich(icons::ANONYMIZE, 11.0).color(Color32::from_rgb(190, 120, 20)),
+                                        );
                                         r.on_hover_ui(|ui| {
                                             ui.label("Teaching copies exist for this study:");
-                                            for c in shared.db.teaching_cases_for_study(&s.study_instance_uid).unwrap_or_default() {
+                                            for c in shared
+                                                .db
+                                                .teaching_cases_for_study(&s.study_instance_uid)
+                                                .unwrap_or_default()
+                                            {
                                                 ui.label(format!("{}  ({})", c.reference, c.name.replace('^', " ")));
                                             }
                                         });
@@ -859,7 +1058,9 @@ impl BrowserState {
                                     actions.push(Action::Open(s.id, None));
                                     ui.close();
                                 }
-                                if menu_item(ui, if is_exp { "Collapse series" } else { "Show series" }, false).clicked() {
+                                if menu_item(ui, if is_exp { "Collapse series" } else { "Show series" }, false)
+                                    .clicked()
+                                {
                                     actions.push(Action::ToggleExpand(s.id));
                                     ui.close();
                                 }
@@ -877,13 +1078,21 @@ impl BrowserState {
                                     }
                                 });
                                 if let Some(album_id) = selected_album {
-                                    if albums.iter().any(|a| a.id == album_id && !a.is_smart) && menu_item(ui, "Remove from this album", false).clicked() {
+                                    if albums.iter().any(|a| a.id == album_id && !a.is_smart)
+                                        && menu_item(ui, "Remove from this album", false).clicked()
+                                    {
                                         actions.push(Action::RemoveFromAlbum(album_id, s.id));
                                         ui.close();
                                     }
                                 }
                                 ui.menu_button("Set status", |ui| {
-                                    for (v, l) in [(0, "None"), (1, "Unread"), (2, "Reviewed"), (3, "Dictated"), (4, "Validated")] {
+                                    for (v, l) in [
+                                        (0, "None"),
+                                        (1, "Unread"),
+                                        (2, "Reviewed"),
+                                        (3, "Dictated"),
+                                        (4, "Validated"),
+                                    ] {
                                         if menu_item(ui, l, s.state == v).clicked() {
                                             actions.push(Action::SetState(s.id, v));
                                             ui.close();
@@ -903,7 +1112,13 @@ impl BrowserState {
                                     ui.close();
                                 }
                                 ui.separator();
-                                if menu_item(ui, RichText::new("Delete study…").color(Color32::from_rgb(190, 30, 30)), false).clicked() {
+                                if menu_item(
+                                    ui,
+                                    RichText::new("Delete study…").color(Color32::from_rgb(190, 30, 30)),
+                                    false,
+                                )
+                                .clicked()
+                                {
                                     actions.push(Action::Delete(s.id));
                                     ui.close();
                                 }
@@ -939,11 +1154,19 @@ impl BrowserState {
                                 se.number_of_images.to_string(),
                                 unix_to_local(se.date_added),
                                 se.comment.clone(),
-                                if se.number_of_key_images > 0 { format!("{} key", se.number_of_key_images) } else { String::new() },
+                                if se.number_of_key_images > 0 {
+                                    format!("{} key", se.number_of_key_images)
+                                } else {
+                                    String::new()
+                                },
                             ];
                             for text in cells.iter() {
                                 row.col(|ui| {
-                                    ui.label(RichText::new(text).color(if is_sel { Color32::WHITE } else { Color32::from_gray(75) }));
+                                    ui.label(RichText::new(text).color(if is_sel {
+                                        Color32::WHITE
+                                    } else {
+                                        Color32::from_gray(75)
+                                    }));
                                 });
                             }
                             let r = row.response();
@@ -992,7 +1215,12 @@ impl BrowserState {
                     self.dirty = true;
                 }
                 Action::EditComment(id) => {
-                    let text = self.studies.iter().find(|s| s.id == id).map(|s| s.comment.clone()).unwrap_or_default();
+                    let text = self
+                        .studies
+                        .iter()
+                        .find(|s| s.id == id)
+                        .map(|s| s.comment.clone())
+                        .unwrap_or_default();
                     self.modal = Some(Modal::EditComment { study_id: id, text });
                 }
             }
@@ -1016,7 +1244,11 @@ impl BrowserState {
         };
         let wanted = self.preview.series.as_ref().map(|s| s.id) != Some(series_id);
         if wanted {
-            let series = self.series_for(shared, study_id).iter().find(|s| s.id == series_id).cloned();
+            let series = self
+                .series_for(shared, study_id)
+                .iter()
+                .find(|s| s.id == series_id)
+                .cloned();
             let image = shared.db.representative_image(series_id).ok().flatten();
             self.preview = Preview {
                 study: self.studies.iter().find(|s| s.id == study_id).cloned(),
@@ -1045,8 +1277,11 @@ impl BrowserState {
                     match result {
                         Ok(frame) => {
                             let frame = Arc::new(frame);
-                            self.preview.gpu =
-                                Some(Arc::new(GpuImage::upload(&shared.render_state.device, &shared.render_state.queue, &frame)));
+                            self.preview.gpu = Some(Arc::new(GpuImage::upload(
+                                &shared.render_state.device,
+                                &shared.render_state.queue,
+                                &frame,
+                            )));
                             self.preview.frame = Some(frame);
                         }
                         Err(e) => self.preview.error = Some(e),
@@ -1074,7 +1309,14 @@ impl BrowserState {
                 None if self.preview.requested.is_some() => "Loading\u{2026}".to_string(),
                 None => "No image".to_string(),
             };
-            shadow_text(&painter, rect.center(), Align2::CENTER_CENTER, &text, FontId::proportional(13.0), Color32::from_gray(160));
+            shadow_text(
+                &painter,
+                rect.center(),
+                Align2::CENTER_CENTER,
+                &text,
+                FontId::proportional(13.0),
+                Color32::from_gray(160),
+            );
             return;
         };
         let (c, w) = match (series.window_center, series.window_width) {
@@ -1086,7 +1328,11 @@ impl BrowserState {
             .pixel_spacing
             .map(|[row, col]| if col > 0.0 { (row / col) as f32 } else { 1.0 })
             .unwrap_or(1.0);
-        let mut view = ViewState { window_center: c, window_width: w, ..ViewState::default() };
+        let mut view = ViewState {
+            window_center: c,
+            window_width: w,
+            ..ViewState::default()
+        };
         view.rotation_deg = series.rotation_angle as f32;
         view.flip_horizontal = series.x_flipped;
         view.flip_vertical = series.y_flipped;
@@ -1104,7 +1350,11 @@ impl BrowserState {
             },
         ));
         let count = series.number_of_images.max(1) as usize;
-        let index = image.instance_number.map(|n| (n.max(1) - 1) as usize).unwrap_or(0).min(count - 1);
+        let index = image
+            .instance_number
+            .map(|n| (n.max(1) - 1) as usize)
+            .unwrap_or(0)
+            .min(count - 1);
         let ctx = AnnotationContext {
             study: &study,
             series: &series,
@@ -1130,21 +1380,30 @@ impl BrowserState {
         let series = self.series_for(shared, study_id).clone();
         let mut open: Option<i64> = None;
         let mut select: Option<i64> = None;
-        egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for s in &series {
-                    let tex = shared.thumbnail(s.id);
-                    let sub = format!("{} · {}", s.modality, s.count_label());
-                    let r = thumbnail_cell(ui, tex.as_ref(), &s.display_name(), &sub, self.selected_series == Some(s.id), theme::THUMB_SIZE);
-                    if r.clicked() {
-                        select = Some(s.id);
+        egui::ScrollArea::horizontal()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for s in &series {
+                        let tex = shared.thumbnail(s.id);
+                        let sub = format!("{} · {}", s.modality, s.count_label());
+                        let r = thumbnail_cell(
+                            ui,
+                            tex.as_ref(),
+                            &s.display_name(),
+                            &sub,
+                            self.selected_series == Some(s.id),
+                            theme::THUMB_SIZE,
+                        );
+                        if r.clicked() {
+                            select = Some(s.id);
+                        }
+                        if r.double_clicked() {
+                            open = Some(s.id);
+                        }
                     }
-                    if r.double_clicked() {
-                        open = Some(s.id);
-                    }
-                }
+                });
             });
-        });
         if let Some(id) = select {
             self.selected_series = Some(id);
         }
@@ -1156,12 +1415,24 @@ impl BrowserState {
     fn status_bar(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.horizontal(|ui| {
             let (st, se, im) = self.counts;
-            ui.label(RichText::new(format!("{st} studies · {se} series · {im} images")).size(11.5).color(Color32::from_gray(80)));
+            ui.label(
+                RichText::new(format!("{st} studies · {se} series · {im} images"))
+                    .size(11.5)
+                    .color(Color32::from_gray(80)),
+            );
             if let Some((done, total, current)) = &self.import_progress {
                 ui.separator();
                 let frac = if *total > 0 { *done as f32 / *total as f32 } else { 0.0 };
-                ui.add(egui::ProgressBar::new(frac).desired_width(180.0).text(format!("Importing {done}/{total}")));
-                ui.label(RichText::new(truncate(current, 40)).size(11.0).color(Color32::from_gray(110)));
+                ui.add(
+                    egui::ProgressBar::new(frac)
+                        .desired_width(180.0)
+                        .text(format!("Importing {done}/{total}")),
+                );
+                ui.label(
+                    RichText::new(truncate(current, 40))
+                        .size(11.0)
+                        .color(Color32::from_gray(110)),
+                );
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
             } else if let Some((text, when)) = &self.status {
                 if when.elapsed().as_secs() < 8 {
@@ -1183,7 +1454,9 @@ impl BrowserState {
 
     fn export_selected(&mut self, shared: &Shared) {
         let Some(study_id) = self.selected_study else { return };
-        let Some(dir) = rfd::FileDialog::new().set_title("Export study to folder").pick_folder() else { return };
+        let Some(dir) = rfd::FileDialog::new().set_title("Export study to folder").pick_folder() else {
+            return;
+        };
         let series = shared.db.series_for_study(study_id).unwrap_or_default();
         let mut n = 0usize;
         for s in series {
@@ -1404,7 +1677,13 @@ fn unix_to_local(secs: i64) -> String {
 fn sanitize(s: &str) -> String {
     let out: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let out = out.trim().to_string();
     if out.is_empty() {

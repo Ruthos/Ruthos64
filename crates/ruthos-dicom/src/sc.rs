@@ -65,8 +65,21 @@ pub fn convert_pictures(pictures: &[PathBuf], info: &PictureInfo, out_dir: &Path
     for (i, path) in pictures.iter().enumerate() {
         let rgb = load_rgb(path, info.max_edge)?;
         let sop_uid = new_uid();
-        let picture = if is_grayscale(&rgb) { Picture::Gray(to_gray(&rgb)) } else { Picture::Rgb(rgb) };
-        let obj = build_object(&picture, info, &study_uid, &series_uid, &sop_uid, &study_date, &time, i as u32 + 1);
+        let picture = if is_grayscale(&rgb) {
+            Picture::Gray(to_gray(&rgb))
+        } else {
+            Picture::Rgb(rgb)
+        };
+        let obj = build_object(
+            &picture,
+            info,
+            &study_uid,
+            &series_uid,
+            &sop_uid,
+            &study_date,
+            &time,
+            i as u32 + 1,
+        );
         let meta = FileMetaTableBuilder::new()
             .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
             .media_storage_sop_class_uid(uids::SECONDARY_CAPTURE_IMAGE_STORAGE)
@@ -93,7 +106,9 @@ pub fn load_rgb(path: &Path, max_edge: Option<u32>) -> Result<image::RgbImage> {
     let mut decoder = reader
         .into_decoder()
         .map_err(|e| DicomError::Unsupported(format!("{}: {e}", path.display())))?;
-    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut img = image::DynamicImage::from_decoder(decoder)
         .map_err(|e| DicomError::Unsupported(format!("{}: {e}", path.display())))?;
     img.apply_orientation(orientation);
@@ -187,14 +202,26 @@ fn build_object(
     put_str(tags::STUDY_TIME, VR::TM, time);
     put_str(tags::SERIES_TIME, VR::TM, time);
     put_str(tags::CONTENT_TIME, VR::TM, time);
-    put_str(tags::MODALITY, VR::CS, if info.modality.trim().is_empty() { "OT" } else { &info.modality });
+    put_str(
+        tags::MODALITY,
+        VR::CS,
+        if info.modality.trim().is_empty() {
+            "OT"
+        } else {
+            &info.modality
+        },
+    );
     put_str(tags::CONVERSION_TYPE, VR::CS, "WSD");
     put_str(tags::MANUFACTURER, VR::LO, "Ruthos");
     put_str(tags::STUDY_DESCRIPTION, VR::LO, &info.study_description);
     put_str(
         tags::SERIES_DESCRIPTION,
         VR::LO,
-        if info.series_description.trim().is_empty() { "Pictures" } else { &info.series_description },
+        if info.series_description.trim().is_empty() {
+            "Pictures"
+        } else {
+            &info.series_description
+        },
     );
     put_str(tags::PATIENT_NAME, VR::PN, &to_person_name(&info.patient_name));
     put_str(tags::PATIENT_ID, VR::LO, &info.patient_id);
@@ -203,11 +230,19 @@ fn build_object(
     }
     put_str(tags::PATIENT_SEX, VR::CS, &info.sex.to_ascii_uppercase());
     if let Some(n) = info.neutered {
-        put_str(tags::PATIENT_SEX_NEUTERED, VR::CS, if n { "ALTERED" } else { "UNALTERED" });
+        put_str(
+            tags::PATIENT_SEX_NEUTERED,
+            VR::CS,
+            if n { "ALTERED" } else { "UNALTERED" },
+        );
     }
     put_str(tags::PATIENT_SPECIES_DESCRIPTION, VR::LO, &info.species);
     put_str(tags::PATIENT_BREED_DESCRIPTION, VR::LO, &info.breed);
-    put_str(tags::RESPONSIBLE_PERSON, VR::PN, &to_person_name(&info.responsible_person));
+    put_str(
+        tags::RESPONSIBLE_PERSON,
+        VR::PN,
+        &to_person_name(&info.responsible_person),
+    );
     put_str(tags::STUDY_INSTANCE_UID, VR::UI, study_uid);
     put_str(tags::SERIES_INSTANCE_UID, VR::UI, series_uid);
     put_str(tags::STUDY_ID, VR::SH, "1");
@@ -220,17 +255,33 @@ fn build_object(
         put_str(tags::WINDOW_WIDTH, VR::DS, "256");
     }
 
-    obj.put(DataElement::new(tags::IMAGE_TYPE, VR::CS, dicom_value!(Strs, ["DERIVED", "SECONDARY"])));
-    obj.put(DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, dicom_value!(U16, [samples])));
+    obj.put(DataElement::new(
+        tags::IMAGE_TYPE,
+        VR::CS,
+        dicom_value!(Strs, ["DERIVED", "SECONDARY"]),
+    ));
+    obj.put(DataElement::new(
+        tags::SAMPLES_PER_PIXEL,
+        VR::US,
+        dicom_value!(U16, [samples]),
+    ));
     if samples == 3 {
-        obj.put(DataElement::new(tags::PLANAR_CONFIGURATION, VR::US, dicom_value!(U16, [0])));
+        obj.put(DataElement::new(
+            tags::PLANAR_CONFIGURATION,
+            VR::US,
+            dicom_value!(U16, [0]),
+        ));
     }
     obj.put(DataElement::new(tags::ROWS, VR::US, dicom_value!(U16, [h as u16])));
     obj.put(DataElement::new(tags::COLUMNS, VR::US, dicom_value!(U16, [w as u16])));
     obj.put(DataElement::new(tags::BITS_ALLOCATED, VR::US, dicom_value!(U16, [8])));
     obj.put(DataElement::new(tags::BITS_STORED, VR::US, dicom_value!(U16, [8])));
     obj.put(DataElement::new(tags::HIGH_BIT, VR::US, dicom_value!(U16, [7])));
-    obj.put(DataElement::new(tags::PIXEL_REPRESENTATION, VR::US, dicom_value!(U16, [0])));
+    obj.put(DataElement::new(
+        tags::PIXEL_REPRESENTATION,
+        VR::US,
+        dicom_value!(U16, [0]),
+    ));
     obj.put(DataElement::new(tags::PIXEL_DATA, VR::OB, PrimitiveValue::from(pixels)));
     obj
 }
@@ -260,7 +311,9 @@ pub fn normalise_date(s: &str) -> Option<String> {
     // Day-first (DD/MM/YYYY) when the last four digits look like a year and
     // the first two cannot be a year prefix.
     let separators = s.chars().filter(|c| !c.is_ascii_digit()).count();
-    let (y, m, d) = if separators > 0 && !s.starts_with(|c: char| c.is_ascii_digit() && s[..4].chars().all(|c| c.is_ascii_digit())) {
+    let (y, m, d) = if separators > 0
+        && !s.starts_with(|c: char| c.is_ascii_digit() && s[..4].chars().all(|c| c.is_ascii_digit()))
+    {
         (&digits[4..8], &digits[2..4], &digits[0..2])
     } else {
         (&digits[0..4], &digits[4..6], &digits[6..8])

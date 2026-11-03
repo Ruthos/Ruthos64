@@ -33,7 +33,10 @@ pub const DEID_METHOD_CODES: [(&str, &str); 5] = [
     ("113100", "Basic Application Confidentiality Profile"),
     ("113101", "Clean Pixel Data Option"),
     ("113105", "Clean Descriptors Option"),
-    ("113107", "Retain Longitudinal Temporal Information Modified Dates Option"),
+    (
+        "113107",
+        "Retain Longitudinal Temporal Information Modified Dates Option",
+    ),
     ("113108", "Retain Patient Characteristics Option"),
 ];
 
@@ -193,7 +196,13 @@ const ALLOWED: &[Tag] = &[
 ];
 
 /// Attributes whose value is replaced rather than copied.
-const REPLACED: &[Tag] = &[tags::PATIENT_NAME, tags::PATIENT_ID, tags::STUDY_DESCRIPTION, tags::ACCESSION_NUMBER, tags::STUDY_ID];
+const REPLACED: &[Tag] = &[
+    tags::PATIENT_NAME,
+    tags::PATIENT_ID,
+    tags::STUDY_DESCRIPTION,
+    tags::ACCESSION_NUMBER,
+    tags::STUDY_ID,
+];
 
 /// UIDs that name a type rather than a thing, and so are copied as they are.
 pub fn is_type_uid(tag: Tag) -> bool {
@@ -266,8 +275,12 @@ pub fn build_teaching_dataset(src: &InMemDicomObject, p: &DeidParams<'_>) -> InM
 
     // Age is written explicitly, from the true dates, when the source has none.
     if out.get(tags::PATIENT_AGE).is_none() {
-        let birth = src.get(tags::PATIENT_BIRTH_DATE).and_then(|e| e.value().to_str().ok().map(|s| s.to_string()));
-        let study = src.get(tags::STUDY_DATE).and_then(|e| e.value().to_str().ok().map(|s| s.to_string()));
+        let birth = src
+            .get(tags::PATIENT_BIRTH_DATE)
+            .and_then(|e| e.value().to_str().ok().map(|s| s.to_string()));
+        let study = src
+            .get(tags::STUDY_DATE)
+            .and_then(|e| e.value().to_str().ok().map(|s| s.to_string()));
         if let (Some(b), Some(s)) = (birth, study) {
             if let Some(age) = age_string(&b, &s) {
                 put_str(&mut out, tags::PATIENT_AGE, VR::AS, &age);
@@ -277,15 +290,33 @@ pub fn build_teaching_dataset(src: &InMemDicomObject, p: &DeidParams<'_>) -> InM
 
     // De-identification declarations.
     put_str(&mut out, tags::PATIENT_IDENTITY_REMOVED, VR::CS, "YES");
-    put_str(&mut out, tags::LONGITUDINAL_TEMPORAL_INFORMATION_MODIFIED, VR::CS, "MODIFIED");
-    put_str(&mut out, tags::DEIDENTIFICATION_METHOD, VR::LO, &format!("Ruthos {} teaching copy", p.software));
+    put_str(
+        &mut out,
+        tags::LONGITUDINAL_TEMPORAL_INFORMATION_MODIFIED,
+        VR::CS,
+        "MODIFIED",
+    );
+    put_str(
+        &mut out,
+        tags::DEIDENTIFICATION_METHOD,
+        VR::LO,
+        &format!("Ruthos {} teaching copy", p.software),
+    );
     let items: Vec<InMemDicomObject> = DEID_METHOD_CODES
         .iter()
         .map(|(value, meaning)| {
             let mut item = InMemDicomObject::new_empty();
             item.put(DataElement::new(tags::CODE_VALUE, VR::SH, dicom_value!(Str, *value)));
-            item.put(DataElement::new(tags::CODING_SCHEME_DESIGNATOR, VR::SH, dicom_value!(Str, "DCM")));
-            item.put(DataElement::new(tags::CODE_MEANING, VR::LO, dicom_value!(Str, *meaning)));
+            item.put(DataElement::new(
+                tags::CODING_SCHEME_DESIGNATOR,
+                VR::SH,
+                dicom_value!(Str, "DCM"),
+            ));
+            item.put(DataElement::new(
+                tags::CODE_MEANING,
+                VR::LO,
+                dicom_value!(Str, *meaning),
+            ));
             item
         })
         .collect();
@@ -321,7 +352,11 @@ fn transform(elt: &Element, p: &DeidParams<'_>) -> Option<Element> {
                     new
                 })
                 .collect();
-            Some(DataElement::new(tag, VR::SQ, Value::Sequence(DataSetSequence::new(items, Length::UNDEFINED))))
+            Some(DataElement::new(
+                tag,
+                VR::SQ,
+                Value::Sequence(DataSetSequence::new(items, Length::UNDEFINED)),
+            ))
         }
         Value::PixelSequence(_) => Some(elt.clone()),
         Value::Primitive(_) => match vr {
@@ -380,7 +415,11 @@ mod tests {
         s(tags::STATION_NAME, VR::SH, "ECHO1");
         s(tags::MODALITY, VR::CS, "US");
         s(tags::SERIES_DESCRIPTION, VR::LO, "LV M-mode");
-        o.put(DataElement::new(Tag(0x0009, 0x0010), VR::LO, dicom_value!(Str, "VENDOR PRIVATE")));
+        o.put(DataElement::new(
+            Tag(0x0009, 0x0010),
+            VR::LO,
+            dicom_value!(Str, "VENDOR PRIVATE"),
+        ));
         o.put(DataElement::new(tags::ROWS, VR::US, dicom_value!(U16, [4])));
         o
     }
@@ -397,7 +436,9 @@ mod tests {
     }
 
     fn text(o: &InMemDicomObject, tag: Tag) -> String {
-        o.get(tag).map(|e| e.value().to_str().unwrap().to_string()).unwrap_or_default()
+        o.get(tag)
+            .map(|e| e.value().to_str().unwrap().to_string())
+            .unwrap_or_default()
     }
 
     #[test]
@@ -418,7 +459,15 @@ mod tests {
         assert_eq!(text(&out, tags::SERIES_DESCRIPTION), "LV M-mode");
         assert_eq!(text(&out, tags::PATIENT_IDENTITY_REMOVED), "YES");
         assert_eq!(text(&out, tags::PATIENT_AGE), "011Y");
-        assert_eq!(out.get(tags::DEIDENTIFICATION_METHOD_CODE_SEQUENCE).unwrap().value().items().unwrap().len(), 5);
+        assert_eq!(
+            out.get(tags::DEIDENTIFICATION_METHOD_CODE_SEQUENCE)
+                .unwrap()
+                .value()
+                .items()
+                .unwrap()
+                .len(),
+            5
+        );
     }
 
     #[test]
@@ -449,24 +498,73 @@ mod tests {
     #[test]
     fn display_paths_only_read_allowed_attributes() {
         let display_tags = [
-            tags::ROWS, tags::COLUMNS, tags::NUMBER_OF_FRAMES, tags::BITS_ALLOCATED, tags::BITS_STORED,
-            tags::PIXEL_REPRESENTATION, tags::SAMPLES_PER_PIXEL, tags::PHOTOMETRIC_INTERPRETATION,
-            tags::PIXEL_SPACING, tags::IMAGER_PIXEL_SPACING, tags::SLICE_THICKNESS, tags::SLICE_LOCATION,
-            tags::IMAGE_POSITION_PATIENT, tags::IMAGE_ORIENTATION_PATIENT, tags::PATIENT_ORIENTATION,
-            tags::WINDOW_CENTER, tags::WINDOW_WIDTH, tags::RESCALE_INTERCEPT, tags::RESCALE_SLOPE,
-            tags::PRESENTATION_LUT_SHAPE, tags::KVP, tags::EXPOSURE, tags::EXPOSURE_TIME, tags::MANUFACTURER,
-            tags::MANUFACTURER_MODEL_NAME, tags::DETECTOR_TYPE, tags::ECHO_TIME, tags::REPETITION_TIME,
-            tags::MAGNETIC_FIELD_STRENGTH, tags::SEQUENCE_OF_ULTRASOUND_REGIONS, tags::FRAME_TIME, tags::CINE_RATE,
-            tags::RECOMMENDED_DISPLAY_FRAME_RATE, tags::BURNED_IN_ANNOTATION, tags::MODALITY, tags::STUDY_DATE,
-            tags::STUDY_TIME, tags::STUDY_DESCRIPTION, tags::SERIES_NUMBER, tags::SERIES_DESCRIPTION,
-            tags::SERIES_DATE, tags::BODY_PART_EXAMINED, tags::VIEW_POSITION, tags::LATERALITY, tags::INSTANCE_NUMBER,
-            tags::ACQUISITION_DATE, tags::ACQUISITION_TIME, tags::CONTENT_DATE, tags::CONTENT_TIME,
-            tags::PATIENT_NAME, tags::PATIENT_ID, tags::PATIENT_BIRTH_DATE, tags::PATIENT_SEX,
-            tags::PATIENT_SPECIES_DESCRIPTION, tags::PATIENT_BREED_DESCRIPTION, tags::SOP_CLASS_UID,
-            tags::SOP_INSTANCE_UID, tags::STUDY_INSTANCE_UID, tags::SERIES_INSTANCE_UID,
+            tags::ROWS,
+            tags::COLUMNS,
+            tags::NUMBER_OF_FRAMES,
+            tags::BITS_ALLOCATED,
+            tags::BITS_STORED,
+            tags::PIXEL_REPRESENTATION,
+            tags::SAMPLES_PER_PIXEL,
+            tags::PHOTOMETRIC_INTERPRETATION,
+            tags::PIXEL_SPACING,
+            tags::IMAGER_PIXEL_SPACING,
+            tags::SLICE_THICKNESS,
+            tags::SLICE_LOCATION,
+            tags::IMAGE_POSITION_PATIENT,
+            tags::IMAGE_ORIENTATION_PATIENT,
+            tags::PATIENT_ORIENTATION,
+            tags::WINDOW_CENTER,
+            tags::WINDOW_WIDTH,
+            tags::RESCALE_INTERCEPT,
+            tags::RESCALE_SLOPE,
+            tags::PRESENTATION_LUT_SHAPE,
+            tags::KVP,
+            tags::EXPOSURE,
+            tags::EXPOSURE_TIME,
+            tags::MANUFACTURER,
+            tags::MANUFACTURER_MODEL_NAME,
+            tags::DETECTOR_TYPE,
+            tags::ECHO_TIME,
+            tags::REPETITION_TIME,
+            tags::MAGNETIC_FIELD_STRENGTH,
+            tags::SEQUENCE_OF_ULTRASOUND_REGIONS,
+            tags::FRAME_TIME,
+            tags::CINE_RATE,
+            tags::RECOMMENDED_DISPLAY_FRAME_RATE,
+            tags::BURNED_IN_ANNOTATION,
+            tags::MODALITY,
+            tags::STUDY_DATE,
+            tags::STUDY_TIME,
+            tags::STUDY_DESCRIPTION,
+            tags::SERIES_NUMBER,
+            tags::SERIES_DESCRIPTION,
+            tags::SERIES_DATE,
+            tags::BODY_PART_EXAMINED,
+            tags::VIEW_POSITION,
+            tags::LATERALITY,
+            tags::INSTANCE_NUMBER,
+            tags::ACQUISITION_DATE,
+            tags::ACQUISITION_TIME,
+            tags::CONTENT_DATE,
+            tags::CONTENT_TIME,
+            tags::PATIENT_NAME,
+            tags::PATIENT_ID,
+            tags::PATIENT_BIRTH_DATE,
+            tags::PATIENT_SEX,
+            tags::PATIENT_SPECIES_DESCRIPTION,
+            tags::PATIENT_BREED_DESCRIPTION,
+            tags::SOP_CLASS_UID,
+            tags::SOP_INSTANCE_UID,
+            tags::STUDY_INSTANCE_UID,
+            tags::SERIES_INSTANCE_UID,
         ];
         for t in display_tags {
-            assert!(is_allowed(t), "display path reads ({:04X},{:04X}) which the allowlist does not copy", t.group(), t.element());
+            assert!(
+                is_allowed(t),
+                "display path reads ({:04X},{:04X}) which the allowlist does not copy",
+                t.group(),
+                t.element()
+            );
         }
     }
 }

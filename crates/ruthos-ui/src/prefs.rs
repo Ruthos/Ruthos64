@@ -73,12 +73,29 @@ impl PrefsState {
                 theme::paint_toolbar_background(ui, false, egui::vec2(6.0, 3.0));
                 ui.horizontal(|ui| {
                     for (section, icon, label) in [
-                        (Section::General, crate::widgets::Icon::Glyph(icons::SMART_ALBUM), "General"),
-                        (Section::Listener, crate::widgets::Icon::Bitmap(Bitmap::Network), "Listener"),
+                        (
+                            Section::General,
+                            crate::widgets::Icon::Glyph(icons::SMART_ALBUM),
+                            "General",
+                        ),
+                        (
+                            Section::Listener,
+                            crate::widgets::Icon::Bitmap(Bitmap::Network),
+                            "Listener",
+                        ),
                         (Section::Viewer, crate::widgets::Icon::Bitmap(Bitmap::Viewer), "Viewer"),
-                        (Section::Measurements, crate::widgets::Icon::Bitmap(Bitmap::Length), "Measurements"),
+                        (
+                            Section::Measurements,
+                            crate::widgets::Icon::Bitmap(Bitmap::Length),
+                            "Measurements",
+                        ),
                     ] {
-                        if ToolbarButton::new(icon, label).selected(self.section == section).width(88.0).show(ui).clicked() {
+                        if ToolbarButton::new(icon, label)
+                            .selected(self.section == section)
+                            .width(88.0)
+                            .show(ui)
+                            .clicked()
+                        {
                             self.section = section;
                         }
                     }
@@ -88,7 +105,11 @@ impl PrefsState {
 
         egui::Panel::bottom("prefs-buttons")
             .exact_size(46.0)
-            .frame(egui::Frame::NONE.fill(Color32::from_rgb(236, 236, 236)).inner_margin(egui::Margin::symmetric(12, 8)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(Color32::from_rgb(236, 236, 236))
+                    .inner_margin(egui::Margin::symmetric(12, 8)),
+            )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if let Some(note) = &self.note {
@@ -106,14 +127,20 @@ impl PrefsState {
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(Color32::from_rgb(246, 246, 246)).inner_margin(egui::Margin::same(18)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(Color32::from_rgb(246, 246, 246))
+                    .inner_margin(egui::Margin::same(18)),
+            )
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.section {
-                    Section::General => self.general(ui, shared),
-                    Section::Listener => self.listener(ui),
-                    Section::Viewer => self.viewer(ui, shared),
-                    Section::Measurements => self.measurements(ui),
-                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.section {
+                        Section::General => self.general(ui, shared),
+                        Section::Listener => self.listener(ui),
+                        Section::Viewer => self.viewer(ui, shared),
+                        Section::Measurements => self.measurements(ui),
+                    });
             });
     }
 
@@ -128,13 +155,20 @@ impl PrefsState {
 
     fn general(&mut self, ui: &mut Ui, shared: &Shared) {
         Self::heading(ui, "Database folder");
-        let current = self.draft.data_root.clone().unwrap_or_else(ruthos_core::DataPaths::default_root);
+        let current = self
+            .draft
+            .data_root
+            .clone()
+            .unwrap_or_else(ruthos_core::DataPaths::default_root);
         ui.horizontal(|ui| {
             ui.label(RichText::new(current.display().to_string()).monospace().size(12.5));
         });
         ui.horizontal(|ui| {
             if ui.button("Change…").clicked() {
-                if let Some(dir) = rfd::FileDialog::new().set_title("Choose the Ruthos database folder").pick_folder() {
+                if let Some(dir) = rfd::FileDialog::new()
+                    .set_title("Choose the Ruthos database folder")
+                    .pick_folder()
+                {
                     self.draft.data_root = Some(dir);
                 }
             }
@@ -144,21 +178,37 @@ impl PrefsState {
         });
         Self::hint(ui, "Imported files, the database and thumbnails live here. A change takes effect the next time Ruthos starts; nothing is moved.");
         if std::env::var_os("RUTHOS_DATA_ROOT").is_some() {
-            Self::hint(ui, &format!("RUTHOS_DATA_ROOT is set, so this run uses {}.", shared.paths.root.display()));
+            Self::hint(
+                ui,
+                &format!(
+                    "RUTHOS_DATA_ROOT is set, so this run uses {}.",
+                    shared.paths.root.display()
+                ),
+            );
         }
         ui.add_space(16.0);
 
         Self::heading(ui, "Importing");
-        ui.checkbox(&mut self.draft.copy_files_on_import, "Copy imported files into the database folder");
+        ui.checkbox(
+            &mut self.draft.copy_files_on_import,
+            "Copy imported files into the database folder",
+        );
         Self::hint(ui, "Off links to files where they are, as Horos' \"Link\" mode does. Files received by the listener are always moved in.");
         ui.add_space(16.0);
 
         Self::heading(ui, "Teaching copies");
         ui.horizontal(|ui| {
             ui.label("Reference prefix");
-            ui.add(egui::TextEdit::singleline(&mut self.draft.teaching_reference_prefix).desired_width(180.0).hint_text("RUTHOS-2026"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.draft.teaching_reference_prefix)
+                    .desired_width(180.0)
+                    .hint_text("RUTHOS-2026"),
+            );
         });
-        Self::hint(ui, "Suggested references are the prefix and a running number, for example EQ-CARD-2026-0014.");
+        Self::hint(
+            ui,
+            "Suggested references are the prefix and a running number, for example EQ-CARD-2026-0014.",
+        );
         ui.add_space(16.0);
 
         Self::heading(ui, "Thumbnails");
@@ -170,27 +220,45 @@ impl PrefsState {
 
     fn listener(&mut self, ui: &mut Ui) {
         Self::heading(ui, "DICOM listener");
-        ui.checkbox(&mut self.draft.listener_enabled, "Receive studies from modalities and other viewers");
+        ui.checkbox(
+            &mut self.draft.listener_enabled,
+            "Receive studies from modalities and other viewers",
+        );
         ui.add_space(6.0);
-        egui::Grid::new("listener-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label("AE title");
-            let mut ae = self.draft.listener_ae_title.clone();
-            if ui.add(egui::TextEdit::singleline(&mut ae).desired_width(160.0)).changed() {
-                ae = ae.chars().filter(|c| c.is_ascii_graphic()).take(16).collect::<String>().to_uppercase();
-                self.draft.listener_ae_title = ae;
-            }
-            ui.end_row();
-            ui.label("Port");
-            let mut port = self.draft.listener_port as u32;
-            ui.add(egui::DragValue::new(&mut port).range(1..=65535));
-            self.draft.listener_port = port as u16;
-            ui.end_row();
-            ui.label("Check incoming folder every");
-            ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut self.draft.incoming_scan_seconds).range(1..=60).suffix(" s"));
+        egui::Grid::new("listener-grid")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("AE title");
+                let mut ae = self.draft.listener_ae_title.clone();
+                if ui
+                    .add(egui::TextEdit::singleline(&mut ae).desired_width(160.0))
+                    .changed()
+                {
+                    ae = ae
+                        .chars()
+                        .filter(|c| c.is_ascii_graphic())
+                        .take(16)
+                        .collect::<String>()
+                        .to_uppercase();
+                    self.draft.listener_ae_title = ae;
+                }
+                ui.end_row();
+                ui.label("Port");
+                let mut port = self.draft.listener_port as u32;
+                ui.add(egui::DragValue::new(&mut port).range(1..=65535));
+                self.draft.listener_port = port as u16;
+                ui.end_row();
+                ui.label("Check incoming folder every");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.draft.incoming_scan_seconds)
+                            .range(1..=60)
+                            .suffix(" s"),
+                    );
+                });
+                ui.end_row();
             });
-            ui.end_row();
-        });
         Self::hint(ui, "Point the modality at this computer's address, the AE title and the port. Changes to the listener apply as soon as you save. Windows Firewall must allow Ruthos on the port.");
     }
 
@@ -201,7 +269,10 @@ impl PrefsState {
                 ui.selectable_value(&mut self.draft.annotations_level, v, label);
             }
         });
-        Self::hint(ui, "The corner annotations a viewer opens with. The Annotations button cycles them per window.");
+        Self::hint(
+            ui,
+            "The corner annotations a viewer opens with. The Annotations button cycles them per window.",
+        );
         ui.add_space(16.0);
 
         Self::heading(ui, "Colour lookup table");
@@ -218,7 +289,10 @@ impl PrefsState {
 
     fn measurements(&mut self, ui: &mut Ui) {
         Self::heading(ui, "Zoom loupe");
-        ui.checkbox(&mut self.draft.loupe_enabled, "Show a magnified view beside the pointer while placing a point");
+        ui.checkbox(
+            &mut self.draft.loupe_enabled,
+            "Show a magnified view beside the pointer while placing a point",
+        );
         ui.horizontal(|ui| {
             ui.label("Magnification");
             egui::ComboBox::from_id_salt("prefs-loupe-mag")
@@ -240,7 +314,10 @@ impl PrefsState {
                     }
                 });
         });
-        ui.checkbox(&mut self.draft.loupe_fine_movement, "Shift slows the pointer for fine placement");
+        ui.checkbox(
+            &mut self.draft.loupe_fine_movement,
+            "Shift slows the pointer for fine placement",
+        );
         Self::hint(ui, "Hold Alt over the image with a measuring tool to preview the loupe. With Shift held, the point moves by the pointer's movement divided by the magnification.");
         ui.add_space(16.0);
 
@@ -251,7 +328,10 @@ impl PrefsState {
                 ui.selectable_value(&mut self.draft.echo_length_unit, v.to_string(), label);
             }
         });
-        Self::hint(ui, "The unit of LV M-mode values on the image and in reports. Calculations work in centimetres regardless.");
+        Self::hint(
+            ui,
+            "The unit of LV M-mode values on the image and in reports. Calculations work in centimetres regardless.",
+        );
         ui.add_space(16.0);
 
         Self::heading(ui, "Definitions, sets and calculations");

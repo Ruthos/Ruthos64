@@ -51,7 +51,11 @@ impl RuthosApp {
         theme::apply_global_style(&cc.egui_ctx);
         // Developer option: `RUTHOS_ZOOM=0.8` scales the whole interface,
         // for screenshots on small screens.
-        if let Some(z) = std::env::var("RUTHOS_ZOOM").ok().and_then(|v| v.trim().parse::<f32>().ok()).filter(|z| (0.3..=3.0).contains(z)) {
+        if let Some(z) = std::env::var("RUTHOS_ZOOM")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|z| (0.3..=3.0).contains(z))
+        {
             cc.egui_ctx.set_zoom_factor(z);
         }
 
@@ -119,7 +123,10 @@ impl RuthosApp {
         // Developer option: open a study's report at startup for screenshots.
         if let Some(v) = std::env::var("RUTHOS_OPEN_REPORT").ok().filter(|v| !v.is_empty()) {
             let id = v.trim().parse::<i64>().ok().or_else(|| {
-                let filter = ruthos_core::StudyFilter { text: v.clone(), ..Default::default() };
+                let filter = ruthos_core::StudyFilter {
+                    text: v.clone(),
+                    ..Default::default()
+                };
                 shared.db.list_studies(&filter).ok()?.first().map(|s| s.id)
             });
             if let Some(id) = id {
@@ -136,7 +143,10 @@ impl RuthosApp {
         // Developer option: select a study in the database window at startup.
         if let Some(v) = std::env::var("RUTHOS_SELECT_STUDY").ok().filter(|v| !v.is_empty()) {
             let id = v.trim().parse::<i64>().ok().or_else(|| {
-                let filter = ruthos_core::StudyFilter { text: v.clone(), ..Default::default() };
+                let filter = ruthos_core::StudyFilter {
+                    text: v.clone(),
+                    ..Default::default()
+                };
                 shared.db.list_studies(&filter).ok()?.first().map(|s| s.id)
             });
             browser.selected_study = id;
@@ -144,9 +154,15 @@ impl RuthosApp {
 
         // Developer option: `RUTHOS_OPEN_ANON=<study>[:pixels|verify]` opens the anonymiser.
         if let Some(v) = std::env::var("RUTHOS_OPEN_ANON").ok().filter(|v| !v.is_empty()) {
-            let (who, step) = v.split_once(':').map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or((v.clone(), String::new()));
+            let (who, step) = v
+                .split_once(':')
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .unwrap_or((v.clone(), String::new()));
             let id = who.trim().parse::<i64>().ok().or_else(|| {
-                let filter = ruthos_core::StudyFilter { text: who.clone(), ..Default::default() };
+                let filter = ruthos_core::StudyFilter {
+                    text: who.clone(),
+                    ..Default::default()
+                };
                 shared.db.list_studies(&filter).ok()?.first().map(|s| s.id)
             });
             if let Some(id) = id {
@@ -164,7 +180,10 @@ impl RuthosApp {
             if let Ok(id) = v.trim().parse::<i64>() {
                 return Some(id);
             }
-            let filter = ruthos_core::StudyFilter { text: v, ..Default::default() };
+            let filter = ruthos_core::StudyFilter {
+                text: v,
+                ..Default::default()
+            };
             shared.db.list_studies(&filter).ok()?.first().map(|s| s.id)
         });
 
@@ -184,7 +203,10 @@ impl RuthosApp {
     }
 
     fn open_viewer(&mut self, study_id: i64, series_id: Option<i64>) {
-        tracing::info!("open viewer: study {study_id}, series {series_id:?}, {} open", self.viewers.len());
+        tracing::info!(
+            "open viewer: study {study_id}, series {series_id:?}, {} open",
+            self.viewers.len()
+        );
         // Reuse an existing window for this study: switch series and focus it.
         if let Some(existing) = self.viewers.iter().find(|v| v.lock().study.id == study_id) {
             let mut v = existing.lock();
@@ -200,7 +222,9 @@ impl RuthosApp {
             self.pending_focus = Some(vid);
             return;
         }
-        let Ok(Some(study)) = self.shared.db.study(study_id) else { return };
+        let Ok(Some(study)) = self.shared.db.study(study_id) else {
+            return;
+        };
         match ViewerState::open(&self.shared, study, series_id) {
             Ok(v) => self.viewers.push(Arc::new(Mutex::new(v))),
             Err(e) => tracing::warn!("could not open viewer: {e}"),
@@ -232,7 +256,9 @@ impl RuthosApp {
             |ctx, _class| {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
                     if let Err(msg) = crate::crash::guarded(|| prefs.show(ui, &shared)) {
-                        shared.errors.lock().push(format!("The Preferences window was closed after an internal error: {msg}"));
+                        shared.errors.lock().push(format!(
+                            "The Preferences window was closed after an internal error: {msg}"
+                        ));
                         prefs.close_requested = true;
                     }
                 });
@@ -254,7 +280,11 @@ impl RuthosApp {
             let st = self.shared.net_status.lock();
             (st.port, st.ae_title.clone())
         };
-        let wanted = (settings.listener_enabled, settings.listener_port, settings.listener_ae_title.clone());
+        let wanted = (
+            settings.listener_enabled,
+            settings.listener_port,
+            settings.listener_ae_title.clone(),
+        );
         let current = (self.scp.is_some(), running_port, running_ae);
         if wanted != current {
             if let Some(mut scp) = self.scp.take() {
@@ -322,7 +352,9 @@ impl RuthosApp {
             self.pending_focus = Some(existing.lock().viewport_id);
             return;
         }
-        let Ok(Some(study)) = self.shared.db.study(study_id) else { return };
+        let Ok(Some(study)) = self.shared.db.study(study_id) else {
+            return;
+        };
         let report = ReportState::open(&self.shared, study);
         self.reports.push(Arc::new(Mutex::new(report)));
     }
@@ -365,7 +397,9 @@ impl eframe::App for RuthosApp {
         if let Some(id) = self.startup_open.take() {
             self.browser.selected_study = Some(id);
             // `RUTHOS_OPEN_SERIES=<series id>` picks the series to open on.
-            let series = std::env::var("RUTHOS_OPEN_SERIES").ok().and_then(|v| v.trim().parse::<i64>().ok());
+            let series = std::env::var("RUTHOS_OPEN_SERIES")
+                .ok()
+                .and_then(|v| v.trim().parse::<i64>().ok());
             self.open_viewer(id, series);
         }
         for (study, series) in self.browser.take_open_requests() {
@@ -398,7 +432,10 @@ impl eframe::App for RuthosApp {
                 move |ui, _class| {
                     if let Err(msg) = crate::crash::guarded(|| v.lock().show(ui, &shared)) {
                         v.lock().close_requested = true;
-                        shared.errors.lock().push(format!("A viewer window was closed after an internal error: {msg}"));
+                        shared
+                            .errors
+                            .lock()
+                            .push(format!("A viewer window was closed after an internal error: {msg}"));
                     }
                 },
             );
@@ -430,7 +467,10 @@ impl eframe::App for RuthosApp {
                 move |ui, _class| {
                     if let Err(msg) = crate::crash::guarded(|| r.lock().show(ui, &shared)) {
                         r.lock().close_requested = true;
-                        shared.errors.lock().push(format!("A report window was closed after an internal error: {msg}"));
+                        shared
+                            .errors
+                            .lock()
+                            .push(format!("A report window was closed after an internal error: {msg}"));
                     }
                 },
             );
@@ -486,4 +526,3 @@ fn start_listener(shared: &Shared, settings: &ruthos_core::Settings) -> Option<S
         }
     }
 }
-

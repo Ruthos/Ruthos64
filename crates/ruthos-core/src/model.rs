@@ -248,7 +248,7 @@ mod tests {
             state: 0,
             number_of_series: 0,
             number_of_images: 0,
-                    teaching_reference: None,
+            teaching_reference: None,
             teaching_answer_key: false,
         };
         assert_eq!(s.age_at_study().as_deref(), Some("4Y"));

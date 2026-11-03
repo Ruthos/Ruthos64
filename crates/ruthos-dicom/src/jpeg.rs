@@ -128,7 +128,9 @@ fn decode_inner(data: &[u8]) -> Result<JpegImage> {
     unsafe {
         let handle = Handle(tj::tj3Init(tj::TJINIT_TJINIT_DECOMPRESS as libc::c_int));
         if handle.0.is_null() {
-            return Err(DicomError::Pixels("libjpeg-turbo could not initialise a decoder".into()));
+            return Err(DicomError::Pixels(
+                "libjpeg-turbo could not initialise a decoder".into(),
+            ));
         }
         // Keep going on warnings (e.g. slightly truncated streams), like Horos does.
         tj::tj3Set(handle.0, tj::TJPARAM_TJPARAM_STOPONWARNING as libc::c_int, 0);
@@ -156,14 +158,30 @@ fn decode_inner(data: &[u8]) -> Result<JpegImage> {
         let samples = match precision {
             8 => {
                 let mut buf = vec![0u8; n];
-                if tj::tj3Decompress8(handle.0, data.as_ptr(), data.len() as _, buf.as_mut_ptr(), 0, pixel_format) != 0 {
+                if tj::tj3Decompress8(
+                    handle.0,
+                    data.as_ptr(),
+                    data.len() as _,
+                    buf.as_mut_ptr(),
+                    0,
+                    pixel_format,
+                ) != 0
+                {
                     return Err(error_text(&handle, "8-bit decode"));
                 }
                 JpegSamples::U8(buf)
             }
             12 => {
                 let mut buf = vec![0i16; n];
-                if tj::tj3Decompress12(handle.0, data.as_ptr(), data.len() as _, buf.as_mut_ptr(), 0, pixel_format) != 0 {
+                if tj::tj3Decompress12(
+                    handle.0,
+                    data.as_ptr(),
+                    data.len() as _,
+                    buf.as_mut_ptr(),
+                    0,
+                    pixel_format,
+                ) != 0
+                {
                     return Err(error_text(&handle, "12-bit decode"));
                 }
                 // 12-bit samples are non-negative; reinterpret bit-for-bit so
@@ -172,7 +190,15 @@ fn decode_inner(data: &[u8]) -> Result<JpegImage> {
             }
             16 => {
                 let mut buf = vec![0u16; n];
-                if tj::tj3Decompress16(handle.0, data.as_ptr(), data.len() as _, buf.as_mut_ptr(), 0, pixel_format) != 0 {
+                if tj::tj3Decompress16(
+                    handle.0,
+                    data.as_ptr(),
+                    data.len() as _,
+                    buf.as_mut_ptr(),
+                    0,
+                    pixel_format,
+                ) != 0
+                {
                     return Err(error_text(&handle, "16-bit decode"));
                 }
                 JpegSamples::U16(buf)
@@ -217,7 +243,10 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Jpeg)
             .unwrap();
         let decoded = decode(&bytes).unwrap();
-        assert_eq!((decoded.width, decoded.height, decoded.components, decoded.precision), (32, 16, 1, 8));
+        assert_eq!(
+            (decoded.width, decoded.height, decoded.components, decoded.precision),
+            (32, 16, 1, 8)
+        );
         match decoded.samples {
             JpegSamples::U8(v) => {
                 assert_eq!(v.len(), 32 * 16);

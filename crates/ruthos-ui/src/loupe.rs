@@ -33,7 +33,12 @@ pub const SIZES: [u32; 3] = [120, 160, 200];
 
 impl Default for LoupeSettings {
     fn default() -> Self {
-        Self { enabled: true, magnification: 4.0, size: 160.0, fine_movement: true }
+        Self {
+            enabled: true,
+            magnification: 4.0,
+            size: 160.0,
+            fine_movement: true,
+        }
     }
 }
 
@@ -41,8 +46,16 @@ impl From<&Settings> for LoupeSettings {
     fn from(s: &Settings) -> Self {
         Self {
             enabled: s.loupe_enabled,
-            magnification: if MAGNIFICATIONS.contains(&s.loupe_magnification) { s.loupe_magnification as f32 } else { 4.0 },
-            size: if SIZES.contains(&s.loupe_size) { s.loupe_size as f32 } else { 160.0 },
+            magnification: if MAGNIFICATIONS.contains(&s.loupe_magnification) {
+                s.loupe_magnification as f32
+            } else {
+                4.0
+            },
+            size: if SIZES.contains(&s.loupe_size) {
+                s.loupe_size as f32
+            } else {
+                160.0
+            },
             fine_movement: s.loupe_fine_movement,
         }
     }
@@ -83,6 +96,7 @@ pub struct LoupeSource {
 
 /// Draw the loupe for `target`. `overlay` draws the measurement geometry
 /// through the loupe's transform so the line being placed is visible in it.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     ui: &Ui,
     painter: &Painter,
@@ -113,9 +127,19 @@ pub fn draw(
     let px = t.state.zoom;
     if px >= 6.0 {
         let grid = Stroke::new(1.0, Color32::from_white_alpha(40));
-        let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()].map(|c| t.screen_to_image(c));
-        let (x0, x1) = corners.iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
-        let (y0, y1) = corners.iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.y), hi.max(c.y)));
+        let corners = [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+        ]
+        .map(|c| t.screen_to_image(c));
+        let (x0, x1) = corners
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
+        let (y0, y1) = corners
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.y), hi.max(c.y)));
         for x in (x0.floor() as i64)..=(x1.ceil() as i64) {
             let a = t.image_to_screen(Vec2::new(x as f32, y0));
             let b = t.image_to_screen(Vec2::new(x as f32, y1));
@@ -137,7 +161,12 @@ pub fn draw(
         p.line_segment([c - d * (len + 4.0), c - d * 4.0], hair);
         p.line_segment([c + d * 4.0, c + d * (len + 4.0)], hair);
     }
-    p.rect_stroke(rect, 0.0, Stroke::new(1.5, theme::ROI_SELECTED), egui::StrokeKind::Inside);
+    p.rect_stroke(
+        rect,
+        0.0,
+        Stroke::new(1.5, theme::ROI_SELECTED),
+        egui::StrokeKind::Inside,
+    );
     p.text(
         rect.right_bottom() - Vec2::new(4.0, 2.0),
         Align2::RIGHT_BOTTOM,
@@ -167,9 +196,11 @@ mod tests {
 
     #[test]
     fn settings_fall_back_to_allowed_values() {
-        let mut s = Settings::default();
-        s.loupe_magnification = 5;
-        s.loupe_size = 999;
+        let s = Settings {
+            loupe_magnification: 5,
+            loupe_size: 999,
+            ..Default::default()
+        };
         let l = LoupeSettings::from(&s);
         assert_eq!((l.magnification, l.size), (4.0, 160.0));
     }

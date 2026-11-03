@@ -35,7 +35,10 @@ pub fn open_any(path: &Path, read_until: Option<Tag>) -> Result<DefaultDicomObje
 
 fn looks_like_missing_meta(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
-    m.contains("meta group") || m.contains("meta") && m.contains("parse") || m.contains("dicm") || m.contains("preamble")
+    m.contains("meta group")
+        || m.contains("meta") && m.contains("parse")
+        || m.contains("dicm")
+        || m.contains("preamble")
 }
 
 pub(crate) fn classify_open_error(msg: String) -> DicomError {
@@ -57,7 +60,9 @@ fn open_raw_dataset(path: &Path) -> Result<DefaultDicomObject> {
     // either VR encoding, or occasionally group 0002/0004/0010.
     let group = u16::from_le_bytes([bytes[0], bytes[1]]);
     if !matches!(group, 0x0002 | 0x0004 | 0x0008 | 0x0010 | 0x0018 | 0x0020 | 0x0028) {
-        return Err(DicomError::NotDicom("no DICOM preamble and no recognisable first tag".into()));
+        return Err(DicomError::NotDicom(
+            "no DICOM preamble and no recognisable first tag".into(),
+        ));
     }
 
     let candidates = [

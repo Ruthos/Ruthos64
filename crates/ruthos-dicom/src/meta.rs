@@ -279,7 +279,11 @@ pub fn meta_from_object(obj: &Obj) -> InstanceMeta {
         view_position: g.str(tags::VIEW_POSITION),
         laterality: {
             let l = g.str(tags::IMAGE_LATERALITY);
-            if l.is_empty() { g.str(tags::LATERALITY) } else { l }
+            if l.is_empty() {
+                g.str(tags::LATERALITY)
+            } else {
+                l
+            }
         },
         protocol_name: g.str(tags::PROTOCOL_NAME),
 
@@ -300,16 +304,28 @@ pub fn meta_from_object(obj: &Obj) -> InstanceMeta {
             .f64(tags::FRAME_TIME)
             .filter(|t| *t > 0.0)
             .or_else(|| g.f64(tags::CINE_RATE).filter(|r| *r > 0.0).map(|r| 1000.0 / r))
-            .or_else(|| g.f64(tags::RECOMMENDED_DISPLAY_FRAME_RATE).filter(|r| *r > 0.0).map(|r| 1000.0 / r)),
+            .or_else(|| {
+                g.f64(tags::RECOMMENDED_DISPLAY_FRAME_RATE)
+                    .filter(|r| *r > 0.0)
+                    .map(|r| 1000.0 / r)
+            }),
         bits_allocated: g.int(tags::BITS_ALLOCATED).unwrap_or(16) as u16,
         bits_stored: g.int(tags::BITS_STORED).unwrap_or(16) as u16,
         pixel_representation: g.int(tags::PIXEL_REPRESENTATION).unwrap_or(0) as u16,
         samples_per_pixel: g.int(tags::SAMPLES_PER_PIXEL).unwrap_or(1) as u16,
         photometric_interpretation: g.str(tags::PHOTOMETRIC_INTERPRETATION),
         pixel_spacing: None,
-        pixel_spacing_tag: g.f64s(tags::PIXEL_SPACING).filter(|v| v.len() >= 2).map(|v| [v[0], v[1]]),
-        imager_pixel_spacing: g.f64s(tags::IMAGER_PIXEL_SPACING).filter(|v| v.len() >= 2).map(|v| [v[0], v[1]]),
-        magnification_factor: g.f64(tags::ESTIMATED_RADIOGRAPHIC_MAGNIFICATION_FACTOR).filter(|f| *f > 0.0),
+        pixel_spacing_tag: g
+            .f64s(tags::PIXEL_SPACING)
+            .filter(|v| v.len() >= 2)
+            .map(|v| [v[0], v[1]]),
+        imager_pixel_spacing: g
+            .f64s(tags::IMAGER_PIXEL_SPACING)
+            .filter(|v| v.len() >= 2)
+            .map(|v| [v[0], v[1]]),
+        magnification_factor: g
+            .f64(tags::ESTIMATED_RADIOGRAPHIC_MAGNIFICATION_FACTOR)
+            .filter(|f| *f > 0.0),
         pixel_spacing_calibration_type: g.str(tags::PIXEL_SPACING_CALIBRATION_TYPE),
         hand_calibration: None,
         us_regions: read_us_regions(obj),
@@ -433,7 +449,9 @@ impl UsRegion {
 }
 
 fn read_us_regions(obj: &Obj) -> Vec<UsRegion> {
-    let Some(seq) = obj.get(tags::SEQUENCE_OF_ULTRASOUND_REGIONS) else { return Vec::new() };
+    let Some(seq) = obj.get(tags::SEQUENCE_OF_ULTRASOUND_REGIONS) else {
+        return Vec::new();
+    };
     let Some(items) = seq.items() else { return Vec::new() };
     items
         .iter()
@@ -454,7 +472,6 @@ fn read_us_regions(obj: &Obj) -> Vec<UsRegion> {
         })
         .collect()
 }
-
 
 struct Getter<'a> {
     obj: &'a Obj,
@@ -492,7 +509,9 @@ impl Getter<'_> {
 
     fn f64(&self, tag: Tag) -> Option<f64> {
         let e = self.obj.get(tag)?;
-        e.to_float64().ok().or_else(|| e.to_multi_float64().ok().and_then(|v| v.first().copied()))
+        e.to_float64()
+            .ok()
+            .or_else(|| e.to_multi_float64().ok().and_then(|v| v.first().copied()))
     }
 
     fn f64s(&self, tag: Tag) -> Option<Vec<f64>> {

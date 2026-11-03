@@ -47,7 +47,10 @@ impl FrameLoader {
     pub fn new() -> Self {
         let (tx, work_rx) = unbounded::<Request>();
         let (done_tx, rx) = unbounded::<LoadedFrame>();
-        let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).clamp(2, 4);
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+            .clamp(2, 4);
         for i in 0..workers {
             let work_rx = work_rx.clone();
             let done_tx = done_tx.clone();
@@ -56,10 +59,10 @@ impl FrameLoader {
                 .spawn(move || {
                     while let Ok(req) = work_rx.recv() {
                         match req.all_frames {
-                            Some(n) => match {
+                            Some(n) => {
                                 let started = std::time::Instant::now();
-                                let r = ruthos_dicom::decode_all_frames(&req.path);
-                                if let Ok(frames) = &r {
+                                let decoded = ruthos_dicom::decode_all_frames(&req.path);
+                                if let Ok(frames) = &decoded {
                                     tracing::info!(
                                         "decoded loop of {} frames (image {}) in {:.0} ms",
                                         frames.len(),
@@ -67,26 +70,44 @@ impl FrameLoader {
                                         started.elapsed().as_secs_f64() * 1000.0
                                     );
                                 }
-                                r
-                            } {
-                                Ok(frames) => {
-                                    let got = frames.len() as u32;
-                                    for frame in frames {
-                                        let key = FrameKey { image_id: req.key.image_id, frame: frame.frame_index };
-                                        let _ = done_tx.send(LoadedFrame { key, result: Ok(Arc::new(frame)) });
+                                match decoded {
+                                    Ok(frames) => {
+                                        let got = frames.len() as u32;
+                                        for frame in frames {
+                                            let key = FrameKey {
+                                                image_id: req.key.image_id,
+                                                frame: frame.frame_index,
+                                            };
+                                            let _ = done_tx.send(LoadedFrame {
+                                                key,
+                                                result: Ok(Arc::new(frame)),
+                                            });
+                                        }
+                                        for k in got..n {
+                                            let key = FrameKey {
+                                                image_id: req.key.image_id,
+                                                frame: k,
+                                            };
+                                            let _ = done_tx.send(LoadedFrame {
+                                                key,
+                                                result: Err("frame missing".into()),
+                                            });
+                                        }
                                     }
-                                    for k in got..n {
-                                        let key = FrameKey { image_id: req.key.image_id, frame: k };
-                                        let _ = done_tx.send(LoadedFrame { key, result: Err("frame missing".into()) });
+                                    Err(e) => {
+                                        for k in 0..n {
+                                            let key = FrameKey {
+                                                image_id: req.key.image_id,
+                                                frame: k,
+                                            };
+                                            let _ = done_tx.send(LoadedFrame {
+                                                key,
+                                                result: Err(e.to_string()),
+                                            });
+                                        }
                                     }
                                 }
-                                Err(e) => {
-                                    for k in 0..n {
-                                        let key = FrameKey { image_id: req.key.image_id, frame: k };
-                                        let _ = done_tx.send(LoadedFrame { key, result: Err(e.to_string()) });
-                                    }
-                                }
-                            },
+                            }
                             None => {
                                 let result = decode_frame(&req.path, req.key.frame)
                                     .map(Arc::new)
@@ -109,7 +130,11 @@ impl FrameLoader {
     pub fn request(&self, key: FrameKey, path: PathBuf) -> bool {
         let mut pending = self.pending.lock();
         if pending.insert(key) {
-            let _ = self.tx.send(Request { key, path, all_frames: None });
+            let _ = self.tx.send(Request {
+                key,
+                path,
+                all_frames: None,
+            });
             true
         } else {
             false
@@ -126,7 +151,11 @@ impl FrameLoader {
         for k in 0..frames {
             pending.insert(FrameKey { image_id, frame: k });
         }
-        let _ = self.tx.send(Request { key: FrameKey { image_id, frame: 0 }, path, all_frames: Some(frames) });
+        let _ = self.tx.send(Request {
+            key: FrameKey { image_id, frame: 0 },
+            path,
+            all_frames: Some(frames),
+        });
         true
     }
 

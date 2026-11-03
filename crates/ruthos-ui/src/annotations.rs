@@ -67,9 +67,17 @@ pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
     let mut tl: Vec<String> = Vec::new();
     if full {
         tl.push(format!("Image size: {} x {}", ctx.frame.width, ctx.frame.height));
-        tl.push(format!("View size: {} x {}", rect.width().round() as i64, rect.height().round() as i64));
+        tl.push(format!(
+            "View size: {} x {}",
+            rect.width().round() as i64,
+            rect.height().round() as i64
+        ));
     }
-    tl.push(format!("WL: {}  WW: {}", s.window_center.round() as i64, s.window_width.round() as i64));
+    tl.push(format!(
+        "WL: {}  WW: {}",
+        s.window_center.round() as i64,
+        s.window_width.round() as i64
+    ));
     // The scale every measurement on this image is computed from.
     let scale = m.image_scale();
     tl.push(format!("Scale: {}", scale.basis.label()));
@@ -80,7 +88,11 @@ pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
                 None => tl.push(format!("X: {x} px  Y: {y} px")),
             }
             if let Some([row_mm, col_mm]) = m.spacing_at(x as f64, y as f64) {
-                tl.push(format!("X: {:.1} mm  Y: {:.1} mm", x as f64 * col_mm, y as f64 * row_mm));
+                tl.push(format!(
+                    "X: {:.1} mm  Y: {:.1} mm",
+                    x as f64 * col_mm,
+                    y as f64 * row_mm
+                ));
             }
         }
     }
@@ -154,11 +166,15 @@ pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
         bl.push(format!("Frame: {}/{}", ctx.frame.frame_index + 1, m.number_of_frames));
     }
     if full {
-        bl.push(format!("Zoom: {}%  Angle: {}°", (s.zoom * 100.0).round() as i64, s.rotation_deg.round() as i64));
+        bl.push(format!(
+            "Zoom: {}%  Angle: {}°",
+            (s.zoom * 100.0).round() as i64,
+            s.rotation_deg.round() as i64
+        ));
         if let Some(p) = m.image_position {
             bl.push(format!("Pos: {:.1}  {:.1}  {:.1}", p[0], p[1], p[2]));
         }
-        bl.push(format!("{}", compression_name(&ctx.image.transfer_syntax)));
+        bl.push(compression_name(&ctx.image.transfer_syntax).to_string());
         match (m.slice_thickness, m.slice_location) {
             (Some(t), Some(l)) => bl.push(format!("Thickness: {t:.2} mm  Location: {l:.2} mm")),
             (Some(t), None) => bl.push(format!("Thickness: {t:.2} mm")),
@@ -233,7 +249,10 @@ pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
         for (i, t) in br.iter().enumerate() {
             shadow_text(
                 painter,
-                Pos2::new(rect.right() - margin, rect.bottom() - margin - ctx.bottom_right_inset - (n - 1 - i) as f32 * line),
+                Pos2::new(
+                    rect.right() - margin,
+                    rect.bottom() - margin - ctx.bottom_right_inset - (n - 1 - i) as f32 * line,
+                ),
                 Align2::RIGHT_BOTTOM,
                 t,
                 font.clone(),
@@ -269,7 +288,14 @@ pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
             let half = rect.size() / 2.0 - Vec2::splat(22.0);
             let k = (half.x / dir.x.abs().max(1e-3)).min(half.y / dir.y.abs().max(1e-3));
             let pos = centre + dir * k;
-            shadow_text(painter, pos, Align2::CENTER_CENTER, label, FontId::proportional(15.0), color);
+            shadow_text(
+                painter,
+                pos,
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(15.0),
+                color,
+            );
         }
     }
 }

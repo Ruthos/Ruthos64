@@ -84,7 +84,11 @@ pub fn browser_visuals() -> Visuals {
     v.widgets.open.weak_bg_fill = Color32::from_rgb(235, 235, 235);
     v.window_shadow.color = Color32::from_black_alpha(60);
     v.window_stroke = Stroke::new(1.0, Color32::from_rgb(200, 200, 200));
-    menu_look(&mut v, Color32::from_rgb(247, 247, 247), Color32::from_rgb(196, 196, 196));
+    menu_look(
+        &mut v,
+        Color32::from_rgb(247, 247, 247),
+        Color32::from_rgb(196, 196, 196),
+    );
     v.striped = true;
     rounded(&mut v, 6);
     v
@@ -148,8 +152,10 @@ pub fn paint_toolbar_background(ui: &Ui, dark: bool, inset: egui::Vec2) {
     let (top, bottom) = toolbar_gradient_colors(dark);
     gradient_rect(ui.painter(), rect, top, bottom);
     let y = rect.bottom() - 0.5;
-    ui.painter()
-        .line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], toolbar_stroke(dark));
+    ui.painter().line_segment(
+        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+        toolbar_stroke(dark),
+    );
 }
 
 /// A vertical two-colour gradient.

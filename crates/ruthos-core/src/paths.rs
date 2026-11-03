@@ -101,7 +101,13 @@ pub fn short_hash(s: &str) -> String {
 /// UIDs are dots and digits, but be defensive about anything else.
 pub fn safe_filename(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

@@ -66,9 +66,23 @@ pub fn default_measurement_sets() -> Vec<MeasurementSet> {
         set("Echo: 2D", &["Ao", "LA", "RVIDd", "EPSS", "PA"]),
         set(
             "Radiography",
-            &["VHS long axis", "VHS short axis", "T4 vertebral length", "Kidney length (L)", "Kidney length (R)"],
+            &[
+                "VHS long axis",
+                "VHS short axis",
+                "T4 vertebral length",
+                "Kidney length (L)",
+                "Kidney length (R)",
+            ],
         ),
-        set("Orthopaedic", &["Norberg angle", "Tibial plateau angle", "Patellar ligament length", "Patella length"]),
+        set(
+            "Orthopaedic",
+            &[
+                "Norberg angle",
+                "Tibial plateau angle",
+                "Patellar ligament length",
+                "Patella length",
+            ],
+        ),
     ]
 }
 
@@ -102,7 +116,10 @@ impl Settings {
     /// Defaults for fields missing from a settings file: as `Default`, but
     /// a file without the migration flag is an old file that needs it.
     fn file_defaults() -> Self {
-        Self { measurements_migrated: false, ..Self::default() }
+        Self {
+            measurements_migrated: false,
+            ..Self::default()
+        }
     }
 
     /// `%APPDATA%\Ruthos\settings.json` on Windows.
@@ -169,7 +186,11 @@ impl Settings {
         if self.measurement_sets.is_empty() {
             return true;
         }
-        let old: Vec<(String, Vec<String>)> = self.measurement_sets.iter().map(|s| (s.name.clone(), s.items.clone())).collect();
+        let old: Vec<(String, Vec<String>)> = self
+            .measurement_sets
+            .iter()
+            .map(|s| (s.name.clone(), s.items.clone()))
+            .collect();
         let migrated = measure::migrate_label_sets(&old);
         self.measurements.merge(migrated);
         self.measurement_sets.clear();
@@ -209,7 +230,10 @@ mod tests {
         assert!(s.migrate_measurement_sets());
         assert!(s.measurement_sets.is_empty());
         let lib = s.library();
-        assert_eq!(lib.set("Mine").unwrap().keys, vec!["lv.lvidd", "custom.spleen_thickness"]);
+        assert_eq!(
+            lib.set("Mine").unwrap().keys,
+            vec!["lv.lvidd", "custom.spleen_thickness"]
+        );
         assert_eq!(s.listener_port, 4242);
         assert!(!s.migrate_measurement_sets(), "only once");
         // A fresh file carries the flag and nothing to migrate.

@@ -19,15 +19,15 @@ use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTrans
 use crate::loupe::{self, LoupeSettings, LoupeSource, LoupeTarget};
 
 use crate::annotations::{self, AnnotationContext, AnnotationLevel};
+use crate::icons;
+use crate::icons::Bitmap;
 use crate::loader::FrameKey;
 use crate::roi::{roi_color, MmodePhase, Roi, RoiKind};
 use crate::shared::Shared;
-use crate::icons;
 use crate::theme;
-use crate::icons::Bitmap;
 use crate::widgets::{
-    menu_check, menu_heading, menu_item, menu_item_enabled, menu_item_shortcut, shadow_text, thumbnail_cell, tool_menu_row, toolbar_caption,
-    toolbar_separator, ToolbarButton,
+    menu_check, menu_heading, menu_item, menu_item_enabled, menu_item_shortcut, shadow_text, thumbnail_cell,
+    tool_menu_row, toolbar_caption, toolbar_separator, ToolbarButton,
 };
 
 /// Mouse tools, in the order Horos lists them.
@@ -235,7 +235,10 @@ impl Pane {
         if self.frame_idx >= img.number_of_frames.max(1) as u32 {
             return None;
         }
-        Some(FrameKey { image_id: img.id, frame: self.frame_idx })
+        Some(FrameKey {
+            image_id: img.id,
+            frame: self.frame_idx,
+        })
     }
 
     /// Scroll positions: the images, or the frames of a single multiframe image.
@@ -431,7 +434,10 @@ const FRAME_CACHE: usize = 24;
 const LOCK_CHIP: Vec2 = Vec2::new(40.0, 18.0);
 
 fn lock_chip_rect(cell: Rect) -> Rect {
-    Rect::from_min_size(Pos2::new(cell.right() - 6.0 - LOCK_CHIP.x, cell.bottom() - 6.0 - LOCK_CHIP.y), LOCK_CHIP)
+    Rect::from_min_size(
+        Pos2::new(cell.right() - 6.0 - LOCK_CHIP.x, cell.bottom() - 6.0 - LOCK_CHIP.y),
+        LOCK_CHIP,
+    )
 }
 const GPU_CACHE: usize = 8;
 
@@ -461,7 +467,11 @@ impl ViewerState {
             series,
             panes: vec![pane],
             active: 0,
-            tiling: Tiling { mode: TilingMode::Series, rows: 1, cols: 1 },
+            tiling: Tiling {
+                mode: TilingMode::Series,
+                rows: 1,
+                cols: 1,
+            },
             tool: Tool::WindowLevel,
             right_tool: Tool::Zoom,
             annotations,
@@ -511,7 +521,10 @@ impl ViewerState {
             viewer.set_tiling(shared, t);
         }
         // Developer option: `RUTHOS_OPEN_IMAGE=<image id>` starts on that image.
-        if let Some(id) = std::env::var("RUTHOS_OPEN_IMAGE").ok().and_then(|v| v.trim().parse::<i64>().ok()) {
+        if let Some(id) = std::env::var("RUTHOS_OPEN_IMAGE")
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+        {
             let a = viewer.active;
             if let Some(idx) = viewer.panes[a].images.iter().position(|i| i.id == id) {
                 viewer.panes[a].image_idx = idx;
@@ -731,14 +744,21 @@ impl ViewerState {
         let Some(p) = self.panes.get_mut(k) else { return };
         p.locked = !p.locked;
         let locked = p.locked;
-        self.set_status(if locked { "Cell locked: image, window, colours and measurements are kept" } else { "Cell unlocked" });
+        self.set_status(if locked {
+            "Cell locked: image, window, colours and measurements are kept"
+        } else {
+            "Cell unlocked"
+        });
         self.selected_roi = None;
         self.drag_draft = None;
         self.angle_draft = None;
         // Locking the active cell hands the keys and slider to the next
         // unlocked one, so scrolling carries on around the locked image.
         if locked && k == self.active {
-            if let Some(next) = (0..self.panes.len()).map(|i| (k + 1 + i) % self.panes.len()).find(|&i| !self.panes[i].locked) {
+            if let Some(next) = (0..self.panes.len())
+                .map(|i| (k + 1 + i) % self.panes.len())
+                .find(|&i| !self.panes[i].locked)
+            {
                 self.active = next;
             }
         }
@@ -780,7 +800,7 @@ impl ViewerState {
             return;
         }
         let idx = p.image_idx.min(p.images.len() - 1);
-        let frames = p.images[idx].number_of_frames.max(1) as i64;
+        let frames = p.images[idx].number_of_frames.max(1);
         if frames > 1 {
             // Multiframe: step frames first, wrapping into neighbouring images.
             let f = p.frame_idx as i64 + delta;
@@ -826,7 +846,11 @@ impl ViewerState {
             let mut records: Vec<ruthos_core::RoiRecord> = self
                 .rois
                 .get(&key)
-                .map(|list| list.iter().map(|r| r.to_record(key.image_id, key.frame, frame.as_deref())).collect())
+                .map(|list| {
+                    list.iter()
+                        .map(|r| r.to_record(key.image_id, key.frame, frame.as_deref()))
+                        .collect()
+                })
                 .unwrap_or_default();
             match shared.db.sync_rois(key.image_id, key.frame as i64, &mut records) {
                 Ok(()) => {
@@ -841,7 +865,12 @@ impl ViewerState {
                                         .keys()
                                         .iter()
                                         .zip(v)
-                                        .map(|(k, mm)| ruthos_core::RoiValue { def_key: (*k).into(), value: Some(mm), unit: "mm".into(), basis: Some(basis.key().into()) })
+                                        .map(|(k, mm)| ruthos_core::RoiValue {
+                                            def_key: (*k).into(),
+                                            value: Some(mm),
+                                            unit: "mm".into(),
+                                            basis: Some(basis.key().into()),
+                                        })
                                         .collect(),
                                     Err(_) => Vec::new(),
                                 };
@@ -868,7 +897,11 @@ impl ViewerState {
     }
 
     fn series_id_of_image(&self, image_id: i64) -> Option<i64> {
-        self.panes.iter().flat_map(|p| p.images.iter()).find(|i| i.id == image_id).map(|i| i.series_id)
+        self.panes
+            .iter()
+            .flat_map(|p| p.images.iter())
+            .find(|i| i.id == image_id)
+            .map(|i| i.series_id)
     }
 
     /// Re-read the latest M-mode lines of a series from the archive.
@@ -889,9 +922,14 @@ impl ViewerState {
     /// The phase a new M-mode line takes: systole when the series' latest
     /// line is a diastole without a newer systole, else diastole.
     fn next_mmode_phase(&self) -> MmodePhase {
-        let Some(sid) = self.current_series_id() else { return MmodePhase::Diastole };
+        let Some(sid) = self.current_series_id() else {
+            return MmodePhase::Diastole;
+        };
         match self.mmode_latest.get(&sid) {
-            Some(MmodeLatest { diastole: Some((_, dt, _)), systole }) => match systole {
+            Some(MmodeLatest {
+                diastole: Some((_, dt, _)),
+                systole,
+            }) => match systole {
                 Some((_, st, _)) if st >= dt => MmodePhase::Diastole,
                 _ => MmodePhase::Systole,
             },
@@ -908,10 +946,24 @@ impl ViewerState {
         let same_frame = self
             .rois
             .get(key)
-            .and_then(|l| l.iter().rev().find(|r| matches!(r.kind, RoiKind::LvMmode { phase: MmodePhase::Diastole, .. })))
+            .and_then(|l| {
+                l.iter().rev().find(|r| {
+                    matches!(
+                        r.kind,
+                        RoiKind::LvMmode {
+                            phase: MmodePhase::Diastole,
+                            ..
+                        }
+                    )
+                })
+            })
             .and_then(|r| r.mmode_values(frame).ok())
             .map(|(v, _)| v[1]);
-        let lvidd = same_frame.or_else(|| self.series_id_of_image(key.image_id).and_then(|sid| self.mmode_latest.get(&sid)).and_then(|l| l.diastole.map(|d| d.2)))?;
+        let lvidd = same_frame.or_else(|| {
+            self.series_id_of_image(key.image_id)
+                .and_then(|sid| self.mmode_latest.get(&sid))
+                .and_then(|l| l.diastole.map(|d| d.2))
+        })?;
         ruthos_core::mmode::fractional_shortening(lvidd, lvids)
     }
 
@@ -957,7 +1009,13 @@ impl ViewerState {
                 if let Some(sel) = self.selected_roi {
                     if let Some(roi) = self.rois.get(key).and_then(|l| l.get(sel)) {
                         if let Some(h) = roi.handle_hit(t, p) {
-                            self.handle_drag = Some(HandleDrag { key: *key, index: sel, handle: h, original: roi.kind.clone(), fine: None });
+                            self.handle_drag = Some(HandleDrag {
+                                key: *key,
+                                index: sel,
+                                handle: h,
+                                original: roi.kind.clone(),
+                                fine: None,
+                            });
                             self.active_handle = h;
                             return true;
                         }
@@ -976,7 +1034,12 @@ impl ViewerState {
                         if let Some(i) = hit {
                             self.selected_roi = Some(i);
                             self.active_handle = 0;
-                            self.move_drag = Some(MoveDrag { key: *key, index: i, original: list[i].kind.clone(), last: t.screen_to_image(p) });
+                            self.move_drag = Some(MoveDrag {
+                                key: *key,
+                                index: i,
+                                original: list[i].kind.clone(),
+                                last: t.screen_to_image(p),
+                            });
                             return true;
                         }
                     }
@@ -999,7 +1062,11 @@ impl ViewerState {
                         // Fine positioning: pointer movement scaled by 1/magnification.
                         let delta = response.drag_delta() / magnification.max(1.0);
                         let base = drag.fine.unwrap_or_else(|| {
-                            self.rois.get(&drag.key).and_then(|l| l.get(drag.index)).map(|r| r.handles()[drag.handle]).unwrap_or_else(|| t.screen_to_image(p))
+                            self.rois
+                                .get(&drag.key)
+                                .and_then(|l| l.get(drag.index))
+                                .map(|r| r.handles()[drag.handle])
+                                .unwrap_or_else(|| t.screen_to_image(p))
                         });
                         let moved = base + delta / t.state.zoom.max(1e-6);
                         drag.fine = Some(moved);
@@ -1011,7 +1078,10 @@ impl ViewerState {
                     if let Some(roi) = self.rois.get_mut(&drag.key).and_then(|l| l.get_mut(drag.index)) {
                         roi.set_handle(drag.handle, target);
                     }
-                    self.loupe_target = Some(LoupeTarget { image_point: target, pointer: p });
+                    self.loupe_target = Some(LoupeTarget {
+                        image_point: target,
+                        pointer: p,
+                    });
                 }
             }
             if response.drag_stopped_by(PointerButton::Primary) {
@@ -1053,7 +1123,9 @@ impl ViewerState {
     fn nudge_handle(&mut self, dx: f32, dy: f32) {
         let Some(key) = self.current_key() else { return };
         let Some(sel) = self.selected_roi else { return };
-        let Some(roi) = self.rois.get(&key).and_then(|l| l.get(sel)) else { return };
+        let Some(roi) = self.rois.get(&key).and_then(|l| l.get(sel)) else {
+            return;
+        };
         let handles = roi.handles();
         if handles.is_empty() {
             return;
@@ -1073,14 +1145,21 @@ impl ViewerState {
     /// menu carries.
     fn measurements_menu(&mut self, ui: &mut Ui, with_view: bool) {
         let key = self.current_key();
-        let selected = key.and_then(|k| self.rois.get(&k)).and_then(|l| self.selected_roi.and_then(|i| l.get(i)));
+        let selected = key
+            .and_then(|k| self.rois.get(&k))
+            .and_then(|l| self.selected_roi.and_then(|i| l.get(i)));
         let has_selected = selected.is_some();
         let selected_is_length = matches!(selected.map(|r| &r.kind), Some(RoiKind::Length { .. }));
         let any_rois = key.and_then(|k| self.rois.get(&k)).is_some_and(|l| !l.is_empty());
-        let has_hand = key.and_then(|k| self.frames.get(&k)).is_some_and(|f| f.meta.hand_calibration.is_some() || f.meta.user_calibrated)
+        let has_hand = key
+            .and_then(|k| self.frames.get(&k))
+            .is_some_and(|f| f.meta.hand_calibration.is_some() || f.meta.user_calibrated)
             || self
                 .current_image()
-                .and_then(|i| ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique(("has-cal", i.id)))))
+                .and_then(|i| {
+                    ui.ctx()
+                        .data(|d| d.get_temp::<bool>(egui::Id::unique(("has-cal", i.id))))
+                })
                 .unwrap_or(false);
         let locked = self.active_locked();
         let mut action: Option<MenuAction> = None;
@@ -1127,7 +1206,8 @@ impl ViewerState {
                     menu_heading(ui, &set.name);
                     for key in &set.keys {
                         let label = self.library.label(key);
-                        let is_current = current_key.as_deref() == Some(key.as_str()) || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
+                        let is_current = current_key.as_deref() == Some(key.as_str())
+                            || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
                         if menu_item(ui, label.as_str(), is_current).clicked() {
                             pick(ui, MenuAction::Name(label.clone(), Some(key.clone())));
                         }
@@ -1297,12 +1377,23 @@ impl ViewerState {
     /// Open the naming popup for the selected measurement, at its label if
     /// it is on screen, else at the pointer.
     fn open_name_popup(&mut self, ui: &Ui) {
-        let (Some(key), Some(sel)) = (self.current_key(), self.selected_roi) else { return };
-        let at_label = self.label_hits.iter().find(|(k, i, _)| *k == key && *i == sel).map(|(_, _, r)| r.left_bottom());
+        let (Some(key), Some(sel)) = (self.current_key(), self.selected_roi) else {
+            return;
+        };
+        let at_label = self
+            .label_hits
+            .iter()
+            .find(|(k, i, _)| *k == key && *i == sel)
+            .map(|(_, _, r)| r.left_bottom());
         let pos = at_label
             .or_else(|| ui.input(|i| i.pointer.latest_pos()))
             .unwrap_or_else(|| ui.ctx().content_rect().center());
-        self.assign = Some(AssignPopup { key, index: sel, pos, custom: String::new() });
+        self.assign = Some(AssignPopup {
+            key,
+            index: sel,
+            pos,
+            custom: String::new(),
+        });
     }
 
     /// Every measurement on the current frame as tab-separated text:
@@ -1328,7 +1419,9 @@ impl ViewerState {
             return;
         }
         let Some(key) = self.current_key() else { return };
-        let Some(frame) = self.frames.get(&key).cloned() else { return };
+        let Some(frame) = self.frames.get(&key).cloned() else {
+            return;
+        };
         let meta = &frame.meta;
         let mut open = true;
         egui::Window::new("Calibration basis")
@@ -1337,22 +1430,38 @@ impl ViewerState {
             .resizable(false)
             .default_width(360.0)
             .show(ui.ctx(), |ui| {
-                let pair = |v: Option<[f64; 2]>| v.map(|s| format!("{:.4} \\ {:.4} mm", s[0], s[1])).unwrap_or_else(|| "absent".into());
+                let pair = |v: Option<[f64; 2]>| {
+                    v.map(|s| format!("{:.4} \\ {:.4} mm", s[0], s[1]))
+                        .unwrap_or_else(|| "absent".into())
+                };
                 let rows: Vec<(String, String)> = vec![
                     ("Modality".into(), meta.modality.clone()),
                     ("Pixel Spacing (0028,0030)".into(), pair(meta.pixel_spacing_tag)),
-                    ("Imager Pixel Spacing (0018,1164)".into(), pair(meta.imager_pixel_spacing)),
+                    (
+                        "Imager Pixel Spacing (0018,1164)".into(),
+                        pair(meta.imager_pixel_spacing),
+                    ),
                     (
                         "Magnification Factor (0018,1114)".into(),
-                        meta.magnification_factor.map(|m| format!("{m:.3}")).unwrap_or_else(|| "absent".into()),
+                        meta.magnification_factor
+                            .map(|m| format!("{m:.3}"))
+                            .unwrap_or_else(|| "absent".into()),
                     ),
                     (
                         "Calibration Type (0028,0A02)".into(),
-                        if meta.pixel_spacing_calibration_type.is_empty() { "absent".into() } else { meta.pixel_spacing_calibration_type.clone() },
+                        if meta.pixel_spacing_calibration_type.is_empty() {
+                            "absent".into()
+                        } else {
+                            meta.pixel_spacing_calibration_type.clone()
+                        },
                     ),
                     (
                         "Ultrasound regions (0018,6011)".into(),
-                        if meta.us_regions.is_empty() { "none".into() } else { format!("{}", meta.us_regions.len()) },
+                        if meta.us_regions.is_empty() {
+                            "none".into()
+                        } else {
+                            format!("{}", meta.us_regions.len())
+                        },
                     ),
                     (
                         "Hand calibration".into(),
@@ -1365,13 +1474,16 @@ impl ViewerState {
                             .unwrap_or_else(|| "none".into()),
                     ),
                 ];
-                egui::Grid::new("basis-grid").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
-                    for (k, v) in &rows {
-                        ui.label(egui::RichText::new(k).color(Color32::from_gray(170)));
-                        ui.label(v);
-                        ui.end_row();
-                    }
-                });
+                egui::Grid::new("basis-grid")
+                    .num_columns(2)
+                    .spacing([16.0, 4.0])
+                    .show(ui, |ui| {
+                        for (k, v) in &rows {
+                            ui.label(egui::RichText::new(k).color(Color32::from_gray(170)));
+                            ui.label(v);
+                            ui.end_row();
+                        }
+                    });
                 for (i, r) in meta.us_regions.iter().enumerate() {
                     let units = |u: u16| match u {
                         3 => "cm",
@@ -1399,12 +1511,24 @@ impl ViewerState {
                 ui.separator();
                 let scale = meta.image_scale();
                 ui.label(egui::RichText::new(format!("Chosen basis: {}", scale.basis.label())).strong());
-                ui.label(format!("{:.4} \\ {:.4} mm per pixel at the image centre", scale.spacing[0], scale.spacing[1]));
-                ui.label(egui::RichText::new(scale.basis.explanation()).size(11.5).color(Color32::from_gray(170)));
+                ui.label(format!(
+                    "{:.4} \\ {:.4} mm per pixel at the image centre",
+                    scale.spacing[0], scale.spacing[1]
+                ));
+                ui.label(
+                    egui::RichText::new(scale.basis.explanation())
+                        .size(11.5)
+                        .color(Color32::from_gray(170)),
+                );
                 if let Some(p) = self.mouse_pixel {
                     match meta.scale_at(p.0 as f64, p.1 as f64) {
                         Some(s) if s.basis != scale.basis => {
-                            ui.label(format!("Under the pointer: {} ({:.4} \\ {:.4} mm)", s.basis.label(), s.spacing[0], s.spacing[1]));
+                            ui.label(format!(
+                                "Under the pointer: {} ({:.4} \\ {:.4} mm)",
+                                s.basis.label(),
+                                s.spacing[0],
+                                s.spacing[1]
+                            ));
                         }
                         None => {
                             ui.label("Under the pointer: time axis, lengths are vertical only");
@@ -1423,8 +1547,16 @@ impl ViewerState {
         let Some(popup) = &self.assign else { return };
         let (key, index, pos) = (popup.key, popup.index, popup.pos);
         let mut custom = popup.custom.clone();
-        let current = self.rois.get(&key).and_then(|l| l.get(index)).and_then(|r| r.name.clone());
-        let current_key = self.rois.get(&key).and_then(|l| l.get(index)).and_then(|r| r.def_key.clone());
+        let current = self
+            .rois
+            .get(&key)
+            .and_then(|l| l.get(index))
+            .and_then(|r| r.name.clone());
+        let current_key = self
+            .rois
+            .get(&key)
+            .and_then(|l| l.get(index))
+            .and_then(|r| r.def_key.clone());
         let library = self.library.clone();
         let _ = shared;
         let ctx = ui.ctx().clone();
@@ -1442,7 +1574,8 @@ impl ViewerState {
                         menu_heading(ui, &set.name);
                         for k in &set.keys {
                             let label = library.label(k);
-                            let is_current = current_key.as_deref() == Some(k.as_str()) || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
+                            let is_current = current_key.as_deref() == Some(k.as_str())
+                                || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
                             if menu_item(ui, label.as_str(), is_current).clicked() {
                                 choice = Some(Some((label.clone(), Some(k.clone()))));
                             }
@@ -1451,7 +1584,11 @@ impl ViewerState {
                     ui.add_space(4.0);
                     ui.separator();
                     ui.horizontal(|ui| {
-                        let r = ui.add(egui::TextEdit::singleline(&mut custom).hint_text("Custom name").desired_width(150.0));
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut custom)
+                                .hint_text("Custom name")
+                                .desired_width(150.0),
+                        );
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                         if (enter || ui.button("Set").clicked()) && !custom.trim().is_empty() {
                             // A custom name takes a definition's key when it matches its label.
@@ -1465,7 +1602,13 @@ impl ViewerState {
                     }
                 });
             });
-        if let Some(p) = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None }) {
+        if let Some(p) = ui.input(|i| {
+            if i.pointer.any_pressed() {
+                i.pointer.interact_pos()
+            } else {
+                None
+            }
+        }) {
             if !area.response.rect.contains(p) {
                 close = true;
             }
@@ -1541,7 +1684,10 @@ impl ViewerState {
             if frame >= frames {
                 return;
             }
-            let key = FrameKey { image_id: img.id, frame };
+            let key = FrameKey {
+                image_id: img.id,
+                frame,
+            };
             if self.frames.contains_key(&key) {
                 return;
             }
@@ -1581,7 +1727,11 @@ impl ViewerState {
             return Some(g.clone());
         }
         let frame = self.frames.get(&key)?.clone();
-        let g = Arc::new(GpuImage::upload(&shared.render_state.device, &shared.render_state.queue, &frame));
+        let g = Arc::new(GpuImage::upload(
+            &shared.render_state.device,
+            &shared.render_state.queue,
+            &frame,
+        ));
         self.gpu.insert(key, g.clone());
         self.gpu_order.push_back(key);
         let (_, gpu_cache) = self.cache_limits();
@@ -1632,18 +1782,29 @@ impl ViewerState {
                     .stroke(theme::toolbar_stroke(dark))
                     .inner_margin(egui::Margin::symmetric(6, 3)),
             )
-            .show(ui, |ui| { theme::paint_toolbar_background(ui, true, egui::vec2(6.0, 3.0)); self.toolbar(ui, shared) });
+            .show(ui, |ui| {
+                theme::paint_toolbar_background(ui, true, egui::vec2(6.0, 3.0));
+                self.toolbar(ui, shared)
+            });
 
         egui::Panel::left(("viewer-drawer", self.id))
             .exact_size(theme::THUMB_SIZE + 36.0)
             .resizable(false)
-            .frame(egui::Frame::NONE.fill(Color32::from_rgb(30, 30, 32)).inner_margin(egui::Margin::same(6)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(Color32::from_rgb(30, 30, 32))
+                    .inner_margin(egui::Margin::same(6)),
+            )
             .show(ui, |ui| self.drawer(ui, shared));
 
         if self.panes[self.active].positions() > 1 {
             egui::Panel::bottom(("viewer-slider", self.id))
                 .exact_size(26.0)
-                .frame(egui::Frame::NONE.fill(Color32::from_rgb(30, 30, 32)).inner_margin(egui::Margin::symmetric(10, 4)))
+                .frame(
+                    egui::Frame::NONE
+                        .fill(Color32::from_rgb(30, 30, 32))
+                        .inner_margin(egui::Margin::symmetric(10, 4)),
+                )
                 .show(ui, |ui| self.slider(ui));
         }
 
@@ -1682,7 +1843,10 @@ impl ViewerState {
         let key = self.current_key()?;
         let roi = self.rois.get(&key)?.get(self.selected_roi?)?;
         match &roi.kind {
-            RoiKind::Length { a, b } => Some(((*b - *a).length(), (((a.x + b.x) / 2.0) as f64, ((a.y + b.y) / 2.0) as f64))),
+            RoiKind::Length { a, b } => Some((
+                (*b - *a).length(),
+                (((a.x + b.x) / 2.0) as f64, ((a.y + b.y) / 2.0) as f64),
+            )),
             _ => None,
         }
     }
@@ -1716,13 +1880,23 @@ impl ViewerState {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label("Real length");
-                let r = ui.add(egui::TextEdit::singleline(&mut draft.known_mm).desired_width(90.0).hint_text("e.g. 100"));
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut draft.known_mm)
+                        .desired_width(90.0)
+                        .hint_text("e.g. 100"),
+                );
                 r.request_focus();
                 ui.label("mm");
             });
             ui.checkbox(&mut draft.apply_to_series, "Apply to every image in this series");
             ui.add_space(8.0);
-            let mm: Option<f64> = draft.known_mm.trim().replace(',', ".").parse::<f64>().ok().filter(|v| *v > 0.0);
+            let mm: Option<f64> = draft
+                .known_mm
+                .trim()
+                .replace(',', ".")
+                .parse::<f64>()
+                .ok()
+                .filter(|v| *v > 0.0);
             if let Some(mm) = mm {
                 let spacing = mm / pixel_length as f64;
                 ui.label(
@@ -1747,9 +1921,14 @@ impl ViewerState {
             let scope = draft.scope;
             let series_id = self.current_series().id;
             let result = if to_series {
-                shared.db.set_series_calibration_scoped(series_id, spacing, spacing, "user length", scope).map(|_| ())
+                shared
+                    .db
+                    .set_series_calibration_scoped(series_id, spacing, spacing, "user length", scope)
+                    .map(|_| ())
             } else {
-                shared.db.set_calibration_scoped(image_id, spacing, spacing, "user length", scope)
+                shared
+                    .db
+                    .set_calibration_scoped(image_id, spacing, spacing, "user length", scope)
             };
             match result {
                 Ok(()) => {
@@ -1791,7 +1970,11 @@ impl ViewerState {
 
     fn toolbar_inner(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.horizontal(|ui| {
-            if ToolbarButton::new(Bitmap::DatabaseWindow, "Database").tooltip("Show the database window").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::DatabaseWindow, "Database")
+                .tooltip("Show the database window")
+                .show(ui)
+                .clicked()
+            {
                 shared.focus_browser.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             toolbar_separator(ui);
@@ -1800,7 +1983,11 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(4.0);
                 toolbar_caption(ui, "Series");
-                let current = self.series.get(self.panes[self.active].series_idx).map(|s| s.display_name()).unwrap_or_default();
+                let current = self
+                    .series
+                    .get(self.panes[self.active].series_idx)
+                    .map(|s| s.display_name())
+                    .unwrap_or_default();
                 let mut chosen = self.panes[self.active].series_idx;
                 egui::ComboBox::from_id_salt(("series-popup", self.id))
                     .selected_text(crate::widgets::truncate(&current, 15))
@@ -1826,30 +2013,39 @@ impl ViewerState {
                     TilingMode::Study => "Tiling: series",
                 };
                 let mut chosen: Option<Tiling> = None;
-                ui.menu_button((icons::rich(icons::TILING, 16.0), egui::RichText::new(label).size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
-                    for (mode, title) in [
-                        (TilingMode::Series, "Images of this series"),
-                        (TilingMode::Study, "Series of this study"),
-                    ] {
-                        menu_heading(ui, title);
-                        ui.horizontal_wrapped(|ui| {
-                            ui.set_max_width(236.0);
-                            for (rows, cols) in Tiling::GRIDS {
-                                let t = Tiling { mode, rows, cols };
-                                let enabled = mode == TilingMode::Series || rows * cols <= self.series.len().max(1) || rows * cols == 1;
-                                let r = crate::widgets::tiling_button(ui, rows, cols, self.tiling == t, enabled);
-                                if r.clicked() {
-                                    chosen = Some(t);
-                                    ui.close();
+                ui.menu_button(
+                    (
+                        icons::rich(icons::TILING, 16.0),
+                        egui::RichText::new(label).size(13.0),
+                        icons::rich(icons::CARET_DOWN, 11.0),
+                    ),
+                    |ui| {
+                        for (mode, title) in [
+                            (TilingMode::Series, "Images of this series"),
+                            (TilingMode::Study, "Series of this study"),
+                        ] {
+                            menu_heading(ui, title);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.set_max_width(236.0);
+                                for (rows, cols) in Tiling::GRIDS {
+                                    let t = Tiling { mode, rows, cols };
+                                    let enabled = mode == TilingMode::Series
+                                        || rows * cols <= self.series.len().max(1)
+                                        || rows * cols == 1;
+                                    let r = crate::widgets::tiling_button(ui, rows, cols, self.tiling == t, enabled);
+                                    if r.clicked() {
+                                        chosen = Some(t);
+                                        ui.close();
+                                    }
                                 }
+                            });
+                            if mode == TilingMode::Series {
+                                ui.add_space(4.0);
+                                ui.separator();
                             }
-                        });
-                        if mode == TilingMode::Series {
-                            ui.add_space(4.0);
-                            ui.separator();
                         }
-                    }
-                });
+                    },
+                );
                 toolbar_caption(ui, caption);
                 if let Some(t) = chosen {
                     self.set_tiling(shared, t);
@@ -1870,35 +2066,42 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 let title_icon = icons::image(ui.ctx(), self.tool.bitmap(), 18.0);
-                ui.menu_button((title_icon, egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
-                    // One row per tool. Left-click puts it on the left mouse
-                    // button, right-click on the right button; a small mouse
-                    // glyph beside the name shows which.
-                    let mut changed = false;
-                    for t in Tool::ALL {
-                        let r = tool_menu_row(ui, t.bitmap(), t.label(), self.tool == t, self.right_tool == t);
-                        if r.clicked() {
-                            self.tool = t;
-                            changed = true;
-                            ui.close();
-                        } else if r.secondary_clicked() {
-                            self.right_tool = t;
-                            changed = true;
-                            ui.close();
+                ui.menu_button(
+                    (
+                        title_icon,
+                        egui::RichText::new(" ").size(13.0),
+                        icons::rich(icons::CARET_DOWN, 11.0),
+                    ),
+                    |ui| {
+                        // One row per tool. Left-click puts it on the left mouse
+                        // button, right-click on the right button; a small mouse
+                        // glyph beside the name shows which.
+                        let mut changed = false;
+                        for t in Tool::ALL {
+                            let r = tool_menu_row(ui, t.bitmap(), t.label(), self.tool == t, self.right_tool == t);
+                            if r.clicked() {
+                                self.tool = t;
+                                changed = true;
+                                ui.close();
+                            } else if r.secondary_clicked() {
+                                self.right_tool = t;
+                                changed = true;
+                                ui.close();
+                            }
                         }
-                    }
-                    ui.add_space(3.0);
-                    ui.label(
-                        egui::RichText::new("Click: left button  ·  Right-click: right button")
-                            .size(11.0)
-                            .color(Color32::from_gray(150)),
-                    );
-                    if changed {
-                        self.drag_draft = None;
-                        self.angle_draft = None;
-                        self.mmode_draft = None;
-                    }
-                });
+                        ui.add_space(3.0);
+                        ui.label(
+                            egui::RichText::new("Click: left button  ·  Right-click: right button")
+                                .size(11.0)
+                                .color(Color32::from_gray(150)),
+                        );
+                        if changed {
+                            self.drag_draft = None;
+                            self.angle_draft = None;
+                            self.mmode_draft = None;
+                        }
+                    },
+                );
                 toolbar_caption(ui, &format!("Tool: {}", self.tool.label()));
             });
 
@@ -1906,33 +2109,44 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 let wl_icon = icons::image(ui.ctx(), Bitmap::Wlww, 18.0);
-                ui.menu_button((wl_icon, egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
-                    if menu_item(ui, "Default WL & WW", false).clicked() {
-                        self.apply_default_window(shared, false);
-                        ui.close();
-                    }
-                    if menu_item(ui, "Full dynamic", false).clicked() {
-                        self.apply_default_window(shared, true);
-                        ui.close();
-                    }
-                    ui.separator();
-                    for p in &shared.presets.presets {
-                        if menu_item(ui, format!("{}  ({} / {})", p.name, p.center, p.width), false).clicked() {
-                            self.panes[self.active].view.window_center = p.center;
-                            self.panes[self.active].view.window_width = p.width;
+                ui.menu_button(
+                    (
+                        wl_icon,
+                        egui::RichText::new(" ").size(13.0),
+                        icons::rich(icons::CARET_DOWN, 11.0),
+                    ),
+                    |ui| {
+                        if menu_item(ui, "Default WL & WW", false).clicked() {
+                            self.apply_default_window(shared, false);
                             ui.close();
                         }
-                    }
-                    ui.separator();
-                    menu_heading(ui, "Custom");
-                    ui.horizontal(|ui| {
-                        ui.add_space(6.0);
-                        ui.label("WL");
-                        ui.add(egui::DragValue::new(&mut self.panes[self.active].view.window_center).speed(1.0));
-                        ui.label("WW");
-                        ui.add(egui::DragValue::new(&mut self.panes[self.active].view.window_width).speed(1.0).range(1.0..=f32::MAX));
-                    });
-                });
+                        if menu_item(ui, "Full dynamic", false).clicked() {
+                            self.apply_default_window(shared, true);
+                            ui.close();
+                        }
+                        ui.separator();
+                        for p in &shared.presets.presets {
+                            if menu_item(ui, format!("{}  ({} / {})", p.name, p.center, p.width), false).clicked() {
+                                self.panes[self.active].view.window_center = p.center;
+                                self.panes[self.active].view.window_width = p.width;
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        menu_heading(ui, "Custom");
+                        ui.horizontal(|ui| {
+                            ui.add_space(6.0);
+                            ui.label("WL");
+                            ui.add(egui::DragValue::new(&mut self.panes[self.active].view.window_center).speed(1.0));
+                            ui.label("WW");
+                            ui.add(
+                                egui::DragValue::new(&mut self.panes[self.active].view.window_width)
+                                    .speed(1.0)
+                                    .range(1.0..=f32::MAX),
+                            );
+                        });
+                    },
+                );
                 toolbar_caption(ui, "WL/WW");
             });
 
@@ -1940,16 +2154,23 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 let clut_caption = crate::widgets::truncate(&self.panes[self.active].clut, 12);
-                ui.menu_button((icons::rich(icons::CLUT, 16.0), egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
-                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                        for name in shared.cluts.names() {
-                            if menu_item(ui, name, self.panes[self.active].clut == name).clicked() {
-                                self.panes[self.active].clut = name.to_string();
-                                ui.close();
+                ui.menu_button(
+                    (
+                        icons::rich(icons::CLUT, 16.0),
+                        egui::RichText::new(" ").size(13.0),
+                        icons::rich(icons::CARET_DOWN, 11.0),
+                    ),
+                    |ui| {
+                        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                            for name in shared.cluts.names() {
+                                if menu_item(ui, name, self.panes[self.active].clut == name).clicked() {
+                                    self.panes[self.active].clut = name.to_string();
+                                    ui.close();
+                                }
                             }
-                        }
-                    });
-                });
+                        });
+                    },
+                );
                 toolbar_caption(ui, &clut_caption);
             });
 
@@ -1961,48 +2182,67 @@ impl ViewerState {
             // Orientation menu
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.menu_button((icons::rich(icons::ORIENTATION, 16.0), egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
-                    if menu_item(ui, "Rotate 90° clockwise", false).clicked() {
-                        self.panes[self.active].view.rotation_deg = (self.panes[self.active].view.rotation_deg + 90.0).rem_euclid(360.0);
-                        self.panes[self.active].fit_pending = true;
-                        ui.close();
-                    }
-                    if menu_item(ui, "Rotate 90° counter-clockwise", false).clicked() {
-                        self.panes[self.active].view.rotation_deg = (self.panes[self.active].view.rotation_deg - 90.0).rem_euclid(360.0);
-                        self.panes[self.active].fit_pending = true;
-                        ui.close();
-                    }
-                    if menu_item(ui, "Flip horizontal", false).clicked() {
-                        self.panes[self.active].view.flip_horizontal = !self.panes[self.active].view.flip_horizontal;
-                        ui.close();
-                    }
-                    if menu_item(ui, "Flip vertical", false).clicked() {
-                        self.panes[self.active].view.flip_vertical = !self.panes[self.active].view.flip_vertical;
-                        ui.close();
-                    }
-                    ui.separator();
-                    if menu_item(ui, "Reset orientation", false).clicked() {
-                        self.panes[self.active].view.rotation_deg = 0.0;
-                        self.panes[self.active].view.flip_horizontal = false;
-                        self.panes[self.active].view.flip_vertical = false;
-                        self.panes[self.active].fit_pending = true;
-                        ui.close();
-                    }
-                    ui.separator();
-                    if menu_check(ui, &mut self.bilinear, "Smooth interpolation").clicked() {
-                        ui.close();
-                    }
-                });
+                ui.menu_button(
+                    (
+                        icons::rich(icons::ORIENTATION, 16.0),
+                        egui::RichText::new(" ").size(13.0),
+                        icons::rich(icons::CARET_DOWN, 11.0),
+                    ),
+                    |ui| {
+                        if menu_item(ui, "Rotate 90° clockwise", false).clicked() {
+                            self.panes[self.active].view.rotation_deg =
+                                (self.panes[self.active].view.rotation_deg + 90.0).rem_euclid(360.0);
+                            self.panes[self.active].fit_pending = true;
+                            ui.close();
+                        }
+                        if menu_item(ui, "Rotate 90° counter-clockwise", false).clicked() {
+                            self.panes[self.active].view.rotation_deg =
+                                (self.panes[self.active].view.rotation_deg - 90.0).rem_euclid(360.0);
+                            self.panes[self.active].fit_pending = true;
+                            ui.close();
+                        }
+                        if menu_item(ui, "Flip horizontal", false).clicked() {
+                            self.panes[self.active].view.flip_horizontal =
+                                !self.panes[self.active].view.flip_horizontal;
+                            ui.close();
+                        }
+                        if menu_item(ui, "Flip vertical", false).clicked() {
+                            self.panes[self.active].view.flip_vertical = !self.panes[self.active].view.flip_vertical;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if menu_item(ui, "Reset orientation", false).clicked() {
+                            self.panes[self.active].view.rotation_deg = 0.0;
+                            self.panes[self.active].view.flip_horizontal = false;
+                            self.panes[self.active].view.flip_vertical = false;
+                            self.panes[self.active].fit_pending = true;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if menu_check(ui, &mut self.bilinear, "Smooth interpolation").clicked() {
+                            ui.close();
+                        }
+                    },
+                );
                 toolbar_caption(ui, "Orientation");
             });
             toolbar_separator(ui);
 
-            if ToolbarButton::new(Bitmap::Reset, "Reset").tooltip("Fit image and restore default window").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Reset, "Reset")
+                .tooltip("Fit image and restore default window")
+                .show(ui)
+                .clicked()
+            {
                 self.panes[self.active].fit_pending = true;
                 self.apply_default_window(shared, false);
             }
             let is_key = self.current_image().map(|i| i.is_key_image).unwrap_or(false);
-            if ToolbarButton::new(Bitmap::Key, "Key Image").selected(is_key).tooltip("Mark this image as a key image").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Key, "Key Image")
+                .selected(is_key)
+                .tooltip("Mark this image as a key image")
+                .show(ui)
+                .clicked()
+            {
                 if let Some(img) = self.current_image() {
                     let (id, flag) = (img.id, !img.is_key_image);
                     let _ = shared.db.set_key_image(id, flag);
@@ -2017,34 +2257,62 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 let icon = icons::image(ui.ctx(), Bitmap::Length, 18.0);
-                ui.menu_button((icon, egui::RichText::new(" ").size(13.0), icons::rich(icons::CARET_DOWN, 11.0)), |ui| {
-                    self.measurements_menu(ui, false);
-                });
+                ui.menu_button(
+                    (
+                        icon,
+                        egui::RichText::new(" ").size(13.0),
+                        icons::rich(icons::CARET_DOWN, 11.0),
+                    ),
+                    |ui| {
+                        self.measurements_menu(ui, false);
+                    },
+                );
                 toolbar_caption(ui, "Measurements");
             });
-            if ToolbarButton::new(Bitmap::Export, "Export").tooltip("Export the current image as PNG or JPEG").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::Export, "Export")
+                .tooltip("Export the current image as PNG or JPEG")
+                .show(ui)
+                .clicked()
+            {
                 self.export_current(shared);
             }
-            if ToolbarButton::new(Bitmap::ReportCustom, "Report").tooltip("The report for this study: measurements, findings, key images").show(ui).clicked() {
+            if ToolbarButton::new(Bitmap::ReportCustom, "Report")
+                .tooltip("The report for this study: measurements, findings, key images")
+                .show(ui)
+                .clicked()
+            {
                 shared.open_reports.lock().push(self.study.id);
             }
             if self.study.teaching_answer_key {
                 let label = if self.reveal_answers { "Hide answers" } else { "Answers" };
-                if ToolbarButton::new(icons::ANONYMIZE, label).selected(self.reveal_answers).tooltip("This teaching copy carries its measurements as an answer key").show(ui).clicked() {
+                if ToolbarButton::new(icons::ANONYMIZE, label)
+                    .selected(self.reveal_answers)
+                    .tooltip("This teaching copy carries its measurements as an answer key")
+                    .show(ui)
+                    .clicked()
+                {
                     self.reveal_answers = !self.reveal_answers;
                 }
             }
             toolbar_separator(ui);
 
-            let can_play = self.panes[self.active].images.len() > 1 || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);
-            let (bitmap, label) = if self.playing { (Bitmap::Pause, "Pause") } else { (Bitmap::Play, "Play") };
+            let can_play = self.panes[self.active].images.len() > 1
+                || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);
+            let (bitmap, label) = if self.playing {
+                (Bitmap::Pause, "Pause")
+            } else {
+                (Bitmap::Play, "Play")
+            };
             if ToolbarButton::new(bitmap, label).enabled(can_play).show(ui).clicked() {
                 self.playing = !self.playing;
                 self.last_tick = None;
             }
             ui.vertical(|ui| {
                 ui.add_space(6.0);
-                ui.add_enabled(can_play, egui::Slider::new(&mut self.fps, 1.0..=120.0).show_value(false));
+                ui.add_enabled(
+                    can_play,
+                    egui::Slider::new(&mut self.fps, 1.0..=120.0).show_value(false),
+                );
                 toolbar_caption(ui, &format!("Speed {} fps", self.fps.round() as i32));
             });
 
@@ -2064,7 +2332,14 @@ impl ViewerState {
             for (i, s) in self.series.iter().enumerate() {
                 let tex = shared.thumbnail(s.id);
                 let sub = format!("{} {}", s.modality, s.count_label());
-                let r = thumbnail_cell(ui, tex.as_ref(), &s.display_name(), &sub, i == self.panes[self.active].series_idx, theme::THUMB_SIZE);
+                let r = thumbnail_cell(
+                    ui,
+                    tex.as_ref(),
+                    &s.display_name(),
+                    &sub,
+                    i == self.panes[self.active].series_idx,
+                    theme::THUMB_SIZE,
+                );
                 if r.clicked() {
                     clicked = Some(i);
                 }
@@ -2083,8 +2358,15 @@ impl ViewerState {
         let current = self.panes[self.active].position().min(n - 1);
         let mut v = current;
         ui.spacing_mut().slider_width = ui.available_width() - 70.0;
-        ui.add_enabled(!self.active_locked(), egui::Slider::new(&mut v, 0..=n - 1).show_value(false));
-        ui.label(egui::RichText::new(format!("{}/{}", v + 1, n)).size(11.5).color(Color32::from_gray(200)));
+        ui.add_enabled(
+            !self.active_locked(),
+            egui::Slider::new(&mut v, 0..=n - 1).show_value(false),
+        );
+        ui.label(
+            egui::RichText::new(format!("{}/{}", v + 1, n))
+                .size(11.5)
+                .color(Color32::from_gray(200)),
+        );
         if v != current {
             self.set_active_position(v);
         }
@@ -2114,7 +2396,8 @@ impl ViewerState {
             }
             _ => {}
         }
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(period / 2.0));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f32(period / 2.0));
     }
 
     fn keyboard(&mut self, ui: &mut Ui, shared: &Shared) {
@@ -2179,7 +2462,13 @@ impl ViewerState {
         if plain {
             let picked = ui.input(|i| {
                 i.events.iter().find_map(|e| match e {
-                    egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none() => Tool::from_key(*key),
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                        ..
+                    } if modifiers.is_none() => Tool::from_key(*key),
                     _ => None,
                 })
             });
@@ -2294,7 +2583,8 @@ impl ViewerState {
             self.panes[self.active].view.flip_vertical = !self.panes[self.active].view.flip_vertical;
         }
         if i_key {
-            self.panes[self.active].view.rotation_deg = (self.panes[self.active].view.rotation_deg + 90.0).rem_euclid(360.0);
+            self.panes[self.active].view.rotation_deg =
+                (self.panes[self.active].view.rotation_deg + 90.0).rem_euclid(360.0);
             self.panes[self.active].fit_pending = true;
         }
     }
@@ -2302,7 +2592,11 @@ impl ViewerState {
     fn apply_default_window(&mut self, _shared: &Shared, full_dynamic: bool) {
         if let Some(key) = self.current_key() {
             if let Some(frame) = self.frames.get(&key) {
-                let (c, w) = if full_dynamic { frame.full_dynamic_window() } else { frame.default_window() };
+                let (c, w) = if full_dynamic {
+                    frame.full_dynamic_window()
+                } else {
+                    frame.default_window()
+                };
                 self.panes[self.active].view.window_center = c;
                 self.panes[self.active].view.window_width = w;
             }
@@ -2311,7 +2605,9 @@ impl ViewerState {
 
     fn export_current(&mut self, shared: &Shared) {
         let Some(key) = self.current_key() else { return };
-        let Some(frame) = self.frames.get(&key).cloned() else { return };
+        let Some(frame) = self.frames.get(&key).cloned() else {
+            return;
+        };
         let default_name = format!(
             "{}_{}_{}.png",
             self.study.patient_name.replace([',', ' '], "_"),
@@ -2327,8 +2623,17 @@ impl ViewerState {
         else {
             return;
         };
-        let clut = shared.cluts.get(&self.panes[self.active].clut).cloned().unwrap_or_else(ruthos_dicom::Clut::grayscale);
-        let rgb = ruthos_dicom::pixels::frame_to_rgb8(&frame, self.panes[self.active].view.window_center, self.panes[self.active].view.window_width, &clut);
+        let clut = shared
+            .cluts
+            .get(&self.panes[self.active].clut)
+            .cloned()
+            .unwrap_or_else(ruthos_dicom::Clut::grayscale);
+        let rgb = ruthos_dicom::pixels::frame_to_rgb8(
+            &frame,
+            self.panes[self.active].view.window_center,
+            self.panes[self.active].view.window_width,
+            &clut,
+        );
         match image::RgbImage::from_raw(frame.width, frame.height, rgb) {
             Some(img) => match img.save(&path) {
                 Ok(()) => self.set_status(format!("Exported {}", path.display())),
@@ -2392,14 +2697,25 @@ impl ViewerState {
             let line = Color32::from_gray(70);
             for c in 1..cols {
                 let x = area.left() + c as f32 * (cw + gap) - gap / 2.0;
-                painter.line_segment([Pos2::new(x, area.top()), Pos2::new(x, area.bottom())], egui::Stroke::new(1.0, line));
+                painter.line_segment(
+                    [Pos2::new(x, area.top()), Pos2::new(x, area.bottom())],
+                    egui::Stroke::new(1.0, line),
+                );
             }
             for r in 1..rows {
                 let y = area.top() + r as f32 * (ch + gap) - gap / 2.0;
-                painter.line_segment([Pos2::new(area.left(), y), Pos2::new(area.right(), y)], egui::Stroke::new(1.0, line));
+                painter.line_segment(
+                    [Pos2::new(area.left(), y), Pos2::new(area.right(), y)],
+                    egui::Stroke::new(1.0, line),
+                );
             }
             if let Some(r) = rects.get(self.active) {
-                painter.rect_stroke(r.shrink(1.0), 0.0, egui::Stroke::new(1.5, theme::SELECTION_BLUE), egui::StrokeKind::Inside);
+                painter.rect_stroke(
+                    r.shrink(1.0),
+                    0.0,
+                    egui::Stroke::new(1.5, theme::SELECTION_BLUE),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
     }
@@ -2411,7 +2727,14 @@ impl ViewerState {
         let painter = ui.painter().with_clip_rect(rect);
 
         if self.panes[k].images.is_empty() {
-            shadow_text(&painter, rect.center(), Align2::CENTER_CENTER, "No images in this series", FontId::proportional(16.0), Color32::from_gray(160));
+            shadow_text(
+                &painter,
+                rect.center(),
+                Align2::CENTER_CENTER,
+                "No images in this series",
+                FontId::proportional(16.0),
+                Color32::from_gray(160),
+            );
             return;
         }
         // A cell past the end of a tiled series stays blank.
@@ -2443,7 +2766,14 @@ impl ViewerState {
                 Some(e) => format!("Could not decode image:\n{e}"),
                 None => "Loading\u{2026}".to_string(),
             };
-            shadow_text(&painter, rect.center(), Align2::CENTER_CENTER, &msg, FontId::proportional(15.0), Color32::from_gray(170));
+            shadow_text(
+                &painter,
+                rect.center(),
+                Align2::CENTER_CENTER,
+                &msg,
+                FontId::proportional(15.0),
+                Color32::from_gray(170),
+            );
             return;
         };
         self.panes[k].load_error = None;
@@ -2516,11 +2846,20 @@ impl ViewerState {
                     clut: clut.clone(),
                     transform,
                     inverted: frame.inverted,
-                    interpolation: if self.bilinear { Interpolation::Bilinear } else { Interpolation::Nearest },
+                    interpolation: if self.bilinear {
+                        Interpolation::Bilinear
+                    } else {
+                        Interpolation::Nearest
+                    },
                 },
             ));
             // The loupe draws the same image with its own key (cells use 0..32).
-            loupe_source = Some(LoupeSource { key: self.id * 64 + 32 + k as u64, image: gpu, clut, inverted: frame.inverted });
+            loupe_source = Some(LoupeSource {
+                key: self.id * 64 + 32 + k as u64,
+                image: gpu,
+                clut,
+                inverted: frame.inverted,
+            });
         }
 
         // ROIs and drafts.
@@ -2530,7 +2869,10 @@ impl ViewerState {
             // Developer option: `RUTHOS_SELECT_ROI=<index>` selects a stored
             // measurement on the first frame shown, for screenshots.
             if self.selected_roi.is_none() && !self.dev_selected {
-                if let Some(i) = std::env::var("RUTHOS_SELECT_ROI").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+                if let Some(i) = std::env::var("RUTHOS_SELECT_ROI")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                {
                     if self.rois.get(&key).is_some_and(|l| i < l.len()) {
                         self.selected_roi = Some(i);
                         self.active_handle = 0;
@@ -2547,10 +2889,27 @@ impl ViewerState {
                 if sel {
                     roi.draw_handles(&painter, &transform, Some(self.active_handle), roi_color(true));
                 }
-                if self.show_labels && matches!(roi.kind, RoiKind::LvMmode { phase: MmodePhase::Systole, .. }) {
+                if self.show_labels
+                    && matches!(
+                        roi.kind,
+                        RoiKind::LvMmode {
+                            phase: MmodePhase::Systole,
+                            ..
+                        }
+                    )
+                {
                     if let Some(fs) = self.fractional_shortening(&key, roi, &frame) {
-                        let anchor = label.map(|r| r.left_bottom()).unwrap_or_else(|| transform.image_to_screen(roi.points()[3]) + Vec2::new(10.0, 24.0));
-                        shadow_text(&painter, anchor + Vec2::new(0.0, 2.0), Align2::LEFT_TOP, &format!("FS {fs:.0}%"), FontId::proportional(12.5), roi_color(sel));
+                        let anchor = label
+                            .map(|r| r.left_bottom())
+                            .unwrap_or_else(|| transform.image_to_screen(roi.points()[3]) + Vec2::new(10.0, 24.0));
+                        shadow_text(
+                            &painter,
+                            anchor + Vec2::new(0.0, 2.0),
+                            Align2::LEFT_TOP,
+                            &format!("FS {fs:.0}%"),
+                            FontId::proportional(12.5),
+                            roi_color(sel),
+                        );
                     }
                 }
                 if active {
@@ -2576,9 +2935,18 @@ impl ViewerState {
 
             // The loupe, with the geometry being placed drawn through it.
             if let (true, Some(target), Some(source)) = (self.loupe.enabled, self.loupe_target, loupe_source.as_ref()) {
-                let draft = self.drag_draft.and_then(|(a, b)| draft_kind(self.tool, a, b)).map(Roi::new);
-                let angle = self.angle_draft.as_ref().map(|d| Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c }));
-                let selected = self.selected_roi.and_then(|i| self.rois.get(&key).and_then(|l| l.get(i))).cloned();
+                let draft = self
+                    .drag_draft
+                    .and_then(|(a, b)| draft_kind(self.tool, a, b))
+                    .map(Roi::new);
+                let angle = self
+                    .angle_draft
+                    .as_ref()
+                    .map(|d| Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c }));
+                let selected = self
+                    .selected_roi
+                    .and_then(|i| self.rois.get(&key).and_then(|l| l.get(i)))
+                    .cloned();
                 let mmode = self.mmode_draft.as_ref();
                 let overlay = |p: &egui::Painter, lt: &ViewTransform| {
                     for roi in draft.iter().chain(angle.iter()) {
@@ -2597,7 +2965,9 @@ impl ViewerState {
 
         // Annotations; small cells drop to the partial set.
         let p = &self.panes[k];
-        let Some(image) = p.images.get(p.image_idx).cloned() else { return };
+        let Some(image) = p.images.get(p.image_idx).cloned() else {
+            return;
+        };
         let level = if tiled && rect.width() < 420.0 && self.annotations == AnnotationLevel::Full {
             AnnotationLevel::Partial
         } else {
@@ -2632,8 +3002,20 @@ impl ViewerState {
         let box_rect = Rect::from_center_size(Pos2::new(chip.left() + 8.0, chip.center().y), Vec2::splat(12.0));
         painter.rect_stroke(box_rect, 2.0, egui::Stroke::new(1.2, color), egui::StrokeKind::Inside);
         if locked {
-            painter.line_segment([box_rect.left_center() + Vec2::new(2.5, 0.5), box_rect.center() + Vec2::new(-0.5, 3.0)], egui::Stroke::new(1.6, color));
-            painter.line_segment([box_rect.center() + Vec2::new(-0.5, 3.0), box_rect.right_top() + Vec2::new(-2.0, 2.5)], egui::Stroke::new(1.6, color));
+            painter.line_segment(
+                [
+                    box_rect.left_center() + Vec2::new(2.5, 0.5),
+                    box_rect.center() + Vec2::new(-0.5, 3.0),
+                ],
+                egui::Stroke::new(1.6, color),
+            );
+            painter.line_segment(
+                [
+                    box_rect.center() + Vec2::new(-0.5, 3.0),
+                    box_rect.right_top() + Vec2::new(-2.0, 2.5),
+                ],
+                egui::Stroke::new(1.6, color),
+            );
         }
         painter.text(
             Pos2::new(chip.right() - 2.0, chip.center().y),
@@ -2655,7 +3037,14 @@ impl ViewerState {
         }
     }
 
-    fn handle_input(&mut self, ui: &mut Ui, response: &egui::Response, t: &mut ViewTransform, frame: &Frame, key: &FrameKey) {
+    fn handle_input(
+        &mut self,
+        ui: &mut Ui,
+        response: &egui::Response,
+        t: &mut ViewTransform,
+        frame: &Frame,
+        key: &FrameKey,
+    ) {
         let hover = response.hover_pos();
         self.mouse_pixel = hover.and_then(|p| t.pixel_at(p));
         self.loupe_target = None;
@@ -2665,12 +3054,17 @@ impl ViewerState {
             Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?))
         }) {
             let image_point = Vec2::new(x, y);
-            self.loupe_target = Some(LoupeTarget { image_point, pointer: t.image_to_screen(image_point) });
+            self.loupe_target = Some(LoupeTarget {
+                image_point,
+                pointer: t.image_to_screen(image_point),
+            });
         }
 
         // The lock control in the bottom-right corner.
         let chip = lock_chip_rect(t.rect);
-        if response.clicked_by(PointerButton::Primary) && response.interact_pointer_pos().is_some_and(|p| chip.contains(p)) {
+        if response.clicked_by(PointerButton::Primary)
+            && response.interact_pointer_pos().is_some_and(|p| chip.contains(p))
+        {
             let k = self.active;
             self.toggle_lock(k);
             return;
@@ -2681,7 +3075,13 @@ impl ViewerState {
 
         // Wheel: scroll images; ctrl+wheel / pinch: zoom.
         if response.hovered() {
-            let (scroll, zoom_delta, ctrl) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta(), i.modifiers.ctrl || i.modifiers.command));
+            let (scroll, zoom_delta, ctrl) = ui.input(|i| {
+                (
+                    i.smooth_scroll_delta.y,
+                    i.zoom_delta(),
+                    i.modifiers.ctrl || i.modifiers.command,
+                )
+            });
             if (zoom_delta - 1.0).abs() > 1e-3 {
                 self.zoom_about(t, hover, zoom_delta);
             } else if !ctrl && scroll.abs() > 0.0 {
@@ -2709,8 +3109,18 @@ impl ViewerState {
         }
         if response.clicked_by(PointerButton::Primary) {
             if let Some(p) = pos {
-                if let Some((k, i, _)) = self.label_hits.iter().find(|(k, _, r)| k == key && r.expand(3.0).contains(p)).copied() {
-                    self.assign = Some(AssignPopup { key: k, index: i, pos: p, custom: String::new() });
+                if let Some((k, i, _)) = self
+                    .label_hits
+                    .iter()
+                    .find(|(k, _, r)| k == key && r.expand(3.0).contains(p))
+                    .copied()
+                {
+                    self.assign = Some(AssignPopup {
+                        key: k,
+                        index: i,
+                        pos: p,
+                        custom: String::new(),
+                    });
                     self.selected_roi = Some(i);
                     return;
                 }
@@ -2725,7 +3135,10 @@ impl ViewerState {
         // Alt while hovering with a measuring tool previews the loupe.
         if self.tool.is_roi() && self.drag_draft.is_none() && self.angle_draft.is_none() {
             if let Some(hp) = hover.filter(|_| ui.input(|i| i.modifiers.alt)) {
-                self.loupe_target = Some(LoupeTarget { image_point: t.screen_to_image(hp), pointer: hp });
+                self.loupe_target = Some(LoupeTarget {
+                    image_point: t.screen_to_image(hp),
+                    pointer: hp,
+                });
             }
         }
 
@@ -2802,12 +3215,16 @@ impl ViewerState {
             Tool::Angle => {
                 let img_pos = pos.map(|p| t.screen_to_image(p));
                 let fine = ui.input(|i| i.modifiers.shift) && self.loupe.fine_movement;
-                let fine_step = ui.input(|i| i.pointer.delta()) / (self.loupe.magnification.max(1.0) * t.state.zoom.max(1e-6));
+                let fine_step =
+                    ui.input(|i| i.pointer.delta()) / (self.loupe.magnification.max(1.0) * t.state.zoom.max(1e-6));
                 if let Some(d) = &mut self.angle_draft {
                     if d.b_fixed {
                         if let Some(hp) = hover {
                             d.c = if fine { d.c + fine_step } else { t.screen_to_image(hp) };
-                            self.loupe_target = Some(LoupeTarget { image_point: d.c, pointer: hp });
+                            self.loupe_target = Some(LoupeTarget {
+                                image_point: d.c,
+                                pointer: hp,
+                            });
                         }
                         if response.clicked_by(button) {
                             let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c });
@@ -2822,7 +3239,10 @@ impl ViewerState {
                             d.b = if fine { d.b + fine_step } else { p };
                             d.c = d.b;
                             if let Some(sp) = pos {
-                                self.loupe_target = Some(LoupeTarget { image_point: d.b, pointer: sp });
+                                self.loupe_target = Some(LoupeTarget {
+                                    image_point: d.b,
+                                    pointer: sp,
+                                });
                             }
                         }
                         if response.drag_stopped_by(button) {
@@ -2836,7 +3256,12 @@ impl ViewerState {
                 } else if response.drag_started_by(button) {
                     if let Some(p) = img_pos {
                         if !self.try_select_roi(t, key, pos) {
-                            self.angle_draft = Some(AngleDraft { a: p, b: p, b_fixed: false, c: p });
+                            self.angle_draft = Some(AngleDraft {
+                                a: p,
+                                b: p,
+                                b_fixed: false,
+                                c: p,
+                            });
                         }
                     }
                 } else if response.clicked_by(button) {
@@ -2850,7 +3275,10 @@ impl ViewerState {
                     let ip = t.screen_to_image(hp);
                     if let Some(d) = &mut self.mmode_draft {
                         d.hover_y = Some(ip.y);
-                        self.loupe_target = Some(LoupeTarget { image_point: Vec2::new(d.x, ip.y), pointer: hp });
+                        self.loupe_target = Some(LoupeTarget {
+                            image_point: Vec2::new(d.x, ip.y),
+                            pointer: hp,
+                        });
                     }
                 }
                 if response.clicked_by(button) {
@@ -2878,10 +3306,19 @@ impl ViewerState {
                         if start {
                             if self.try_select_roi(t, key, pos) {
                                 // An existing measurement was picked instead.
-                            } else if !frame.meta.us_region_at(p.x as f64, p.y as f64).is_some_and(|r| r.is_time_across()) {
-                                message = Some("LV M-mode: click inside the M-mode strip, where time runs across".into());
+                            } else if !frame
+                                .meta
+                                .us_region_at(p.x as f64, p.y as f64)
+                                .is_some_and(|r| r.is_time_across())
+                            {
+                                message =
+                                    Some("LV M-mode: click inside the M-mode strip, where time runs across".into());
                             } else {
-                                self.mmode_draft = Some(MmodeDraft { x: p.x, depths: vec![p.y], hover_y: None });
+                                self.mmode_draft = Some(MmodeDraft {
+                                    x: p.x,
+                                    depths: vec![p.y],
+                                    hover_y: None,
+                                });
                                 message = Some("LV M-mode: septum top placed; next the septum's ventricular side. Backspace removes a point, Escape abandons".into());
                             }
                         }
@@ -2926,12 +3363,16 @@ impl ViewerState {
                         // Shift: fine placement, pointer movement scaled by
                         // the reciprocal of the loupe magnification.
                         let b = if ui.input(|i| i.modifiers.shift) && self.loupe.fine_movement {
-                            prev_b + response.drag_delta() / (self.loupe.magnification.max(1.0) * t.state.zoom.max(1e-6))
+                            prev_b
+                                + response.drag_delta() / (self.loupe.magnification.max(1.0) * t.state.zoom.max(1e-6))
                         } else {
                             t.screen_to_image(p)
                         };
                         self.drag_draft = Some((a, b));
-                        self.loupe_target = Some(LoupeTarget { image_point: b, pointer: p });
+                        self.loupe_target = Some(LoupeTarget {
+                            image_point: b,
+                            pointer: p,
+                        });
                     }
                 }
                 if response.drag_stopped_by(button) {
@@ -3000,7 +3441,11 @@ fn parse_tiling(v: &str) -> Option<Tiling> {
         _ => return None,
     };
     let (r, c) = grid.split_once('x')?;
-    Some(Tiling { mode, rows: r.parse().ok()?, cols: c.parse().ok()? })
+    Some(Tiling {
+        mode,
+        rows: r.parse().ok()?,
+        cols: c.parse().ok()?,
+    })
 }
 
 /// The plain name of a measurement kind, for unnamed rows in copied values.
@@ -3020,7 +3465,14 @@ fn draw_mmode_draft(painter: &egui::Painter, t: &ViewTransform, d: &MmodeDraft, 
     }
     let names = ["septum top", "septum bottom", "free wall top", "free wall bottom"];
     if let Some(name) = names.get(d.depths.len()) {
-        shadow_text(painter, end + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, name, FontId::proportional(12.0), color);
+        shadow_text(
+            painter,
+            end + Vec2::new(10.0, 0.0),
+            Align2::LEFT_CENTER,
+            name,
+            FontId::proportional(12.0),
+            color,
+        );
     }
 }
 

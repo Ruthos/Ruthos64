@@ -123,7 +123,9 @@ impl Library {
 
     /// Label of a definition key, or the key itself.
     pub fn label(&self, key: &str) -> String {
-        self.definition(key).map(|d| d.label.clone()).unwrap_or_else(|| key.to_string())
+        self.definition(key)
+            .map(|d| d.label.clone())
+            .unwrap_or_else(|| key.to_string())
     }
 
     /// The definition whose label matches, exactly or ignoring case.
@@ -211,7 +213,9 @@ pub struct MergeReport {
 
 impl MergeReport {
     pub fn replaces_anything(&self) -> bool {
-        !(self.replaced_definitions.is_empty() && self.replaced_sets.is_empty() && self.replaced_calculations.is_empty())
+        !(self.replaced_definitions.is_empty()
+            && self.replaced_sets.is_empty()
+            && self.replaced_calculations.is_empty())
     }
 }
 
@@ -220,17 +224,25 @@ impl MergeReport {
 /// The library Ruthos ships. Keys are stable; labels follow veterinary
 /// usage (the LV posterior wall is the free wall).
 pub fn builtin() -> Library {
-    let def = |key: &str, label: &str, tool: &str, quantity: &str, unit: &str, decimals: u8, concept: Option<&str>| Definition {
-        key: key.into(),
-        label: label.into(),
-        tool: tool.into(),
-        quantity: quantity.into(),
-        unit: unit.into(),
-        decimals,
-        concept: concept.map(String::from),
-        species: None,
+    let def = |key: &str, label: &str, tool: &str, quantity: &str, unit: &str, decimals: u8, concept: Option<&str>| {
+        Definition {
+            key: key.into(),
+            label: label.into(),
+            tool: tool.into(),
+            quantity: quantity.into(),
+            unit: unit.into(),
+            decimals,
+            concept: concept.map(String::from),
+            species: None,
+        }
     };
-    let calc = |key: &str, label: &str, expression: &str, input_unit: &str, result_unit: &str, decimals: u8, scope: Option<&str>| Calculation {
+    let calc = |key: &str,
+                label: &str,
+                expression: &str,
+                input_unit: &str,
+                result_unit: &str,
+                decimals: u8,
+                scope: Option<&str>| Calculation {
         key: key.into(),
         label: label.into(),
         expression: expression.into(),
@@ -239,7 +251,10 @@ pub fn builtin() -> Library {
         decimals,
         scope: scope.map(String::from),
     };
-    let set = |name: &str, keys: &[&str]| Set { name: name.into(), keys: keys.iter().map(|k| k.to_string()).collect() };
+    let set = |name: &str, keys: &[&str]| Set {
+        name: name.into(),
+        keys: keys.iter().map(|k| k.to_string()).collect(),
+    };
     Library {
         definitions: vec![
             // Echo: LV M-mode
@@ -321,7 +336,9 @@ pub fn is_builtin_set(name: &str) -> bool {
 pub fn valid_key(key: &str) -> bool {
     let mut chars = key.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
-        && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_')
+        && key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_')
         && !key.ends_with('.')
         && !key.contains("..")
 }
@@ -332,7 +349,10 @@ pub fn validate(lib: &Library) -> Vec<String> {
     let mut seen = HashSet::new();
     for d in &lib.definitions {
         if !valid_key(&d.key) {
-            problems.push(format!("Definition key '{}' is not lower-case dotted (like lv.lvidd)", d.key));
+            problems.push(format!(
+                "Definition key '{}' is not lower-case dotted (like lv.lvidd)",
+                d.key
+            ));
         }
         if !seen.insert(d.key.clone()) {
             problems.push(format!("Definition key '{}' appears twice", d.key));
@@ -341,7 +361,10 @@ pub fn validate(lib: &Library) -> Vec<String> {
             problems.push(format!("Definition '{}' has no label", d.key));
         }
         if !["length", "angle", "area", "point", "lv-mmode"].contains(&d.tool.as_str()) {
-            problems.push(format!("Definition '{}': tool '{}' is not length, angle, area, point or lv-mmode", d.key, d.tool));
+            problems.push(format!(
+                "Definition '{}': tool '{}' is not length, angle, area, point or lv-mmode",
+                d.key, d.tool
+            ));
         }
     }
     let mut seen_calc = HashSet::new();
@@ -393,9 +416,17 @@ pub fn describe_calculation(lib: &Library, c: &Calculation) -> Result<String, St
     let keys = expr.keys();
     let unknown: Vec<String> = keys.iter().filter(|k| lib.definition(k).is_none()).cloned().collect();
     if !unknown.is_empty() {
-        return Err(format!("unknown key{} {}", if unknown.len() == 1 { "" } else { "s" }, unknown.join(", ")));
+        return Err(format!(
+            "unknown key{} {}",
+            if unknown.len() == 1 { "" } else { "s" },
+            unknown.join(", ")
+        ));
     }
-    let mut text = if keys.is_empty() { "uses no measurement".to_string() } else { format!("uses {}", keys.join(", ")) };
+    let mut text = if keys.is_empty() {
+        "uses no measurement".to_string()
+    } else {
+        format!("uses {}", keys.join(", "))
+    };
     if is_scale_independent(lib, c) {
         text.push_str("; scale independent (unaffected by magnification)");
     } else {
@@ -548,7 +579,11 @@ impl Parser {
         while let Some(Token::Op(c @ ('+' | '-'))) = self.peek().cloned() {
             self.next();
             let right = self.product()?;
-            left = Expr::Bin(Box::new(left), if c == '+' { Op::Add } else { Op::Sub }, Box::new(right));
+            left = Expr::Bin(
+                Box::new(left),
+                if c == '+' { Op::Add } else { Op::Sub },
+                Box::new(right),
+            );
         }
         Ok(left)
     }
@@ -559,7 +594,11 @@ impl Parser {
         while let Some(Token::Op(c @ ('*' | '/'))) = self.peek().cloned() {
             self.next();
             let right = self.power()?;
-            left = Expr::Bin(Box::new(left), if c == '*' { Op::Mul } else { Op::Div }, Box::new(right));
+            left = Expr::Bin(
+                Box::new(left),
+                if c == '*' { Op::Mul } else { Op::Div },
+                Box::new(right),
+            );
         }
         Ok(left)
     }
@@ -620,7 +659,10 @@ impl Parser {
                         Func::Min | Func::Max => 2,
                     };
                     if args.len() != wanted {
-                        return Err(format!("{name} takes {wanted} argument{}", if wanted == 1 { "" } else { "s" }));
+                        return Err(format!(
+                            "{name} takes {wanted} argument{}",
+                            if wanted == 1 { "" } else { "s" }
+                        ));
                     }
                     Ok(Expr::Call(func, args))
                 } else {
@@ -774,7 +816,13 @@ pub fn evaluate(lib: &Library, c: &Calculation, values: &BTreeMap<String, Input>
     let keys = expr.keys();
     let scale_independent = is_scale_independent(lib, c);
     let all_patient = keys.iter().all(|k| values.get(k).is_some_and(|v| v.patient_scale));
-    let text = format!("{:.*}{}{}", c.decimals as usize, value, if c.result_unit.is_empty() { "" } else { " " }, c.result_unit);
+    let text = format!(
+        "{:.*}{}{}",
+        c.decimals as usize,
+        value,
+        if c.result_unit.is_empty() { "" } else { " " },
+        c.result_unit
+    );
     Ok(CalcResult {
         key: c.key.clone(),
         label: c.label.clone(),
@@ -789,7 +837,10 @@ pub fn evaluate(lib: &Library, c: &Calculation, values: &BTreeMap<String, Input>
 
 /// Evaluate every calculation whose inputs are all present.
 pub fn evaluate_all(lib: &Library, values: &BTreeMap<String, Input>) -> Vec<CalcResult> {
-    lib.calculations.iter().filter_map(|c| evaluate(lib, c, values).ok()).collect()
+    lib.calculations
+        .iter()
+        .filter_map(|c| evaluate(lib, c, values).ok())
+        .collect()
 }
 
 /// Whether the result is unchanged when every length and area input is
@@ -797,13 +848,22 @@ pub fn evaluate_all(lib: &Library, values: &BTreeMap<String, Input>) -> Vec<Calc
 /// Decided numerically: the expression is evaluated with a sample of
 /// inputs and again with lengths doubled and areas quadrupled.
 pub fn is_scale_independent(lib: &Library, c: &Calculation) -> bool {
-    let Ok(expr) = Expr::parse(&c.expression) else { return false };
+    let Ok(expr) = Expr::parse(&c.expression) else {
+        return false;
+    };
     let keys = expr.keys();
     if keys.is_empty() {
         return true;
     }
-    let scaled_quantity = |k: &str| lib.definition(k).map(|d| d.quantity.clone()).unwrap_or_else(|| "length".into());
-    if keys.iter().all(|k| !matches!(scaled_quantity(k).as_str(), "length" | "area")) {
+    let scaled_quantity = |k: &str| {
+        lib.definition(k)
+            .map(|d| d.quantity.clone())
+            .unwrap_or_else(|| "length".into())
+    };
+    if keys
+        .iter()
+        .all(|k| !matches!(scaled_quantity(k).as_str(), "length" | "area"))
+    {
         return true;
     }
     // Several sample points, so a coincidence at one does not mislead.
@@ -853,7 +913,11 @@ pub fn migrate_label_sets(sets: &[(String, Vec<String>)]) -> Library {
                 None => {
                     let key = slug_key(label);
                     if lib.definition(&key).is_none() {
-                        lib.definitions.push(Definition { key: key.clone(), label: label.to_string(), ..Default::default() });
+                        lib.definitions.push(Definition {
+                            key: key.clone(),
+                            label: label.to_string(),
+                            ..Default::default()
+                        });
                     }
                     key
                 }
@@ -866,7 +930,10 @@ pub fn migrate_label_sets(sets: &[(String, Vec<String>)]) -> Library {
         if builtin.set(name).is_some_and(|s| s.keys == keys) {
             continue;
         }
-        lib.sets.push(Set { name: name.clone(), keys });
+        lib.sets.push(Set {
+            name: name.clone(),
+            keys,
+        });
     }
     lib
 }
@@ -896,7 +963,10 @@ pub fn slug_key(label: &str) -> String {
 
 /// Label-to-key pairs for giving stored measurements their definition key.
 pub fn label_keys(lib: &Library) -> Vec<(String, String)> {
-    lib.definitions.iter().map(|d| (d.label.clone(), d.key.clone())).collect()
+    lib.definitions
+        .iter()
+        .map(|d| (d.label.clone(), d.key.clone()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -904,7 +974,18 @@ mod tests {
     use super::*;
 
     fn values(pairs: &[(&str, f64)]) -> BTreeMap<String, Input> {
-        pairs.iter().map(|(k, v)| (k.to_string(), Input { value: *v, patient_scale: true })).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string(),
+                    Input {
+                        value: *v,
+                        patient_scale: true,
+                    },
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -924,14 +1005,39 @@ mod tests {
             _ => None,
         });
         assert!((v.unwrap() - 40.0).abs() < 1e-9);
-        assert!((Expr::parse("2 ^ 3 ^ 2").unwrap().eval(&|_| None).unwrap() - 512.0).abs() < 1e-9, "powers are right associative");
-        assert!((Expr::parse("sqrt(16) + abs(-2) + min(1, 2) + max(1, 2) - -1").unwrap().eval(&|_| None).unwrap() - 10.0).abs() < 1e-9);
-        assert!((Expr::parse("7 \u{f7} (2.4 + 4) \u{d7} 4^3").unwrap().eval(&|_| None).unwrap() - 70.0).abs() < 1e-9);
+        assert!(
+            (Expr::parse("2 ^ 3 ^ 2").unwrap().eval(&|_| None).unwrap() - 512.0).abs() < 1e-9,
+            "powers are right associative"
+        );
+        assert!(
+            (Expr::parse("sqrt(16) + abs(-2) + min(1, 2) + max(1, 2) - -1")
+                .unwrap()
+                .eval(&|_| None)
+                .unwrap()
+                - 10.0)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (Expr::parse("7 \u{f7} (2.4 + 4) \u{d7} 4^3")
+                .unwrap()
+                .eval(&|_| None)
+                .unwrap()
+                - 70.0)
+                .abs()
+                < 1e-9
+        );
         assert!(Expr::parse("1 +").is_err());
         assert!(Expr::parse("foo(1)").is_err());
         assert!(Expr::parse("1 2").is_err());
-        assert_eq!(Expr::parse("1 / x").unwrap().eval(&|_| Some(0.0)), Err(EvalError::DivideByZero));
-        assert_eq!(Expr::parse("x").unwrap().eval(&|_| None), Err(EvalError::Missing("x".into())));
+        assert_eq!(
+            Expr::parse("1 / x").unwrap().eval(&|_| Some(0.0)),
+            Err(EvalError::DivideByZero)
+        );
+        assert_eq!(
+            Expr::parse("x").unwrap().eval(&|_| None),
+            Err(EvalError::Missing("x".into()))
+        );
     }
 
     #[test]
@@ -943,7 +1049,12 @@ mod tests {
         assert!((r.value - 70.0).abs() < 1e-9);
         assert_eq!(r.text, "70.0 ml");
         assert!(!r.scale_independent);
-        let fs = evaluate(&lib, lib.calculation("lv.fs").unwrap(), &values(&[("lv.lvidd", 50.0), ("lv.lvids", 30.0)])).unwrap();
+        let fs = evaluate(
+            &lib,
+            lib.calculation("lv.fs").unwrap(),
+            &values(&[("lv.lvidd", 50.0), ("lv.lvids", 30.0)]),
+        )
+        .unwrap();
         assert!((fs.value - 40.0).abs() < 1e-9);
         assert!(fs.scale_independent);
     }
@@ -953,8 +1064,15 @@ mod tests {
         let lib = builtin();
         assert!(is_scale_independent(&lib, lib.calculation("vhs.total").unwrap()));
         assert!(is_scale_independent(&lib, lib.calculation("echo.la_ao").unwrap()));
-        assert!(!is_scale_independent(&lib, lib.calculation("lv.esv_teichholz").unwrap()));
-        let angle_only = Calculation { key: "t.a".into(), expression: "ortho.tpa * 2".into(), ..Default::default() };
+        assert!(!is_scale_independent(
+            &lib,
+            lib.calculation("lv.esv_teichholz").unwrap()
+        ));
+        let angle_only = Calculation {
+            key: "t.a".into(),
+            expression: "ortho.tpa * 2".into(),
+            ..Default::default()
+        };
         assert!(is_scale_independent(&lib, &angle_only));
     }
 
@@ -966,19 +1084,34 @@ mod tests {
         let fs = evaluate(&lib, lib.calculation("lv.fs").unwrap(), &v).unwrap();
         assert!(fs.trustworthy_scale, "a ratio does not care about scale");
         let edv = evaluate(&lib, lib.calculation("lv.edv_teichholz").unwrap(), &v).unwrap();
-        assert!(!edv.trustworthy_scale, "a volume from a detector-plane length is not the patient's");
+        assert!(
+            !edv.trustworthy_scale,
+            "a volume from a detector-plane length is not the patient's"
+        );
     }
 
     #[test]
     fn merge_replaces_by_key_and_reports() {
         let mut lib = builtin();
         let mut incoming = Library::default();
-        incoming.definitions.push(Definition { key: "lv.lvidd".into(), label: "LVIDd (custom)".into(), ..Default::default() });
-        incoming.definitions.push(Definition { key: "custom.new".into(), label: "New".into(), ..Default::default() });
+        incoming.definitions.push(Definition {
+            key: "lv.lvidd".into(),
+            label: "LVIDd (custom)".into(),
+            ..Default::default()
+        });
+        incoming.definitions.push(Definition {
+            key: "custom.new".into(),
+            label: "New".into(),
+            ..Default::default()
+        });
         let preview = lib.preview_merge(&incoming);
         assert_eq!(preview.replaced_definitions, vec!["lv.lvidd"]);
         assert_eq!(preview.added, 1);
-        assert_eq!(lib.definition("lv.lvidd").unwrap().label, "LVIDd", "preview changes nothing");
+        assert_eq!(
+            lib.definition("lv.lvidd").unwrap().label,
+            "LVIDd",
+            "preview changes nothing"
+        );
         lib.merge(incoming);
         assert_eq!(lib.definition("lv.lvidd").unwrap().label, "LVIDd (custom)");
         assert!(lib.definition("custom.new").is_some());
@@ -987,7 +1120,11 @@ mod tests {
     #[test]
     fn user_entries_override_builtins_and_restore_by_removal() {
         let mut user = Library::default();
-        user.definitions.push(Definition { key: "echo.la".into(), label: "Left atrium".into(), ..Default::default() });
+        user.definitions.push(Definition {
+            key: "echo.la".into(),
+            label: "Left atrium".into(),
+            ..Default::default()
+        });
         assert_eq!(effective(&user).definition("echo.la").unwrap().label, "Left atrium");
         user.definitions.clear();
         assert_eq!(effective(&user).definition("echo.la").unwrap().label, "LA");
@@ -996,20 +1133,43 @@ mod tests {
     #[test]
     fn validation_finds_problems() {
         let mut lib = builtin();
-        lib.calculations.push(Calculation { key: "Bad Key".into(), expression: "lv.nope + 1".into(), ..Default::default() });
-        lib.sets.push(Set { name: "S".into(), keys: vec!["lv.nope".into()] });
+        lib.calculations.push(Calculation {
+            key: "Bad Key".into(),
+            expression: "lv.nope + 1".into(),
+            ..Default::default()
+        });
+        lib.sets.push(Set {
+            name: "S".into(),
+            keys: vec!["lv.nope".into()],
+        });
         let problems = validate(&lib);
         assert!(problems.iter().any(|p| p.contains("not lower-case")));
         assert!(problems.iter().any(|p| p.contains("unknown key 'lv.nope'")));
         assert!(problems.iter().any(|p| p.contains("Set 'S'")));
-        assert!(valid_key("lv.lvidd") && valid_key("custom.kidney_l") && !valid_key("LV") && !valid_key("a..b") && !valid_key("1a"));
+        assert!(
+            valid_key("lv.lvidd")
+                && valid_key("custom.kidney_l")
+                && !valid_key("LV")
+                && !valid_key("a..b")
+                && !valid_key("1a")
+        );
     }
 
     #[test]
     fn old_label_sets_migrate_to_keys() {
         let old = vec![
-            ("Echo: LV M-mode".to_string(), vec!["IVSd".to_string(), "LVIDd".into(), "LVPWd".into()]),
-            ("Mine".to_string(), vec!["LVIDd".to_string(), "Kidney length (L)".into(), "Spleen thickness".into()]),
+            (
+                "Echo: LV M-mode".to_string(),
+                vec!["IVSd".to_string(), "LVIDd".into(), "LVPWd".into()],
+            ),
+            (
+                "Mine".to_string(),
+                vec![
+                    "LVIDd".to_string(),
+                    "Kidney length (L)".into(),
+                    "Spleen thickness".into(),
+                ],
+            ),
         ];
         let lib = migrate_label_sets(&old);
         // LVPWd is not a built-in label any more, so it becomes a custom definition.
@@ -1017,10 +1177,22 @@ mod tests {
         assert_eq!(echo.keys, vec!["lv.ivsd", "lv.lvidd", "custom.lvpwd"]);
         let mine = lib.set("Mine").unwrap();
         assert_eq!(mine.keys, vec!["lv.lvidd", "kidney.left", "custom.spleen_thickness"]);
-        assert_eq!(lib.definition("custom.spleen_thickness").unwrap().label, "Spleen thickness");
+        assert_eq!(
+            lib.definition("custom.spleen_thickness").unwrap().label,
+            "Spleen thickness"
+        );
         assert_eq!(slug_key("Kidney length (L)"), "custom.kidney_length_l");
         // A set equal to the built-in one is dropped.
-        let same = vec![("Radiography".to_string(), builtin().set("Radiography").unwrap().keys.iter().map(|k| builtin().label(k)).collect())];
+        let same = vec![(
+            "Radiography".to_string(),
+            builtin()
+                .set("Radiography")
+                .unwrap()
+                .keys
+                .iter()
+                .map(|k| builtin().label(k))
+                .collect(),
+        )];
         assert!(migrate_label_sets(&same).sets.is_empty());
     }
 

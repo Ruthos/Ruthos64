@@ -24,5 +24,8 @@ pub use verify::{collect_context, verify_file, verify_text, Finding, VerifyConte
 
 /// The first sensitive token found in a label, for live validation in a dialog.
 pub fn conflicts_with_tokens_text(label: &str, ctx: &VerifyContext) -> Option<String> {
-    verify_text("label", label, ctx, false).into_iter().next().map(|f| f.matched)
+    verify_text("label", label, ctx, false)
+        .into_iter()
+        .next()
+        .map(|f| f.matched)
 }

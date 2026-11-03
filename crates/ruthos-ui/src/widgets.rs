@@ -31,13 +31,15 @@ impl From<Bitmap> for Icon {
 pub fn paint_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32, alpha: u8) {
     match icon {
         Icon::Glyph(g) => {
-            ui.painter().text(center, Align2::CENTER_CENTER, g, icons::font(size), color);
+            ui.painter()
+                .text(center, Align2::CENTER_CENTER, g, icons::font(size), color);
         }
         Icon::Bitmap(b) => {
             let tex = icons::texture(ui.ctx(), b);
             let rect = Rect::from_center_size(center, Vec2::splat(size * 1.2));
             let tint = Color32::from_rgba_unmultiplied(255, 255, 255, alpha);
-            ui.painter().image(tex, rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+            ui.painter()
+                .image(tex, rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
         }
     }
 }
@@ -87,7 +89,11 @@ impl<'a> ToolbarButton<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let label_width = ui
             .painter()
-            .layout_no_wrap(self.label.to_string(), FontId::proportional(theme::TOOLBAR_LABEL_SIZE), Color32::BLACK)
+            .layout_no_wrap(
+                self.label.to_string(),
+                FontId::proportional(theme::TOOLBAR_LABEL_SIZE),
+                Color32::BLACK,
+            )
             .size()
             .x;
         let width = self.width.max(label_width + 14.0);
@@ -113,8 +119,17 @@ impl<'a> ToolbarButton<'a> {
                 };
                 painter.rect_filled(rect.shrink(2.0), 6.0, fill);
                 if self.selected {
-                    let stroke = if dark { Color32::from_white_alpha(40) } else { Color32::from_black_alpha(40) };
-                    painter.rect_stroke(rect.shrink(2.0), 6.0, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+                    let stroke = if dark {
+                        Color32::from_white_alpha(40)
+                    } else {
+                        Color32::from_black_alpha(40)
+                    };
+                    painter.rect_stroke(
+                        rect.shrink(2.0),
+                        6.0,
+                        Stroke::new(1.0, stroke),
+                        egui::StrokeKind::Inside,
+                    );
                 }
             }
             let (icon_color, label_color) = if !self.enabled {
@@ -129,7 +144,14 @@ impl<'a> ToolbarButton<'a> {
                 (Color32::from_gray(55), Color32::from_gray(40))
             };
             let icon_center = Pos2::new(rect.center().x, rect.top() + 6.0 + theme::TOOLBAR_ICON_SIZE * 0.55);
-            paint_icon(ui, self.icon, icon_center, theme::TOOLBAR_ICON_SIZE, icon_color, if self.enabled { 255 } else { 80 });
+            paint_icon(
+                ui,
+                self.icon,
+                icon_center,
+                theme::TOOLBAR_ICON_SIZE,
+                icon_color,
+                if self.enabled { 255 } else { 80 },
+            );
             ui.painter().text(
                 Pos2::new(rect.center().x, rect.bottom() - 5.0),
                 Align2::CENTER_BOTTOM,
@@ -138,7 +160,7 @@ impl<'a> ToolbarButton<'a> {
                 label_color,
             );
         }
-        let response = if let Some(tip) = self.tooltip {
+        if let Some(tip) = self.tooltip {
             if self.enabled {
                 response.on_hover_text(tip)
             } else {
@@ -146,8 +168,7 @@ impl<'a> ToolbarButton<'a> {
             }
         } else {
             response
-        };
-        response
+        }
     }
 }
 
@@ -171,7 +192,11 @@ pub fn toolbar_caption(ui: &mut Ui, text: &str) {
     ui.label(
         egui::RichText::new(text)
             .size(theme::TOOLBAR_LABEL_SIZE)
-            .color(if ui.visuals().dark_mode { Color32::from_gray(215) } else { Color32::from_gray(40) }),
+            .color(if ui.visuals().dark_mode {
+                Color32::from_gray(215)
+            } else {
+                Color32::from_gray(40)
+            }),
     );
 }
 
@@ -209,7 +234,11 @@ pub fn source_row(ui: &mut Ui, icon: impl Into<Icon>, text: &str, count: Option<
             icon,
             Pos2::new(rect.left() + 17.0, rect.center().y),
             15.0,
-            if selected { Color32::WHITE } else { Color32::from_gray(90) },
+            if selected {
+                Color32::WHITE
+            } else {
+                Color32::from_gray(90)
+            },
             255,
         );
         let painter = ui.painter();
@@ -226,7 +255,11 @@ pub fn source_row(ui: &mut Ui, icon: impl Into<Icon>, text: &str, count: Option<
                 Align2::RIGHT_CENTER,
                 n.to_string(),
                 FontId::proportional(12.5),
-                if selected { Color32::WHITE } else { Color32::from_gray(130) },
+                if selected {
+                    Color32::WHITE
+                } else {
+                    Color32::from_gray(130)
+                },
             );
         }
     }
@@ -250,11 +283,27 @@ pub fn thumbnail_cell(
         let dark = ui.visuals().dark_mode;
         if selected {
             painter.rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.30));
-            painter.rect_stroke(rect, 6.0, Stroke::new(1.5, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
+            painter.rect_stroke(
+                rect,
+                6.0,
+                Stroke::new(1.5, ui.visuals().selection.bg_fill),
+                egui::StrokeKind::Inside,
+            );
         } else if response.hovered() {
-            painter.rect_filled(rect, 6.0, if dark { Color32::from_white_alpha(14) } else { Color32::from_black_alpha(12) });
+            painter.rect_filled(
+                rect,
+                6.0,
+                if dark {
+                    Color32::from_white_alpha(14)
+                } else {
+                    Color32::from_black_alpha(12)
+                },
+            );
         }
-        let img_rect = Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 7.0 + size / 2.0), Vec2::splat(size));
+        let img_rect = Rect::from_center_size(
+            Pos2::new(rect.center().x, rect.top() + 7.0 + size / 2.0),
+            Vec2::splat(size),
+        );
         painter.rect_filled(img_rect, 3.0, Color32::BLACK);
         match texture {
             Some(tex) => {
@@ -279,7 +328,11 @@ pub fn thumbnail_cell(
                 );
             }
         }
-        let text_color = if dark { Color32::from_gray(225) } else { Color32::from_gray(35) };
+        let text_color = if dark {
+            Color32::from_gray(225)
+        } else {
+            Color32::from_gray(35)
+        };
         let caption = truncate(caption, 17);
         painter.text(
             Pos2::new(rect.center().x, img_rect.bottom() + 4.0),
@@ -312,8 +365,21 @@ pub fn truncate(s: &str, max: usize) -> String {
 }
 
 /// Text with a one-pixel dark shadow, the Horos annotation style.
-pub fn shadow_text(painter: &egui::Painter, pos: Pos2, anchor: Align2, text: &str, font: FontId, color: Color32) -> Rect {
-    painter.text(pos + Vec2::new(1.0, 1.0), anchor, text, font.clone(), theme::ANNOTATION_SHADOW);
+pub fn shadow_text(
+    painter: &egui::Painter,
+    pos: Pos2,
+    anchor: Align2,
+    text: &str,
+    font: FontId,
+    color: Color32,
+) -> Rect {
+    painter.text(
+        pos + Vec2::new(1.0, 1.0),
+        anchor,
+        text,
+        font.clone(),
+        theme::ANNOTATION_SHADOW,
+    );
     painter.text(pos, anchor, text, font, color)
 }
 
@@ -326,32 +392,69 @@ pub enum MouseKey {
 
 /// A small two-button mouse outline with one key darkened, drawn into `rect`.
 pub fn mouse_glyph(painter: &egui::Painter, rect: Rect, key: MouseKey, dark: bool) {
-    let outline = if dark { Color32::from_gray(205) } else { Color32::from_gray(70) };
-    let key_fill = if dark { Color32::from_gray(225) } else { Color32::from_gray(60) };
-    let body = if dark { Color32::from_white_alpha(18) } else { Color32::from_black_alpha(14) };
+    let outline = if dark {
+        Color32::from_gray(205)
+    } else {
+        Color32::from_gray(70)
+    };
+    let key_fill = if dark {
+        Color32::from_gray(225)
+    } else {
+        Color32::from_gray(60)
+    };
+    let body = if dark {
+        Color32::from_white_alpha(18)
+    } else {
+        Color32::from_black_alpha(14)
+    };
     let w = rect.width().min(rect.height() * 0.68);
     let h = w / 0.68;
     let body_rect = Rect::from_center_size(rect.center(), Vec2::new(w, h));
     let radius = w * 0.5;
-    painter.rect(body_rect, radius, body, Stroke::new(1.0, outline), egui::StrokeKind::Inside);
+    painter.rect(
+        body_rect,
+        radius,
+        body,
+        Stroke::new(1.0, outline),
+        egui::StrokeKind::Inside,
+    );
     // The two keys occupy the upper half; the darker one is the assigned key.
     let key_h = h * 0.46;
     let key_rect = match key {
         MouseKey::Left => Rect::from_min_size(body_rect.min, Vec2::new(w * 0.5, key_h)),
-        MouseKey::Right => Rect::from_min_size(Pos2::new(body_rect.center().x, body_rect.top()), Vec2::new(w * 0.5, key_h)),
+        MouseKey::Right => Rect::from_min_size(
+            Pos2::new(body_rect.center().x, body_rect.top()),
+            Vec2::new(w * 0.5, key_h),
+        ),
     };
     let rounding = match key {
-        MouseKey::Left => egui::CornerRadius { nw: radius as u8, ne: 0, sw: 0, se: 0 },
-        MouseKey::Right => egui::CornerRadius { nw: 0, ne: radius as u8, sw: 0, se: 0 },
+        MouseKey::Left => egui::CornerRadius {
+            nw: radius as u8,
+            ne: 0,
+            sw: 0,
+            se: 0,
+        },
+        MouseKey::Right => egui::CornerRadius {
+            nw: 0,
+            ne: radius as u8,
+            sw: 0,
+            se: 0,
+        },
     };
     painter.rect_filled(key_rect.shrink(0.5), rounding, key_fill);
     let mid_x = body_rect.center().x;
     painter.line_segment(
-        [Pos2::new(mid_x, body_rect.top() + 0.5), Pos2::new(mid_x, body_rect.top() + key_h)],
+        [
+            Pos2::new(mid_x, body_rect.top() + 0.5),
+            Pos2::new(mid_x, body_rect.top() + key_h),
+        ],
         Stroke::new(1.0, outline),
     );
     painter.line_segment(
-        [Pos2::new(body_rect.left() + 0.5, body_rect.top() + key_h), Pos2::new(body_rect.right() - 0.5, body_rect.top() + key_h)],
+        [
+            Pos2::new(body_rect.left() + 0.5, body_rect.top() + key_h),
+            Pos2::new(body_rect.right() - 0.5, body_rect.top() + key_h),
+        ],
         Stroke::new(1.0, outline),
     );
 }
@@ -370,20 +473,45 @@ pub fn tool_menu_row(ui: &mut Ui, icon: impl Into<Icon>, label: &str, on_left: b
         if response.hovered() {
             painter.rect_filled(rect, 4.0, ui.visuals().selection.bg_fill);
         } else if active {
-            painter.rect_filled(rect, 4.0, if dark { Color32::from_white_alpha(16) } else { Color32::from_black_alpha(12) });
+            painter.rect_filled(
+                rect,
+                4.0,
+                if dark {
+                    Color32::from_white_alpha(16)
+                } else {
+                    Color32::from_black_alpha(12)
+                },
+            );
         }
-        let text_color = if response.hovered() { Color32::WHITE } else { ui.visuals().text_color() };
+        let text_color = if response.hovered() {
+            Color32::WHITE
+        } else {
+            ui.visuals().text_color()
+        };
         let glyph_dark = dark || response.hovered();
         let slot = 20.0;
         if on_left {
-            let r = Rect::from_min_size(Pos2::new(rect.left() + 5.0, rect.top() + 4.0), Vec2::new(slot - 6.0, rect.height() - 8.0));
+            let r = Rect::from_min_size(
+                Pos2::new(rect.left() + 5.0, rect.top() + 4.0),
+                Vec2::new(slot - 6.0, rect.height() - 8.0),
+            );
             mouse_glyph(painter, r, MouseKey::Left, glyph_dark);
         }
         if on_right {
-            let r = Rect::from_min_size(Pos2::new(rect.right() - slot + 1.0, rect.top() + 4.0), Vec2::new(slot - 6.0, rect.height() - 8.0));
+            let r = Rect::from_min_size(
+                Pos2::new(rect.right() - slot + 1.0, rect.top() + 4.0),
+                Vec2::new(slot - 6.0, rect.height() - 8.0),
+            );
             mouse_glyph(painter, r, MouseKey::Right, glyph_dark);
         }
-        paint_icon(ui, icon, Pos2::new(rect.left() + slot + 12.0, rect.center().y), 15.0, text_color, 255);
+        paint_icon(
+            ui,
+            icon,
+            Pos2::new(rect.left() + slot + 12.0, rect.center().y),
+            15.0,
+            text_color,
+            255,
+        );
         let painter = ui.painter();
         painter.text(
             Pos2::new(rect.left() + slot + 28.0, rect.center().y),
@@ -407,10 +535,22 @@ pub fn tiling_button(ui: &mut Ui, rows: usize, cols: usize, selected: bool, enab
         if selected {
             painter.rect_filled(rect, 5.0, ui.visuals().selection.bg_fill);
         } else if enabled && response.hovered() {
-            painter.rect_filled(rect, 5.0, if dark { Color32::from_white_alpha(20) } else { Color32::from_black_alpha(14) });
+            painter.rect_filled(
+                rect,
+                5.0,
+                if dark {
+                    Color32::from_white_alpha(20)
+                } else {
+                    Color32::from_black_alpha(14)
+                },
+            );
         }
         let cell_color = if !enabled {
-            if dark { Color32::from_gray(80) } else { Color32::from_gray(190) }
+            if dark {
+                Color32::from_gray(80)
+            } else {
+                Color32::from_gray(190)
+            }
         } else if selected {
             Color32::WHITE
         } else if dark {
@@ -478,18 +618,43 @@ pub fn menu_item_enabled(ui: &mut Ui, text: impl Into<egui::WidgetText>, selecte
 }
 
 /// A menu row with a keyboard shortcut shown at the right.
-pub fn menu_item_shortcut(ui: &mut Ui, text: impl Into<egui::WidgetText>, shortcut: &str, selected: bool, enabled: bool) -> Response {
+pub fn menu_item_shortcut(
+    ui: &mut Ui,
+    text: impl Into<egui::WidgetText>,
+    shortcut: &str,
+    selected: bool,
+    enabled: bool,
+) -> Response {
     menu_item_full(ui, text, shortcut, selected, enabled)
 }
 
-fn menu_item_full(ui: &mut Ui, text: impl Into<egui::WidgetText>, shortcut: &str, selected: bool, enabled: bool) -> Response {
-    let galley = text.into().into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+fn menu_item_full(
+    ui: &mut Ui,
+    text: impl Into<egui::WidgetText>,
+    shortcut: &str,
+    selected: bool,
+    enabled: bool,
+) -> Response {
+    let galley = text.into().into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
     let shortcut_galley = (!shortcut.is_empty()).then(|| {
-        egui::WidgetText::from(egui::RichText::new(shortcut).size(11.5)).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button)
+        egui::WidgetText::from(egui::RichText::new(shortcut).size(11.5)).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Button,
+        )
     });
     let extra = shortcut_galley.as_ref().map(|g| g.size().x + 24.0).unwrap_or(0.0);
     let width = menu_item_width(ui, galley.size().x + 44.0 + extra);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 24.0), if enabled { Sense::click() } else { Sense::hover() });
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(width, 24.0),
+        if enabled { Sense::click() } else { Sense::hover() },
+    );
     if ui.is_rect_visible(rect) {
         let dark = ui.visuals().dark_mode;
         let hovered = enabled && response.hovered();
@@ -499,7 +664,11 @@ fn menu_item_full(ui: &mut Ui, text: impl Into<egui::WidgetText>, shortcut: &str
         let color = if hovered {
             Color32::WHITE
         } else if !enabled {
-            if dark { Color32::from_gray(120) } else { Color32::from_gray(160) }
+            if dark {
+                Color32::from_gray(120)
+            } else {
+                Color32::from_gray(160)
+            }
         } else if dark {
             Color32::from_gray(230)
         } else {
@@ -508,8 +677,10 @@ fn menu_item_full(ui: &mut Ui, text: impl Into<egui::WidgetText>, shortcut: &str
         if selected {
             let c = Pos2::new(rect.left() + 12.0, rect.center().y);
             let stroke = Stroke::new(1.8, color);
-            ui.painter().line_segment([c + Vec2::new(-4.0, 0.0), c + Vec2::new(-1.0, 3.0)], stroke);
-            ui.painter().line_segment([c + Vec2::new(-1.0, 3.0), c + Vec2::new(5.0, -4.0)], stroke);
+            ui.painter()
+                .line_segment([c + Vec2::new(-4.0, 0.0), c + Vec2::new(-1.0, 3.0)], stroke);
+            ui.painter()
+                .line_segment([c + Vec2::new(-1.0, 3.0), c + Vec2::new(5.0, -4.0)], stroke);
         }
         let pos = Pos2::new(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0);
         if hovered || !enabled {
@@ -518,7 +689,11 @@ fn menu_item_full(ui: &mut Ui, text: impl Into<egui::WidgetText>, shortcut: &str
             ui.painter().galley(pos, galley, color);
         }
         if let Some(g) = shortcut_galley {
-            let c = if hovered { Color32::from_white_alpha(200) } else { Color32::from_gray(140) };
+            let c = if hovered {
+                Color32::from_white_alpha(200)
+            } else {
+                Color32::from_gray(140)
+            };
             let pos = Pos2::new(rect.right() - 12.0 - g.size().x, rect.center().y - g.size().y / 2.0);
             ui.painter().galley_with_override_text_color(pos, g, c);
         }
@@ -529,7 +704,12 @@ fn menu_item_full(ui: &mut Ui, text: impl Into<egui::WidgetText>, shortcut: &str
 /// A small grey heading inside a menu.
 pub fn menu_heading(ui: &mut Ui, text: &str) {
     ui.add_space(3.0);
-    ui.label(egui::RichText::new(text).size(11.0).strong().color(Color32::from_gray(140)));
+    ui.label(
+        egui::RichText::new(text)
+            .size(11.0)
+            .strong()
+            .color(Color32::from_gray(140)),
+    );
 }
 
 /// A menu row with a check box state that toggles on click.

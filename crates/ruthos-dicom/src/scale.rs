@@ -183,7 +183,10 @@ impl InstanceMeta {
     pub fn image_scale(&self) -> Scale {
         let x = self.columns as f64 / 2.0;
         let y = self.rows as f64 / 2.0;
-        self.scale_at(x, y).unwrap_or(Scale { spacing: [1.0, 1.0], basis: SpacingBasis::Uncalibrated })
+        self.scale_at(x, y).unwrap_or(Scale {
+            spacing: [1.0, 1.0],
+            basis: SpacingBasis::Uncalibrated,
+        })
     }
 
     /// Resolve the spacing at a point by the eight-row table. `None` only
@@ -198,7 +201,10 @@ impl InstanceMeta {
                 None => true,
             };
             if applies {
-                return Some(Scale { spacing: h.spacing, basis: SpacingBasis::Hand });
+                return Some(Scale {
+                    spacing: h.spacing,
+                    basis: SpacingBasis::Hand,
+                });
             }
         }
         // 2. Ultrasound region with distance units.
@@ -207,7 +213,10 @@ impl InstanceMeta {
                 return None;
             }
             if let Some(s) = r.mm_per_pixel() {
-                return Some(Scale { spacing: s, basis: SpacingBasis::UltrasoundRegion });
+                return Some(Scale {
+                    spacing: s,
+                    basis: SpacingBasis::UltrasoundRegion,
+                });
             }
         }
         let ps = self.pixel_spacing_tag;
@@ -216,20 +225,29 @@ impl InstanceMeta {
         // 3. Declared calibration.
         if let Some(s) = ps {
             if cal_type == "GEOMETRY" || cal_type == "FIDUCIAL" {
-                return Some(Scale { spacing: s, basis: SpacingBasis::Calibrated });
+                return Some(Scale {
+                    spacing: s,
+                    basis: SpacingBasis::Calibrated,
+                });
             }
         }
         // 4. Cross-sectional.
         if self.is_cross_sectional() {
             if let Some(s) = ps {
-                return Some(Scale { spacing: s, basis: SpacingBasis::PatientPlane });
+                return Some(Scale {
+                    spacing: s,
+                    basis: SpacingBasis::PatientPlane,
+                });
             }
         }
         if self.is_projection() {
             // 5. Detector spacing corrected by the estimated magnification.
             if let (Some(i), Some(f)) = (ips, self.magnification_factor) {
                 if f > 0.0 {
-                    return Some(Scale { spacing: [i[0] / f, i[1] / f], basis: SpacingBasis::MagnificationEstimated });
+                    return Some(Scale {
+                        spacing: [i[0] / f, i[1] / f],
+                        basis: SpacingBasis::MagnificationEstimated,
+                    });
                 }
             }
             // 6. Pixel Spacing that differs from the detector spacing.
@@ -239,19 +257,31 @@ impl InstanceMeta {
                     None => true,
                 };
                 if differs {
-                    return Some(Scale { spacing: s, basis: SpacingBasis::CalibratedUnstated });
+                    return Some(Scale {
+                        spacing: s,
+                        basis: SpacingBasis::CalibratedUnstated,
+                    });
                 }
             }
             // 7. The detector itself.
             if let Some(i) = ips.or(ps) {
-                return Some(Scale { spacing: i, basis: SpacingBasis::DetectorPlane });
+                return Some(Scale {
+                    spacing: i,
+                    basis: SpacingBasis::DetectorPlane,
+                });
             }
         } else if let Some(s) = ps.or(ips) {
             // Ultrasound without regions, secondary capture and the rest.
-            return Some(Scale { spacing: s, basis: SpacingBasis::CalibratedUnstated });
+            return Some(Scale {
+                spacing: s,
+                basis: SpacingBasis::CalibratedUnstated,
+            });
         }
         // 8. Nothing.
-        Some(Scale { spacing: [1.0, 1.0], basis: SpacingBasis::Uncalibrated })
+        Some(Scale {
+            spacing: [1.0, 1.0],
+            basis: SpacingBasis::Uncalibrated,
+        })
     }
 
     /// Length between two image points, with its basis or the reason there
@@ -267,9 +297,15 @@ impl InstanceMeta {
                 let hand = self.hand_calibration.filter(|h| h.region == ra || h.region.is_none());
                 let (row_mm, basis) = match hand {
                     Some(h) => (h.spacing[0], SpacingBasis::Hand),
-                    None => (r.row_mm().ok_or(MeasureIssue::Uncalibrated)?, SpacingBasis::UltrasoundRegion),
+                    None => (
+                        r.row_mm().ok_or(MeasureIssue::Uncalibrated)?,
+                        SpacingBasis::UltrasoundRegion,
+                    ),
                 };
-                return Ok(Length { mm: (b[1] - a[1]).abs() * row_mm, basis });
+                return Ok(Length {
+                    mm: (b[1] - a[1]).abs() * row_mm,
+                    basis,
+                });
             }
         }
         let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
@@ -279,7 +315,10 @@ impl InstanceMeta {
         }
         let dx = (b[0] - a[0]) * scale.spacing[1];
         let dy = (b[1] - a[1]) * scale.spacing[0];
-        Ok(Length { mm: (dx * dx + dy * dy).sqrt(), basis: scale.basis })
+        Ok(Length {
+            mm: (dx * dx + dy * dy).sqrt(),
+            basis: scale.basis,
+        })
     }
 
     /// Spacing at a point, without the basis, for callers that only scale.
@@ -302,19 +341,47 @@ mod tests {
     use super::*;
 
     fn meta(modality: &str) -> InstanceMeta {
-        InstanceMeta { modality: modality.into(), rows: 100, columns: 100, ..Default::default() }
+        InstanceMeta {
+            modality: modality.into(),
+            rows: 100,
+            columns: 100,
+            ..Default::default()
+        }
     }
 
     fn region(x0: i64, y0: i64, x1: i64, y1: i64, ux: u16, dx: f64, dy: f64) -> UsRegion {
-        UsRegion { x0, y0, x1, y1, spatial_format: if ux == 4 { 2 } else { 1 }, data_type: 1, units_x: ux, units_y: 3, delta_x: dx, delta_y: dy }
+        UsRegion {
+            x0,
+            y0,
+            x1,
+            y1,
+            spatial_format: if ux == 4 { 2 } else { 1 },
+            data_type: 1,
+            units_x: ux,
+            units_y: 3,
+            delta_x: dx,
+            delta_y: dy,
+        }
     }
 
     #[test]
     fn row_1_hand_calibration_scoped_to_its_region() {
         let mut m = meta("US");
-        m.us_regions = vec![region(0, 0, 49, 99, 3, 0.05, 0.05), region(50, 0, 99, 99, 4, 0.001, 0.02)];
-        m.hand_calibration = Some(HandCalibration { spacing: [0.7, 0.7], region: Some(0) });
-        assert_eq!(m.scale_at(10.0, 10.0).unwrap(), Scale { spacing: [0.7, 0.7], basis: SpacingBasis::Hand });
+        m.us_regions = vec![
+            region(0, 0, 49, 99, 3, 0.05, 0.05),
+            region(50, 0, 99, 99, 4, 0.001, 0.02),
+        ];
+        m.hand_calibration = Some(HandCalibration {
+            spacing: [0.7, 0.7],
+            region: Some(0),
+        });
+        assert_eq!(
+            m.scale_at(10.0, 10.0).unwrap(),
+            Scale {
+                spacing: [0.7, 0.7],
+                basis: SpacingBasis::Hand
+            }
+        );
         // The M-mode region keeps its own scale.
         let l = m.length([70.0, 10.0], [70.0, 20.0]).unwrap();
         assert!((l.mm - 2.0).abs() < 1e-9);
@@ -336,7 +403,13 @@ mod tests {
         m.pixel_spacing_tag = Some([0.1, 0.1]);
         m.imager_pixel_spacing = Some([0.12, 0.12]);
         m.pixel_spacing_calibration_type = "GEOMETRY".into();
-        assert_eq!(m.scale_at(5.0, 5.0).unwrap(), Scale { spacing: [0.1, 0.1], basis: SpacingBasis::Calibrated });
+        assert_eq!(
+            m.scale_at(5.0, 5.0).unwrap(),
+            Scale {
+                spacing: [0.1, 0.1],
+                basis: SpacingBasis::Calibrated
+            }
+        );
     }
 
     #[test]
@@ -370,7 +443,10 @@ mod tests {
     fn row_7_detector_plane_including_equal_spacings() {
         let mut only_imager = meta("DX");
         only_imager.imager_pixel_spacing = Some([0.1, 0.1]);
-        assert_eq!(only_imager.scale_at(5.0, 5.0).unwrap().basis, SpacingBasis::DetectorPlane);
+        assert_eq!(
+            only_imager.scale_at(5.0, 5.0).unwrap().basis,
+            SpacingBasis::DetectorPlane
+        );
         let mut equal = meta("DX");
         equal.imager_pixel_spacing = Some([0.1, 0.1]);
         equal.pixel_spacing_tag = Some([0.1, 0.1]);
@@ -388,7 +464,10 @@ mod tests {
     #[test]
     fn crossing_regions_and_time_axis() {
         let mut m = meta("US");
-        m.us_regions = vec![region(0, 0, 49, 99, 3, 0.05, 0.05), region(50, 0, 99, 99, 4, 0.001, 0.02)];
+        m.us_regions = vec![
+            region(0, 0, 49, 99, 3, 0.05, 0.05),
+            region(50, 0, 99, 99, 4, 0.001, 0.02),
+        ];
         assert_eq!(m.length([10.0, 10.0], [70.0, 10.0]), Err(MeasureIssue::CrossesRegions));
         assert_eq!(m.length([10.0, 10.0], [10.0, 120.0]), Err(MeasureIssue::CrossesRegions));
         assert!(m.allows_geometry_at(10.0, 10.0));

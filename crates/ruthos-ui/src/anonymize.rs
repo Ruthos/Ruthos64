@@ -48,6 +48,8 @@ struct Review {
     save_template: bool,
 }
 
+// One job message at a time; the prepared export is large by nature.
+#[allow(clippy::large_enum_variant)]
 enum Job {
     Progress(usize, usize, String),
     Prepared(Result<Prepared, String>),
@@ -121,7 +123,10 @@ impl AnonymizeState {
                     st.approved = true;
                 }
                 SeriesClassification::RegionsWithTemplate { keep, blank, .. } => {
-                    st.decision = Some(MaskDecision::RegionsReviewed { keep: keep.clone(), blank: blank.clone() });
+                    st.decision = Some(MaskDecision::RegionsReviewed {
+                        keep: keep.clone(),
+                        blank: blank.clone(),
+                    });
                     st.approved = false; // checked once per new study
                 }
                 SeriesClassification::Trusted => {
@@ -129,7 +134,10 @@ impl AnonymizeState {
                     st.approved = true;
                 }
                 SeriesClassification::Template { name, rects } => {
-                    st.decision = Some(MaskDecision::Template { name: name.clone(), rects: rects.clone() });
+                    st.decision = Some(MaskDecision::Template {
+                        name: name.clone(),
+                        rects: rects.clone(),
+                    });
                     st.approved = false; // looked at once per new study
                 }
                 SeriesClassification::NeedsReview => {}
@@ -179,15 +187,22 @@ impl AnonymizeState {
             ui.set_max_height(620.0);
             ui.horizontal(|ui| {
                 ui.heading("Anonymise for teaching");
-                ui.label(RichText::new(format!("  {}", self.study.patient_name)).size(14.0).color(Color32::from_gray(110)));
+                ui.label(
+                    RichText::new(format!("  {}", self.study.patient_name))
+                        .size(14.0)
+                        .color(Color32::from_gray(110)),
+                );
             });
             self.steps_bar(ui);
             ui.separator();
-            egui::ScrollArea::vertical().max_height(470.0).auto_shrink([false, false]).show(ui, |ui| match self.step {
-                Step::Case => self.case_step(ui, shared),
-                Step::Pixels => self.pixels_step(ui, shared),
-                Step::Verify => self.verify_step(ui, shared),
-            });
+            egui::ScrollArea::vertical()
+                .max_height(470.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| match self.step {
+                    Step::Case => self.case_step(ui, shared),
+                    Step::Pixels => self.pixels_step(ui, shared),
+                    Step::Verify => self.verify_step(ui, shared),
+                });
             ui.separator();
             ui.horizontal(|ui| {
                 if self.result.is_some() {
@@ -210,20 +225,37 @@ impl AnonymizeState {
                         }
                     }
                     Step::Pixels => {
-                        let ok = self.series.iter().all(|s| s.approved && s.decision.is_some()) && self.review.is_none();
+                        let ok =
+                            self.series.iter().all(|s| s.approved && s.decision.is_some()) && self.review.is_none();
                         if ui.add_enabled(ok, egui::Button::new("Next: Verify")).clicked() {
                             self.step = Step::Verify;
                         }
-                        if ui.add_enabled(!self.busy && self.review.is_none(), egui::Button::new("Back")).clicked() {
+                        if ui
+                            .add_enabled(!self.busy && self.review.is_none(), egui::Button::new("Back"))
+                            .clicked()
+                        {
                             self.step = Step::Case;
                         }
                     }
                     Step::Verify => {
                         let clean = self.prepared.as_ref().is_some_and(|p| p.is_clean());
-                        if ui.add_enabled(clean && !self.busy, egui::Button::new("Write")).clicked() {
+                        if ui
+                            .add_enabled(clean && !self.busy, egui::Button::new("Write"))
+                            .clicked()
+                        {
                             self.commit(shared);
                         }
-                        if ui.add_enabled(!self.busy, egui::Button::new(if self.prepared.is_some() { "Verify again" } else { "Verify" })).clicked() {
+                        if ui
+                            .add_enabled(
+                                !self.busy,
+                                egui::Button::new(if self.prepared.is_some() {
+                                    "Verify again"
+                                } else {
+                                    "Verify"
+                                }),
+                            )
+                            .clicked()
+                        {
                             self.prepare(shared);
                         }
                         if ui.add_enabled(!self.busy, egui::Button::new("Back")).clicked() {
@@ -244,9 +276,20 @@ impl AnonymizeState {
 
     fn steps_bar(&self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            for (i, (step, label)) in [(Step::Case, "1  Case"), (Step::Pixels, "2  Pixels"), (Step::Verify, "3  Verify and write")].iter().enumerate() {
+            for (i, (step, label)) in [
+                (Step::Case, "1  Case"),
+                (Step::Pixels, "2  Pixels"),
+                (Step::Verify, "3  Verify and write"),
+            ]
+            .iter()
+            .enumerate()
+            {
                 let active = *step == self.step;
-                let text = RichText::new(*label).size(13.0).color(if active { Color32::from_gray(20) } else { Color32::from_gray(140) });
+                let text = RichText::new(*label).size(13.0).color(if active {
+                    Color32::from_gray(20)
+                } else {
+                    Color32::from_gray(140)
+                });
                 ui.label(if active { text.strong() } else { text });
                 if i < 2 {
                     ui.label(RichText::new("›").color(Color32::from_gray(160)));
@@ -265,7 +308,11 @@ impl AnonymizeState {
             if !teaching::valid_label(&self.name, true) {
                 return Some("Name: letters, digits, spaces, hyphens, apostrophes and ^, up to 64 characters".into());
             }
-            if self.cases.iter().any(|c| c.reference.eq_ignore_ascii_case(self.reference.trim())) {
+            if self
+                .cases
+                .iter()
+                .any(|c| c.reference.eq_ignore_ascii_case(self.reference.trim()))
+            {
                 return Some("That reference exists; choose it from the existing cases to add this study to it".into());
             }
             if self.cases.iter().any(|c| c.name.eq_ignore_ascii_case(self.name.trim())) {
@@ -299,16 +346,26 @@ impl AnonymizeState {
             if ui.radio(self.existing.is_none(), "New case").clicked() {
                 self.existing = None;
             }
-            let label = self.existing.and_then(|id| self.cases.iter().find(|c| c.id == id)).map(|c| format!("{}  ({})", c.name.replace('^', " "), c.reference));
+            let label = self
+                .existing
+                .and_then(|id| self.cases.iter().find(|c| c.id == id))
+                .map(|c| format!("{}  ({})", c.name.replace('^', " "), c.reference));
             ui.add_enabled_ui(!self.cases.is_empty(), |ui| {
                 if ui.radio(self.existing.is_some(), "Add to existing case").clicked() && self.existing.is_none() {
                     self.existing = self.cases.first().map(|c| c.id);
                 }
-                egui::ComboBox::from_id_salt("anon-existing").selected_text(label.unwrap_or_else(|| "Choose a case".into())).width(300.0).show_ui(ui, |ui| {
-                    for c in &self.cases {
-                        ui.selectable_value(&mut self.existing, Some(c.id), format!("{}  ({})", c.name.replace('^', " "), c.reference));
-                    }
-                });
+                egui::ComboBox::from_id_salt("anon-existing")
+                    .selected_text(label.unwrap_or_else(|| "Choose a case".into()))
+                    .width(300.0)
+                    .show_ui(ui, |ui| {
+                        for c in &self.cases {
+                            ui.selectable_value(
+                                &mut self.existing,
+                                Some(c.id),
+                                format!("{}  ({})", c.name.replace('^', " "), c.reference),
+                            );
+                        }
+                    });
             });
         });
         if self.existing.is_some() {
@@ -325,13 +382,21 @@ impl AnonymizeState {
             ui.horizontal(|ui| {
                 ui.add_sized([110.0, 22.0], egui::Label::new("Reference"));
                 ui.add_sized([280.0, 24.0], egui::TextEdit::singleline(&mut self.reference));
-                ui.label(RichText::new("groups studies into a case; set the prefix in Preferences").size(11.5).color(Color32::from_gray(120)));
+                ui.label(
+                    RichText::new("groups studies into a case; set the prefix in Preferences")
+                        .size(11.5)
+                        .color(Color32::from_gray(120)),
+                );
             });
             hint(ui, "The name replaces the patient name (owner surname ^ animal name); the reference replaces the patient ID.");
         }
         ui.horizontal(|ui| {
             ui.add_sized([110.0, 22.0], egui::Label::new("Teaching title"));
-            ui.add_sized([480.0, 24.0], egui::TextEdit::singleline(&mut self.title).hint_text("for example: Aortic regurgitation, 14-year-old Warmblood"));
+            ui.add_sized(
+                [480.0, 24.0],
+                egui::TextEdit::singleline(&mut self.title)
+                    .hint_text("for example: Aortic regurgitation, 14-year-old Warmblood"),
+            );
         });
         ui.add_space(8.0);
 
@@ -341,7 +406,10 @@ impl AnonymizeState {
             ui.checkbox(&mut self.to_folder, "A folder");
             if self.to_folder {
                 if ui.button("Choose…").clicked() {
-                    if let Some(d) = rfd::FileDialog::new().set_title("Folder for the teaching copy").pick_folder() {
+                    if let Some(d) = rfd::FileDialog::new()
+                        .set_title("Folder for the teaching copy")
+                        .pick_folder()
+                    {
                         self.folder = Some(d);
                     }
                 }
@@ -370,11 +438,24 @@ impl AnonymizeState {
         ui.checkbox(&mut self.include_report, "Include the report's findings and conclusion");
         if self.include_report {
             hint(ui, "Read them: free text is where owners, practices and places hide. Whatever you include is still checked for known tokens.");
-            ui.add(egui::TextEdit::multiline(&mut self.findings_text).desired_rows(4).desired_width(f32::INFINITY).hint_text("Findings"));
-            ui.add(egui::TextEdit::multiline(&mut self.conclusion_text).desired_rows(2).desired_width(f32::INFINITY).hint_text("Conclusion"));
+            ui.add(
+                egui::TextEdit::multiline(&mut self.findings_text)
+                    .desired_rows(4)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("Findings"),
+            );
+            ui.add(
+                egui::TextEdit::multiline(&mut self.conclusion_text)
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("Conclusion"),
+            );
         }
         ui.add_enabled_ui(self.existing.is_none(), |ui| {
-            ui.checkbox(&mut self.preserve_season, "Preserve season (shift dates by whole years)");
+            ui.checkbox(
+                &mut self.preserve_season,
+                "Preserve season (shift dates by whole years)",
+            );
         });
         if self.preserve_season {
             ui.label(RichText::new("Day and month stay real. Combined with breed, age and region this narrows identification; use only when the season matters to the case.").size(12.0).color(Color32::from_rgb(170, 90, 0)));
@@ -413,12 +494,26 @@ impl AnonymizeState {
             let (status, color) = {
                 let s = &self.series[i];
                 match (&s.class, s.approved) {
-                    (SeriesClassification::Regions(_), _) => ("Masked by ultrasound regions (check the header band)", Color32::from_rgb(30, 130, 60)),
-                    (SeriesClassification::RegionsWithTemplate { .. }, true) => ("Regions and device template, checked", Color32::from_rgb(30, 130, 60)),
-                    (SeriesClassification::RegionsWithTemplate { .. }, false) => ("Regions and device template: check the frames", Color32::from_rgb(190, 120, 0)),
-                    (SeriesClassification::Trusted, _) => ("Trusted: Burned In Annotation is NO", Color32::from_rgb(30, 130, 60)),
-                    (SeriesClassification::Template { .. }, true) => ("Device template, checked", Color32::from_rgb(30, 130, 60)),
-                    (SeriesClassification::Template { .. }, false) => ("Device template: check the frames", Color32::from_rgb(190, 120, 0)),
+                    (SeriesClassification::Regions(_), _) => (
+                        "Masked by ultrasound regions (check the header band)",
+                        Color32::from_rgb(30, 130, 60),
+                    ),
+                    (SeriesClassification::RegionsWithTemplate { .. }, true) => {
+                        ("Regions and device template, checked", Color32::from_rgb(30, 130, 60))
+                    }
+                    (SeriesClassification::RegionsWithTemplate { .. }, false) => (
+                        "Regions and device template: check the frames",
+                        Color32::from_rgb(190, 120, 0),
+                    ),
+                    (SeriesClassification::Trusted, _) => {
+                        ("Trusted: Burned In Annotation is NO", Color32::from_rgb(30, 130, 60))
+                    }
+                    (SeriesClassification::Template { .. }, true) => {
+                        ("Device template, checked", Color32::from_rgb(30, 130, 60))
+                    }
+                    (SeriesClassification::Template { .. }, false) => {
+                        ("Device template: check the frames", Color32::from_rgb(190, 120, 0))
+                    }
                     (SeriesClassification::NeedsReview, true) => ("Reviewed", Color32::from_rgb(30, 130, 60)),
                     (SeriesClassification::NeedsReview, false) => ("Needs review", Color32::from_rgb(190, 40, 40)),
                 }
@@ -429,14 +524,23 @@ impl AnonymizeState {
                 ui.painter().rect_filled(rect, 3.0, Color32::BLACK);
                 if let Some((tex, w, h)) = &s.thumb {
                     let fit = fit_rect(rect.shrink(2.0), *w, *h);
-                    ui.painter().image(tex.id(), fit, ERect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                    ui.painter().image(
+                        tex.id(),
+                        fit,
+                        ERect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
                     if let Some(d) = &s.decision {
                         draw_mask_overlay(ui.painter(), fit, *w, *h, d);
                     }
                 }
                 ui.vertical(|ui| {
                     ui.label(RichText::new(s.series.display_name()).strong());
-                    ui.label(RichText::new(format!("{} · {}", s.series.modality, s.series.count_label())).size(12.0).color(Color32::from_gray(110)));
+                    ui.label(
+                        RichText::new(format!("{} · {}", s.series.modality, s.series.count_label()))
+                            .size(12.0)
+                            .color(Color32::from_gray(110)),
+                    );
                     ui.label(RichText::new(status).color(color));
                     if ui.button("Review…").clicked() {
                         open_review = Some(i);
@@ -454,7 +558,9 @@ impl AnonymizeState {
         let series_id = self.series[idx].series.id;
         let mut frames = Vec::new();
         for (label, pos) in [("First", 0.0), ("Middle", 0.5), ("Last", 1.0)] {
-            if let Some((tex, w, h)) = load_frame_texture(shared, ctx, series_id, pos, &format!("anon-review-{series_id}-{label}")) {
+            if let Some((tex, w, h)) =
+                load_frame_texture(shared, ctx, series_id, pos, &format!("anon-review-{series_id}-{label}"))
+            {
                 frames.push((label.to_string(), tex, w, h));
             }
         }
@@ -463,7 +569,13 @@ impl AnonymizeState {
             Some(MaskDecision::RegionsReviewed { blank, .. }) => blank.clone(),
             _ => Vec::new(),
         };
-        self.review = Some(Review { idx, frames, rects, drag: None, save_template: false });
+        self.review = Some(Review {
+            idx,
+            frames,
+            rects,
+            drag: None,
+            save_template: false,
+        });
     }
 
     fn review_view(&mut self, ui: &mut Ui, shared: &Shared) {
@@ -471,7 +583,10 @@ impl AnonymizeState {
         let s = &self.series[review.idx];
         ui.label(RichText::new(format!("Review: {}", s.series.display_name())).strong());
         ui.label(RichText::new("Drag on the first frame to add a rectangle over anything that identifies the owner or the practice. Rectangles are blanked on every frame.").size(12.5).color(Color32::from_gray(110)));
-        let keep_regions = matches!(s.class, SeriesClassification::Regions(_) | SeriesClassification::RegionsWithTemplate { .. });
+        let keep_regions = matches!(
+            s.class,
+            SeriesClassification::Regions(_) | SeriesClassification::RegionsWithTemplate { .. }
+        );
         let region_keep: Vec<Rect> = match &s.class {
             SeriesClassification::Regions(k) | SeriesClassification::RegionsWithTemplate { keep: k, .. } => k.clone(),
             _ => Vec::new(),
@@ -480,12 +595,27 @@ impl AnonymizeState {
             for (k, (label, tex, w, h)) in review.frames.iter().enumerate() {
                 ui.vertical(|ui| {
                     ui.label(RichText::new(label.as_str()).size(12.0));
-                    let (rect, response) = ui.allocate_exact_size(Vec2::new(270.0, 200.0), if k == 0 { Sense::click_and_drag() } else { Sense::hover() });
+                    let (rect, response) = ui.allocate_exact_size(
+                        Vec2::new(270.0, 200.0),
+                        if k == 0 {
+                            Sense::click_and_drag()
+                        } else {
+                            Sense::hover()
+                        },
+                    );
                     ui.painter().rect_filled(rect, 3.0, Color32::BLACK);
                     let fit = fit_rect(rect.shrink(2.0), *w, *h);
-                    ui.painter().image(tex.id(), fit, ERect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                    ui.painter().image(
+                        tex.id(),
+                        fit,
+                        ERect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
                     let plan = if keep_regions {
-                        MaskDecision::RegionsReviewed { keep: region_keep.clone(), blank: review.rects.clone() }
+                        MaskDecision::RegionsReviewed {
+                            keep: region_keep.clone(),
+                            blank: review.rects.clone(),
+                        }
                     } else {
                         MaskDecision::Reviewed(review.rects.clone())
                     };
@@ -503,13 +633,24 @@ impl AnonymizeState {
                             }
                         }
                         if let Some((a, b)) = review.drag {
-                            ui.painter().rect_stroke(ERect::from_two_pos(a, b), 0.0, Stroke::new(1.5, Color32::from_rgb(255, 80, 80)), egui::StrokeKind::Middle);
+                            ui.painter().rect_stroke(
+                                ERect::from_two_pos(a, b),
+                                0.0,
+                                Stroke::new(1.5, Color32::from_rgb(255, 80, 80)),
+                                egui::StrokeKind::Middle,
+                            );
                         }
                         if response.drag_stopped() {
                             if let Some((a, b)) = review.drag.take() {
                                 let to_px = |p: Pos2| {
-                                    let x = ((p.x - fit.left()) / scale).round().clamp(0.0, (*w as f32 - 1.0).max(0.0)) as u32;
-                                    let y = ((p.y - fit.top()) / scale).round().clamp(0.0, (*h as f32 - 1.0).max(0.0)) as u32;
+                                    let x = ((p.x - fit.left()) / scale)
+                                        .round()
+                                        .clamp(0.0, (*w as f32 - 1.0).max(0.0))
+                                        as u32;
+                                    let y = ((p.y - fit.top()) / scale)
+                                        .round()
+                                        .clamp(0.0, (*h as f32 - 1.0).max(0.0))
+                                        as u32;
                                     (x, y)
                                 };
                                 let (x0, y0) = to_px(a);
@@ -527,7 +668,16 @@ impl AnonymizeState {
         ui.horizontal_wrapped(|ui| {
             let mut remove = None;
             for (i, r) in review.rects.iter().enumerate() {
-                if ui.small_button(format!("✕ {}×{} at {},{}", r.x1 - r.x0 + 1, r.y1 - r.y0 + 1, r.x0, r.y0)).clicked() {
+                if ui
+                    .small_button(format!(
+                        "✕ {}×{} at {},{}",
+                        r.x1 - r.x0 + 1,
+                        r.y1 - r.y0 + 1,
+                        r.x0,
+                        r.y0
+                    ))
+                    .clicked()
+                {
                     remove = Some(i);
                 }
             }
@@ -535,14 +685,28 @@ impl AnonymizeState {
                 review.rects.remove(i);
             }
             if review.rects.is_empty() {
-                ui.label(RichText::new(if keep_regions { "No extra rectangles: only the regions are kept" } else { "No rectangles yet" }).size(12.0).color(Color32::from_gray(120)));
+                ui.label(
+                    RichText::new(if keep_regions {
+                        "No extra rectangles: only the regions are kept"
+                    } else {
+                        "No rectangles yet"
+                    })
+                    .size(12.0)
+                    .color(Color32::from_gray(120)),
+                );
             }
         });
         if keep_regions {
             ui.label(RichText::new("Some machines put the patient band inside their region. If a name shows at the top, drag a rectangle over it and save the template so the next study from this machine is masked without review.").size(12.0).color(Color32::from_rgb(170, 90, 0)));
         }
         if !s.manufacturer.is_empty() {
-            ui.checkbox(&mut review.save_template, format!("Save as the template for {} {} ({}×{})", s.manufacturer, s.model, s.columns, s.rows));
+            ui.checkbox(
+                &mut review.save_template,
+                format!(
+                    "Save as the template for {} {} ({}×{})",
+                    s.manufacturer, s.model, s.columns, s.rows
+                ),
+            );
         }
         let mut approve: Option<(usize, Vec<Rect>, bool)> = None;
         let mut back = false;
@@ -560,13 +724,22 @@ impl AnonymizeState {
                 st.decision = Some(if rects.is_empty() {
                     MaskDecision::Regions(region_keep.clone())
                 } else {
-                    MaskDecision::RegionsReviewed { keep: region_keep.clone(), blank: rects.clone() }
+                    MaskDecision::RegionsReviewed {
+                        keep: region_keep.clone(),
+                        blank: rects.clone(),
+                    }
                 });
             } else {
                 st.decision = Some(MaskDecision::Reviewed(rects.clone()));
             }
             if save && !rects.is_empty() {
-                let t = MaskTemplate { manufacturer: st.manufacturer.clone(), model: st.model.clone(), columns: st.columns, rows: st.rows, rects };
+                let t = MaskTemplate {
+                    manufacturer: st.manufacturer.clone(),
+                    model: st.model.clone(),
+                    columns: st.columns,
+                    rows: st.rows,
+                    rects,
+                };
                 let _ = teaching::save_template(&shared.paths, &t);
             }
             st.approved = true;
@@ -608,11 +781,23 @@ impl AnonymizeState {
         ExportRequest {
             study_id: self.study.id,
             case,
-            title: if self.title.trim().is_empty() { None } else { Some(self.title.trim().to_string()) },
+            title: if self.title.trim().is_empty() {
+                None
+            } else {
+                Some(self.title.trim().to_string())
+            },
             destination,
             measurements: self.measurements,
-            report_text: if self.include_report { Some((self.findings_text.clone(), self.conclusion_text.clone())) } else { None },
-            masks: self.series.iter().filter_map(|s| s.decision.clone().map(|d| (s.series.id, d))).collect(),
+            report_text: if self.include_report {
+                Some((self.findings_text.clone(), self.conclusion_text.clone()))
+            } else {
+                None
+            },
+            masks: self
+                .series
+                .iter()
+                .filter_map(|s| s.decision.clone().map(|d| (s.series.id, d)))
+                .collect(),
             overrides: self.overrides.iter().map(|(p, r)| (p.clone(), r.clone())).collect(),
             blank_attributes: self.blank.clone(),
         }
@@ -693,31 +878,43 @@ impl AnonymizeState {
 
     fn verify_step(&mut self, ui: &mut Ui, _shared: &Shared) {
         if let Some(r) = &self.result {
-            ui.label(RichText::new("Written").size(16.0).strong().color(Color32::from_rgb(30, 130, 60)));
-            egui::Grid::new("anon-result").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                ui.label("Reference");
-                ui.label(&r.reference);
-                ui.end_row();
-                ui.label("Series / images");
-                ui.label(format!("{} / {}", r.series, r.images));
-                ui.end_row();
-                ui.label("Destination");
-                ui.label(match (&r.folder, r.archive_study_id) {
-                    (Some(f), Some(_)) => format!("this archive and {}", f.display()),
-                    (Some(f), None) => f.display().to_string(),
-                    (None, _) => "this archive (Teaching album)".to_string(),
+            ui.label(
+                RichText::new("Written")
+                    .size(16.0)
+                    .strong()
+                    .color(Color32::from_rgb(30, 130, 60)),
+            );
+            egui::Grid::new("anon-result")
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Reference");
+                    ui.label(&r.reference);
+                    ui.end_row();
+                    ui.label("Series / images");
+                    ui.label(format!("{} / {}", r.series, r.images));
+                    ui.end_row();
+                    ui.label("Destination");
+                    ui.label(match (&r.folder, r.archive_study_id) {
+                        (Some(f), Some(_)) => format!("this archive and {}", f.display()),
+                        (Some(f), None) => f.display().to_string(),
+                        (None, _) => "this archive (Teaching album)".to_string(),
+                    });
+                    ui.end_row();
+                    ui.label("Export log");
+                    ui.label(r.log_path.display().to_string());
+                    ui.end_row();
                 });
-                ui.end_row();
-                ui.label("Export log");
-                ui.label(r.log_path.display().to_string());
-                ui.end_row();
-            });
             return;
         }
         if self.busy {
             let (a, b, what) = &self.progress;
             let frac = if *b > 0 { *a as f32 / *b as f32 } else { 0.0 };
-            ui.add(egui::ProgressBar::new(frac).text(if what.is_empty() { "Working…".to_string() } else { what.clone() }));
+            ui.add(egui::ProgressBar::new(frac).text(if what.is_empty() {
+                "Working…".to_string()
+            } else {
+                what.clone()
+            }));
             return;
         }
         if let Some(e) = &self.error {
@@ -729,20 +926,50 @@ impl AnonymizeState {
                 ui.label("Verify builds the whole copy in a temporary folder, reads every file back and checks it. Nothing reaches the destination until the pass is clean and you press Write.");
             }
             Some(p) if p.is_clean() => {
-                ui.label(RichText::new(format!("Clean: {} series, {} images verified.", p.series_count, p.image_count)).color(Color32::from_rgb(30, 130, 60)));
+                ui.label(
+                    RichText::new(format!(
+                        "Clean: {} series, {} images verified.",
+                        p.series_count, p.image_count
+                    ))
+                    .color(Color32::from_rgb(30, 130, 60)),
+                );
                 if !p.overridden.is_empty() {
-                    ui.label(RichText::new(format!("{} descriptor hit(s) accepted with a reason, recorded in the log.", p.overridden.len())).size(12.0).color(Color32::from_gray(110)));
+                    ui.label(
+                        RichText::new(format!(
+                            "{} descriptor hit(s) accepted with a reason, recorded in the log.",
+                            p.overridden.len()
+                        ))
+                        .size(12.0)
+                        .color(Color32::from_gray(110)),
+                    );
                 }
                 ui.label("Press Write to move the copy into place.");
             }
             Some(p) => {
-                ui.label(RichText::new(format!("{} problem(s). The copy was not written.", p.findings.len())).color(Color32::from_rgb(190, 40, 40)));
+                ui.label(
+                    RichText::new(format!("{} problem(s). The copy was not written.", p.findings.len()))
+                        .color(Color32::from_rgb(190, 40, 40)),
+                );
                 let findings = p.findings.clone();
                 let mut rerun = false;
                 for f in findings {
                     ui.horizontal_wrapped(|ui| {
-                        let file = std::path::Path::new(&f.file).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                        ui.label(RichText::new(format!("{} {}", f.path, if file.is_empty() { String::new() } else { format!("in {file}") })).strong());
+                        let file = std::path::Path::new(&f.file)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        ui.label(
+                            RichText::new(format!(
+                                "{} {}",
+                                f.path,
+                                if file.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("in {file}")
+                                }
+                            ))
+                            .strong(),
+                        );
                         ui.label(format!("{}: \"{}\"", f.what, f.matched));
                         if f.overridable {
                             if ui.small_button("Blank this attribute").clicked() {
@@ -752,14 +979,26 @@ impl AnonymizeState {
                                 rerun = true;
                             }
                             let reason = self.overrides.entry(f.path.clone()).or_default();
-                            ui.add(egui::TextEdit::singleline(reason).hint_text("accept: give the reason").desired_width(220.0));
+                            ui.add(
+                                egui::TextEdit::singleline(reason)
+                                    .hint_text("accept: give the reason")
+                                    .desired_width(220.0),
+                            );
                         } else {
-                            ui.label(RichText::new("cannot be overridden").size(12.0).color(Color32::from_gray(110)));
+                            ui.label(
+                                RichText::new("cannot be overridden")
+                                    .size(12.0)
+                                    .color(Color32::from_gray(110)),
+                            );
                         }
                     });
                 }
                 self.overrides.retain(|_, r| !r.trim().is_empty());
-                ui.label(RichText::new("Accepted hits with a reason, and blanked attributes, apply when you verify again.").size(12.0).color(Color32::from_gray(110)));
+                ui.label(
+                    RichText::new("Accepted hits with a reason, and blanked attributes, apply when you verify again.")
+                        .size(12.0)
+                        .color(Color32::from_gray(110)),
+                );
                 if rerun {
                     // Handled by the Verify again button; nothing else to do here.
                 }
@@ -770,7 +1009,13 @@ impl AnonymizeState {
 
 /// Decode one frame of a series at a relative position (0 first, 1 last)
 /// and upload it as a texture.
-fn load_frame_texture(shared: &Shared, ctx: &Context, series_id: i64, position: f32, name: &str) -> Option<(TextureHandle, u32, u32)> {
+fn load_frame_texture(
+    shared: &Shared,
+    ctx: &Context,
+    series_id: i64,
+    position: f32,
+    name: &str,
+) -> Option<(TextureHandle, u32, u32)> {
     let images = shared.db.images_for_series(series_id).ok()?;
     if images.is_empty() {
         return None;
@@ -805,7 +1050,10 @@ fn draw_mask_overlay(painter: &egui::Painter, fit: ERect, w: u32, h: u32, decisi
     let to_screen = |r: &Rect| {
         ERect::from_min_max(
             Pos2::new(fit.left() + r.x0 as f32 * scale, fit.top() + r.y0 as f32 * scale),
-            Pos2::new(fit.left() + (r.x1 + 1) as f32 * scale, fit.top() + (r.y1 + 1) as f32 * scale),
+            Pos2::new(
+                fit.left() + (r.x1 + 1) as f32 * scale,
+                fit.top() + (r.y1 + 1) as f32 * scale,
+            ),
         )
     };
     match decision {
@@ -815,7 +1063,12 @@ fn draw_mask_overlay(painter: &egui::Painter, fit: ERect, w: u32, h: u32, decisi
             for r in keep {
                 let sr = to_screen(r).intersect(fit);
                 painter.rect_filled(sr, 0.0, Color32::from_rgba_premultiplied(0, 0, 0, 0));
-                painter.rect_stroke(sr, 0.0, Stroke::new(1.5, Color32::from_rgb(80, 220, 120)), egui::StrokeKind::Inside);
+                painter.rect_stroke(
+                    sr,
+                    0.0,
+                    Stroke::new(1.5, Color32::from_rgb(80, 220, 120)),
+                    egui::StrokeKind::Inside,
+                );
             }
             let _ = h;
         }
@@ -824,7 +1077,12 @@ fn draw_mask_overlay(painter: &egui::Painter, fit: ERect, w: u32, h: u32, decisi
             for r in keep {
                 let sr = to_screen(r).intersect(fit);
                 painter.rect_filled(sr, 0.0, Color32::from_rgba_premultiplied(0, 0, 0, 0));
-                painter.rect_stroke(sr, 0.0, Stroke::new(1.5, Color32::from_rgb(80, 220, 120)), egui::StrokeKind::Inside);
+                painter.rect_stroke(
+                    sr,
+                    0.0,
+                    Stroke::new(1.5, Color32::from_rgb(80, 220, 120)),
+                    egui::StrokeKind::Inside,
+                );
             }
             for r in blank {
                 painter.rect_filled(to_screen(r).intersect(fit), 0.0, RED);

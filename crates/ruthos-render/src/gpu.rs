@@ -48,7 +48,12 @@ impl GpuImage {
                 } else {
                     downsample_f32(values, frame.width, frame.height, factor, w, h)
                 };
-                (wgpu::TextureFormat::R32Float, bytemuck::cast_slice::<f32, u8>(&data).to_vec(), 4u32, false)
+                (
+                    wgpu::TextureFormat::R32Float,
+                    bytemuck::cast_slice::<f32, u8>(&data).to_vec(),
+                    4u32,
+                    false,
+                )
             }
             FramePixels::Rgba(rgba) => {
                 let data = if factor == 1 {
@@ -145,7 +150,7 @@ fn downsample_rgba(src: &[u8], sw: u32, sh: u32, f: u32, dw: u32, dh: u32) -> Ve
             }
             let o = ((y * dw + x) * 4) as usize;
             for c in 0..4 {
-                out[o + c] = if n > 0 { (acc[c] / n) as u8 } else { 0 };
+                out[o + c] = acc[c].checked_div(n).unwrap_or(0) as u8;
             }
         }
     }
@@ -321,7 +326,13 @@ impl ImageRenderer {
                 size,
             );
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            self.cluts.insert(clut.name.clone(), ClutTexture { _texture: texture, view });
+            self.cluts.insert(
+                clut.name.clone(),
+                ClutTexture {
+                    _texture: texture,
+                    view,
+                },
+            );
         }
         &self.cluts[&clut.name].view
     }
@@ -365,7 +376,11 @@ impl ImageCallback {
             size: [
                 self.image.width as f32,
                 self.image.height as f32,
-                if self.interpolation == Interpolation::Bilinear { 1.0 } else { 0.0 },
+                if self.interpolation == Interpolation::Bilinear {
+                    1.0
+                } else {
+                    0.0
+                },
                 0.0,
             ],
         }

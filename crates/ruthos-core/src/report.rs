@@ -87,22 +87,34 @@ impl Writer {
         let regular = doc.add_builtin_font(BuiltinFont::Helvetica).expect("builtin font");
         let bold = doc.add_builtin_font(BuiltinFont::HelveticaBold).expect("builtin font");
         let layer = doc.get_page(page).get_layer(layer);
-        let mut w = Self { doc, layer, regular, bold, y: PAGE_H - MARGIN, page_no: 1, footer: footer.to_string() };
+        let mut w = Self {
+            doc,
+            layer,
+            regular,
+            bold,
+            y: PAGE_H - MARGIN,
+            page_no: 1,
+            footer: footer.to_string(),
+        };
         w.footer();
         w
     }
 
     fn footer(&mut self) {
         self.layer.set_fill_color(Color::Rgb(Rgb::new(0.45, 0.45, 0.45, None)));
-        self.layer.use_text(&self.footer, 8.0, Mm(MARGIN), Mm(10.0), &self.regular);
+        self.layer
+            .use_text(&self.footer, 8.0, Mm(MARGIN), Mm(10.0), &self.regular);
         let page = format!("Page {}", self.page_no);
-        self.layer.use_text(&page, 8.0, Mm(PAGE_W - MARGIN - 14.0), Mm(10.0), &self.regular);
+        self.layer
+            .use_text(&page, 8.0, Mm(PAGE_W - MARGIN - 14.0), Mm(10.0), &self.regular);
         self.layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
     }
 
     fn new_page(&mut self) {
         self.page_no += 1;
-        let (page, layer) = self.doc.add_page(Mm(PAGE_W), Mm(PAGE_H), format!("Page {}", self.page_no));
+        let (page, layer) = self
+            .doc
+            .add_page(Mm(PAGE_W), Mm(PAGE_H), format!("Page {}", self.page_no));
         self.layer = self.doc.get_page(page).get_layer(layer);
         self.y = PAGE_H - MARGIN;
         self.footer();
@@ -119,7 +131,8 @@ impl Writer {
         for line in wrap(text, TEXT_W, size) {
             self.need(line_h);
             let font = if bold { &self.bold } else { &self.regular };
-            self.layer.use_text(line, size, Mm(MARGIN), Mm(self.y - line_h * 0.8), font);
+            self.layer
+                .use_text(line, size, Mm(MARGIN), Mm(self.y - line_h * 0.8), font);
             self.y -= line_h;
         }
     }
@@ -217,7 +230,11 @@ fn wrap(text: &str, width_mm: f32, size: f32) -> Vec<String> {
     for paragraph in text.split('\n') {
         let mut line = String::new();
         for word in paragraph.split_whitespace() {
-            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            let candidate = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
             if text_width_mm(&candidate, size) > width_mm && !line.is_empty() {
                 lines.push(std::mem::take(&mut line));
                 line = word.to_string();
@@ -260,13 +277,35 @@ pub fn write_pdf(report: &ReportDocument, path: &Path) -> std::io::Result<()> {
 
     if !report.measurements.is_empty() {
         w.heading("Measurements");
-        w.columns(&[("Measurement", 56.0), ("Value", 36.0), ("Basis", 44.0), ("Image", TEXT_W - 136.0)], 9.5, true);
+        w.columns(
+            &[
+                ("Measurement", 56.0),
+                ("Value", 36.0),
+                ("Basis", 44.0),
+                ("Image", TEXT_W - 136.0),
+            ],
+            9.5,
+            true,
+        );
         w.gap(0.5);
         let mut flagged = false;
         for m in &report.measurements {
-            let value = if m.patient_scale { m.value.clone() } else { format!("{} *", m.value) };
+            let value = if m.patient_scale {
+                m.value.clone()
+            } else {
+                format!("{} *", m.value)
+            };
             flagged |= !m.patient_scale;
-            w.columns(&[(m.name.as_str(), 56.0), (value.as_str(), 36.0), (m.basis.as_str(), 44.0), (m.location.as_str(), TEXT_W - 136.0)], 10.0, false);
+            w.columns(
+                &[
+                    (m.name.as_str(), 56.0),
+                    (value.as_str(), 36.0),
+                    (m.basis.as_str(), 44.0),
+                    (m.location.as_str(), TEXT_W - 136.0),
+                ],
+                10.0,
+                false,
+            );
         }
         if flagged {
             w.gap(1.0);
@@ -276,26 +315,64 @@ pub fn write_pdf(report: &ReportDocument, path: &Path) -> std::io::Result<()> {
 
     if !report.mmode.is_empty() {
         w.heading("LV M-mode");
-        w.columns(&[("Measurement", 56.0), ("Value", 36.0), ("Basis", 44.0), ("Image", TEXT_W - 136.0)], 9.5, true);
+        w.columns(
+            &[
+                ("Measurement", 56.0),
+                ("Value", 36.0),
+                ("Basis", 44.0),
+                ("Image", TEXT_W - 136.0),
+            ],
+            9.5,
+            true,
+        );
         w.gap(0.5);
         for m in &report.mmode {
-            w.columns(&[(m.name.as_str(), 56.0), (m.value.as_str(), 36.0), (m.basis.as_str(), 44.0), (m.location.as_str(), TEXT_W - 136.0)], 10.0, false);
+            w.columns(
+                &[
+                    (m.name.as_str(), 56.0),
+                    (m.value.as_str(), 36.0),
+                    (m.basis.as_str(), 44.0),
+                    (m.location.as_str(), TEXT_W - 136.0),
+                ],
+                10.0,
+                false,
+            );
         }
     }
 
     if !report.calculations.is_empty() {
         w.heading("Calculations");
-        w.columns(&[("Calculation", 56.0), ("Value", 36.0), ("From", TEXT_W - 92.0)], 9.5, true);
+        w.columns(
+            &[("Calculation", 56.0), ("Value", 36.0), ("From", TEXT_W - 92.0)],
+            9.5,
+            true,
+        );
         w.gap(0.5);
         let mut flagged = false;
         for m in &report.calculations {
-            let value = if m.patient_scale { m.value.clone() } else { format!("{} *", m.value) };
+            let value = if m.patient_scale {
+                m.value.clone()
+            } else {
+                format!("{} *", m.value)
+            };
             flagged |= !m.patient_scale;
-            w.columns(&[(m.name.as_str(), 56.0), (value.as_str(), 36.0), (m.location.as_str(), TEXT_W - 92.0)], 10.0, false);
+            w.columns(
+                &[
+                    (m.name.as_str(), 56.0),
+                    (value.as_str(), 36.0),
+                    (m.location.as_str(), TEXT_W - 92.0),
+                ],
+                10.0,
+                false,
+            );
         }
         if flagged {
             w.gap(1.0);
-            w.text("* Depends on the scale of an input that was not measured at the patient's scale.", 8.5, false);
+            w.text(
+                "* Depends on the scale of an input that was not measured at the patient's scale.",
+                8.5,
+                false,
+            );
         }
     }
 
@@ -317,7 +394,13 @@ pub fn write_pdf(report: &ReportDocument, path: &Path) -> std::io::Result<()> {
             let row: Vec<&ReportImage> = report.images[i..(i + 2).min(report.images.len())].iter().collect();
             let row_h = row
                 .iter()
-                .map(|im| if im.width > 0 { col_w * im.height as f32 / im.width as f32 } else { 0.0 })
+                .map(|im| {
+                    if im.width > 0 {
+                        col_w * im.height as f32 / im.width as f32
+                    } else {
+                        0.0
+                    }
+                })
                 .fold(0.0_f32, f32::max);
             w.need(row_h + 8.0);
             let top = w.y;
@@ -333,7 +416,9 @@ pub fn write_pdf(report: &ReportDocument, path: &Path) -> std::io::Result<()> {
     }
 
     let file = std::fs::File::create(path)?;
-    w.doc.save(&mut BufWriter::new(file)).map_err(|e| std::io::Error::other(e.to_string()))
+    w.doc
+        .save(&mut BufWriter::new(file))
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 #[cfg(test)]
@@ -387,7 +472,12 @@ mod tests {
             }],
             findings: "Normal thorax. ".repeat(60),
             conclusion: "No abnormality detected.".into(),
-            images: vec![ReportImage { caption: "Image 1".into(), width: 4, height: 3, rgb: vec![128; 36] }],
+            images: vec![ReportImage {
+                caption: "Image 1".into(),
+                width: 4,
+                height: 3,
+                rgb: vec![128; 36],
+            }],
             footer: "Ruthos".into(),
         };
         write_pdf(&doc, &path).unwrap();

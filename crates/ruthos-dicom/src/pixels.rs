@@ -157,7 +157,9 @@ pub fn decode_all_frames(path: &Path) -> Result<Vec<Frame>> {
         return (0..frames).map(|k| decode_jpeg_frame(&obj, meta.clone(), k)).collect();
     }
 
-    let decoded = obj.decode_pixel_data().map_err(|e| DicomError::Pixels(error_chain(&e)))?;
+    let decoded = obj
+        .decode_pixel_data()
+        .map_err(|e| DicomError::Pixels(error_chain(&e)))?;
     let width = decoded.columns();
     let height = decoded.rows();
     if width == 0 || height == 0 {
@@ -203,7 +205,11 @@ fn gray_frame(values: Vec<f32>, width: u32, height: u32, frame_index: u32, meta:
             values.len()
         )));
     }
-    let values = if values.len() > expected { values[..expected].to_vec() } else { values };
+    let values = if values.len() > expected {
+        values[..expected].to_vec()
+    } else {
+        values
+    };
     let (min, max) = min_max(&values);
     let inverted = meta.is_monochrome1();
     Ok(Frame {

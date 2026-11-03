@@ -14,7 +14,7 @@ fn testdata() -> PathBuf {
 /// Files that are valid DICOM but not images (no pixel data to decode).
 const NOT_IMAGES: &[&str] = &["ExplVR_LitEndNoMeta.dcm"];
 
-/// Files whose transfer syntax we knowingly do not decode yet.
+// Files whose transfer syntax we knowingly do not decode yet.
 // rtdose: 32-bit pixel data (RT Dose, not an image for the viewer).
 // JPEG-lossy (12-bit JPEG Extended) now decodes through libjpeg-turbo.
 
@@ -135,14 +135,26 @@ fn multiframe_file_decodes_whole_and_matches_per_frame() {
     put(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "RGB");
     put(tags::NUMBER_OF_FRAMES, VR::IS, "4");
     put(tags::FRAME_TIME, VR::DS, "40");
-    obj.put(DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, dicom_value!(U16, [3])));
-    obj.put(DataElement::new(tags::PLANAR_CONFIGURATION, VR::US, dicom_value!(U16, [0])));
+    obj.put(DataElement::new(
+        tags::SAMPLES_PER_PIXEL,
+        VR::US,
+        dicom_value!(U16, [3]),
+    ));
+    obj.put(DataElement::new(
+        tags::PLANAR_CONFIGURATION,
+        VR::US,
+        dicom_value!(U16, [0]),
+    ));
     obj.put(DataElement::new(tags::ROWS, VR::US, dicom_value!(U16, [h])));
     obj.put(DataElement::new(tags::COLUMNS, VR::US, dicom_value!(U16, [w])));
     obj.put(DataElement::new(tags::BITS_ALLOCATED, VR::US, dicom_value!(U16, [8])));
     obj.put(DataElement::new(tags::BITS_STORED, VR::US, dicom_value!(U16, [8])));
     obj.put(DataElement::new(tags::HIGH_BIT, VR::US, dicom_value!(U16, [7])));
-    obj.put(DataElement::new(tags::PIXEL_REPRESENTATION, VR::US, dicom_value!(U16, [0])));
+    obj.put(DataElement::new(
+        tags::PIXEL_REPRESENTATION,
+        VR::US,
+        dicom_value!(U16, [0]),
+    ));
     obj.put(DataElement::new(tags::PIXEL_DATA, VR::OB, PrimitiveValue::from(pixels)));
     let meta = FileMetaTableBuilder::new()
         .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
@@ -176,14 +188,25 @@ fn multiframe_file_decodes_whole_and_matches_per_frame() {
 /// Developer aid: `RUTHOS_TEST_FILE=<path> cargo test -p ruthos-dicom --test samples dump -- --nocapture`
 #[test]
 fn dump_regions_of_file_from_env() {
-    let Some(path) = std::env::var_os("RUTHOS_TEST_FILE") else { return };
+    let Some(path) = std::env::var_os("RUTHOS_TEST_FILE") else {
+        return;
+    };
     let meta = read_meta(std::path::Path::new(&path)).unwrap();
-    println!("size {}x{} frames {} spacing {:?} calibrated {}", meta.columns, meta.rows, meta.number_of_frames, meta.pixel_spacing, meta.pixel_spacing_is_calibrated);
+    println!(
+        "size {}x{} frames {} spacing {:?} calibrated {}",
+        meta.columns, meta.rows, meta.number_of_frames, meta.pixel_spacing, meta.pixel_spacing_is_calibrated
+    );
     for r in &meta.us_regions {
         println!("region {r:?} mm/px {:?}", r.mm_per_pixel());
     }
-    println!("vertical 120px at x=300 in M-mode: {:?} mm", meta.length_mm([300.0, 180.0], [300.0, 300.0]));
-    println!("diagonal (260,20)-(360,100): {:?} mm", meta.length_mm([260.0, 20.0], [360.0, 100.0]));
+    println!(
+        "vertical 120px at x=300 in M-mode: {:?} mm",
+        meta.length_mm([300.0, 180.0], [300.0, 300.0])
+    );
+    println!(
+        "diagonal (260,20)-(360,100): {:?} mm",
+        meta.length_mm([260.0, 20.0], [360.0, 100.0])
+    );
 }
 
 #[test]
@@ -196,7 +219,11 @@ fn projection_image_scale_attributes_are_read() {
 
     let mut o = InMemDicomObject::new_empty();
     let mut put = |tag, vr, v: &str| o.put(DataElement::new(tag, vr, dicom_value!(Str, v)));
-    put(tags::SOP_CLASS_UID, VR::UI, uids::DIGITAL_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION);
+    put(
+        tags::SOP_CLASS_UID,
+        VR::UI,
+        uids::DIGITAL_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION,
+    );
     put(tags::SOP_INSTANCE_UID, VR::UI, "1.2.3.9");
     put(tags::STUDY_INSTANCE_UID, VR::UI, "1.2.3");
     put(tags::SERIES_INSTANCE_UID, VR::UI, "1.2.3.1");
@@ -205,15 +232,31 @@ fn projection_image_scale_attributes_are_read() {
     put(tags::PATIENT_ID, VR::LO, "D1");
     put(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "MONOCHROME2");
     put(tags::ESTIMATED_RADIOGRAPHIC_MAGNIFICATION_FACTOR, VR::DS, "1.1");
-    o.put(DataElement::new(tags::IMAGER_PIXEL_SPACING, VR::DS, dicom_value!(Strs, ["0.1", "0.1"])));
-    o.put(DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, dicom_value!(U16, [1])));
+    o.put(DataElement::new(
+        tags::IMAGER_PIXEL_SPACING,
+        VR::DS,
+        dicom_value!(Strs, ["0.1", "0.1"]),
+    ));
+    o.put(DataElement::new(
+        tags::SAMPLES_PER_PIXEL,
+        VR::US,
+        dicom_value!(U16, [1]),
+    ));
     o.put(DataElement::new(tags::ROWS, VR::US, dicom_value!(U16, [4])));
     o.put(DataElement::new(tags::COLUMNS, VR::US, dicom_value!(U16, [4])));
     o.put(DataElement::new(tags::BITS_ALLOCATED, VR::US, dicom_value!(U16, [8])));
     o.put(DataElement::new(tags::BITS_STORED, VR::US, dicom_value!(U16, [8])));
     o.put(DataElement::new(tags::HIGH_BIT, VR::US, dicom_value!(U16, [7])));
-    o.put(DataElement::new(tags::PIXEL_REPRESENTATION, VR::US, dicom_value!(U16, [0])));
-    o.put(DataElement::new(tags::PIXEL_DATA, VR::OB, PrimitiveValue::from(vec![0u8; 16])));
+    o.put(DataElement::new(
+        tags::PIXEL_REPRESENTATION,
+        VR::US,
+        dicom_value!(U16, [0]),
+    ));
+    o.put(DataElement::new(
+        tags::PIXEL_DATA,
+        VR::OB,
+        PrimitiveValue::from(vec![0u8; 16]),
+    ));
     let meta = FileMetaTableBuilder::new()
         .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
         .media_storage_sop_class_uid(uids::DIGITAL_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION)
@@ -233,4 +276,3 @@ fn projection_image_scale_attributes_are_read() {
     assert_eq!(l.basis, SpacingBasis::MagnificationEstimated);
     let _ = std::fs::remove_dir_all(&dir);
 }
-

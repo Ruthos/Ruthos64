@@ -16,11 +16,11 @@ pub mod open;
 pub mod pixels;
 pub mod presets;
 pub mod quirks;
-pub mod scale;
 pub mod sc;
+pub mod scale;
 
 pub use clut::{Clut, ClutLibrary};
-pub use meta::{UsRegion, read_meta, InstanceMeta, PatientName};
+pub use meta::{read_meta, InstanceMeta, PatientName, UsRegion};
 pub use pixels::{decode_all_frames, decode_frame, Frame, FramePixels};
 pub use presets::{WindowPreset, WindowPresets};
 pub use scale::{HandCalibration, Length, MeasureIssue, Scale, SpacingBasis};

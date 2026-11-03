@@ -37,7 +37,9 @@ impl IncomingScanner {
                         let mut summary = ImportSummary::default();
                         for file in files {
                             match import_file(&db, &paths, &file, ImportMode::Move) {
-                                Ok(FileOutcome::Imported { study_id, new_study, .. }) => {
+                                Ok(FileOutcome::Imported {
+                                    study_id, new_study, ..
+                                }) => {
                                     summary.imported += 1;
                                     if new_study && !summary.new_study_ids.contains(&study_id) {
                                         summary.new_study_ids.push(study_id);

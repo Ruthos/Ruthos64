@@ -17,7 +17,10 @@ pub struct DateShift {
 
 impl DateShift {
     pub fn new(offset_days: i64, preserve_season: bool) -> Self {
-        Self { offset_days: offset_days.abs().max(1), preserve_season }
+        Self {
+            offset_days: offset_days.abs().max(1),
+            preserve_season,
+        }
     }
 
     /// Years subtracted when preserving the season: at least one.
@@ -113,7 +116,10 @@ mod tests {
     #[test]
     fn datetime_keeps_time_and_drops_zone() {
         let d = DateShift::new(365, false);
-        assert_eq!(d.shift_dt("20240310121530.000000+0100").unwrap(), "20230311121530.000000");
+        assert_eq!(
+            d.shift_dt("20240310121530.000000+0100").unwrap(),
+            "20230311121530.000000"
+        );
     }
 
     #[test]

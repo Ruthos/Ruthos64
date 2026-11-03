@@ -28,7 +28,12 @@ impl Rect {
     }
 
     pub fn normalised(self) -> Self {
-        Self { x0: self.x0.min(self.x1), y0: self.y0.min(self.y1), x1: self.x0.max(self.x1), y1: self.y0.max(self.y1) }
+        Self {
+            x0: self.x0.min(self.x1),
+            y0: self.y0.min(self.y1),
+            x1: self.x0.max(self.x1),
+            y1: self.y0.max(self.y1),
+        }
     }
 }
 
@@ -49,7 +54,9 @@ impl MaskPlan {
         match self {
             MaskPlan::KeepOnly(rects) => rects.iter().any(|r| r.contains(x, y)),
             MaskPlan::Blank(rects) => !rects.iter().any(|r| r.contains(x, y)),
-            MaskPlan::Combined { keep, blank } => keep.iter().any(|r| r.contains(x, y)) && !blank.iter().any(|r| r.contains(x, y)),
+            MaskPlan::Combined { keep, blank } => {
+                keep.iter().any(|r| r.contains(x, y)) && !blank.iter().any(|r| r.contains(x, y))
+            }
         }
     }
 }
@@ -69,7 +76,13 @@ impl MaskTemplate {
     pub fn key(manufacturer: &str, model: &str, columns: u32, rows: u32) -> String {
         let clean = |s: &str| {
             s.chars()
-                .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
                 .collect::<String>()
                 .trim_matches('-')
                 .to_string()
@@ -83,7 +96,12 @@ pub fn regions_union(regions: &[UsRegion]) -> Vec<Rect> {
     regions
         .iter()
         .filter(|r| r.x1 >= r.x0 && r.y1 >= r.y0 && r.x0 >= 0 && r.y0 >= 0)
-        .map(|r| Rect { x0: r.x0 as u32, y0: r.y0 as u32, x1: r.x1 as u32, y1: r.y1 as u32 })
+        .map(|r| Rect {
+            x0: r.x0 as u32,
+            y0: r.y0 as u32,
+            x1: r.x1 as u32,
+            y1: r.y1 as u32,
+        })
         .collect()
 }
 
@@ -105,7 +123,9 @@ pub struct MaskedPixels {
 
 /// Decode a dataset's pixel data and apply the plan to every frame.
 pub fn apply_mask(obj: &dicom_object::DefaultDicomObject, plan: &MaskPlan) -> Result<MaskedPixels> {
-    let decoded = obj.decode_pixel_data().map_err(|e| DicomError::Pixels(crate::pixels::error_chain(&e)))?;
+    let decoded = obj
+        .decode_pixel_data()
+        .map_err(|e| DicomError::Pixels(crate::pixels::error_chain(&e)))?;
     let rows = decoded.rows();
     let columns = decoded.columns();
     let frames = decoded.number_of_frames().max(1);
@@ -113,7 +133,9 @@ pub fn apply_mask(obj: &dicom_object::DefaultDicomObject, plan: &MaskPlan) -> Re
     let bits_allocated = decoded.bits_allocated();
     let bps = (bits_allocated as usize).div_ceil(8);
     if bps == 0 || bps > 2 {
-        return Err(DicomError::Unsupported(format!("{bits_allocated}-bit samples cannot be masked")));
+        return Err(DicomError::Unsupported(format!(
+            "{bits_allocated}-bit samples cannot be masked"
+        )));
     }
     let photometric = decoded.photometric_interpretation().clone();
     let mut data = decoded.data().to_vec();
@@ -177,7 +199,12 @@ mod tests {
 
     #[test]
     fn keep_only_and_blank_are_complements() {
-        let r = Rect { x0: 2, y0: 2, x1: 4, y1: 4 };
+        let r = Rect {
+            x0: 2,
+            y0: 2,
+            x1: 4,
+            y1: 4,
+        };
         let keep = MaskPlan::KeepOnly(vec![r]);
         let blank = MaskPlan::Blank(vec![r]);
         assert!(keep.keep(3, 3));
@@ -188,9 +215,22 @@ mod tests {
 
     #[test]
     fn combined_blanks_inside_a_kept_region() {
-        let keep = Rect { x0: 0, y0: 0, x1: 9, y1: 9 };
-        let band = Rect { x0: 0, y0: 0, x1: 9, y1: 1 };
-        let plan = MaskPlan::Combined { keep: vec![keep], blank: vec![band] };
+        let keep = Rect {
+            x0: 0,
+            y0: 0,
+            x1: 9,
+            y1: 9,
+        };
+        let band = Rect {
+            x0: 0,
+            y0: 0,
+            x1: 9,
+            y1: 1,
+        };
+        let plan = MaskPlan::Combined {
+            keep: vec![keep],
+            blank: vec![band],
+        };
         assert!(plan.keep(5, 5));
         assert!(!plan.keep(5, 1), "the band inside the region is blanked");
         assert!(!plan.keep(12, 5), "outside the region is blanked");
@@ -198,6 +238,9 @@ mod tests {
 
     #[test]
     fn template_key_is_filesystem_safe() {
-        assert_eq!(MaskTemplate::key("GEMS Ultrasound", "Vivid q", 636, 422), "gems-ultrasound__vivid-q__636x422");
+        assert_eq!(
+            MaskTemplate::key("GEMS Ultrasound", "Vivid q", 636, 422),
+            "gems-ultrasound__vivid-q__636x422"
+        );
     }
 }

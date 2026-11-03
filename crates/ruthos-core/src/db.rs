@@ -14,12 +14,19 @@ use serde::{Deserialize, Serialize};
 use ruthos_dicom::meta::{dicom_date_to_iso, dicom_time_to_hms, InstanceMeta};
 
 use crate::mmode::MmodeRow;
-use crate::model::{MeasurementInput, RoiValue, AlbumRow, DateFilter, ImageRow, MeasurementRow, ReportRow, RoiRecord, SeriesRow, StudyRow};
-use crate::teaching::TeachingCase;
+use crate::model::{
+    AlbumRow, DateFilter, ImageRow, MeasurementInput, MeasurementRow, ReportRow, RoiRecord, RoiValue, SeriesRow,
+    StudyRow,
+};
 use crate::paths::DataPaths;
+use crate::teaching::TeachingCase;
 use crate::Result;
 
 const SCHEMA_VERSION: i64 = 2;
+
+/// A hand calibration (`[row mm, column mm]`) and the image point it was
+/// set from when it is scoped to an ultrasound region.
+pub type ScopedCalibration = ([f64; 2], Option<(f64, f64)>);
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -134,10 +141,7 @@ impl Database {
             Some((id, modalities)) => {
                 let merged = merge_modality(&modalities, &meta.modality);
                 if merged != modalities {
-                    tx.execute(
-                        "UPDATE study SET modalities = ?1 WHERE id = ?2",
-                        params![merged, id],
-                    )?;
+                    tx.execute("UPDATE study SET modalities = ?1 WHERE id = ?2", params![merged, id])?;
                 }
                 (id, false)
             }
@@ -395,9 +399,7 @@ impl Database {
                  WHERE se.study_id = ?1 AND i.stored_in_database_folder = 1",
             )?;
             let rows = stmt.query_map(params![id], |r| r.get::<_, String>(0))?;
-            rows.filter_map(|r| r.ok())
-                .map(|p| self.paths.resolve(&p))
-                .collect()
+            rows.filter_map(|r| r.ok()).map(|p| self.paths.resolve(&p)).collect()
         };
         tx.execute("DELETE FROM album_study WHERE study_id = ?1", params![id])?;
         tx.execute(
@@ -487,16 +489,19 @@ impl Database {
     pub fn meta_get(&self, key: &str) -> Option<String> {
         self.conn
             .lock()
-            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get::<_, String>(0))
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+                r.get::<_, String>(0)
+            })
             .optional()
             .ok()
             .flatten()
     }
 
     pub fn meta_set(&self, key: &str, value: &str) -> Result<()> {
-        self.conn
-            .lock()
-            .execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value])?;
+        self.conn.lock().execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
         Ok(())
     }
 
@@ -521,7 +526,10 @@ impl Database {
 
     pub fn teaching_cases(&self) -> Result<Vec<TeachingCase>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(&format!("SELECT {} FROM teaching_case ORDER BY created DESC, id DESC", Self::TEACHING_COLS))?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM teaching_case ORDER BY created DESC, id DESC",
+            Self::TEACHING_COLS
+        ))?;
         let rows = stmt.query_map([], teaching_case_from_row)?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
@@ -529,7 +537,11 @@ impl Database {
     pub fn teaching_case(&self, id: i64) -> Result<Option<TeachingCase>> {
         let conn = self.conn.lock();
         Ok(conn
-            .query_row(&format!("SELECT {} FROM teaching_case WHERE id = ?1", Self::TEACHING_COLS), params![id], teaching_case_from_row)
+            .query_row(
+                &format!("SELECT {} FROM teaching_case WHERE id = ?1", Self::TEACHING_COLS),
+                params![id],
+                teaching_case_from_row,
+            )
             .optional()?)
     }
 
@@ -557,13 +569,23 @@ impl Database {
         conn.execute(
             "INSERT INTO teaching_case (reference, name, title, secret, offset_days, preserve_season, note, created)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', ?7)",
-            params![reference, name, title, secret.to_vec(), offset_days, preserve_season as i64, now_unix()],
+            params![
+                reference,
+                name,
+                title,
+                secret.to_vec(),
+                offset_days,
+                preserve_season as i64,
+                now_unix()
+            ],
         )?;
         Ok(conn.last_insert_rowid())
     }
 
     pub fn set_teaching_case_note(&self, id: i64, note: &str) -> Result<()> {
-        self.conn.lock().execute("UPDATE teaching_case SET note = ?1 WHERE id = ?2", params![note, id])?;
+        self.conn
+            .lock()
+            .execute("UPDATE teaching_case SET note = ?1 WHERE id = ?2", params![note, id])?;
         Ok(())
     }
 
@@ -602,17 +624,37 @@ impl Database {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
-    pub fn record_teaching_export(&self, case_id: i64, study_instance_uid: &str, destination: &str, result: &str, series: i64, images: i64) -> Result<()> {
+    pub fn record_teaching_export(
+        &self,
+        case_id: i64,
+        study_instance_uid: &str,
+        destination: &str,
+        result: &str,
+        series: i64,
+        images: i64,
+    ) -> Result<()> {
         self.conn.lock().execute(
             "INSERT INTO teaching_export (case_id, study_instance_uid, time, destination, result, series, images)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![case_id, study_instance_uid, now_unix(), destination, result, series, images],
+            params![
+                case_id,
+                study_instance_uid,
+                now_unix(),
+                destination,
+                result,
+                series,
+                images
+            ],
         )?;
         Ok(())
     }
 
     pub fn teaching_export_count(&self, case_id: i64) -> Result<i64> {
-        Ok(self.conn.lock().query_row("SELECT COUNT(*) FROM teaching_export WHERE case_id = ?1", params![case_id], |r| r.get(0))?)
+        Ok(self.conn.lock().query_row(
+            "SELECT COUNT(*) FROM teaching_export WHERE case_id = ?1",
+            params![case_id],
+            |r| r.get(0),
+        )?)
     }
 
     pub fn delete_teaching_case(&self, id: i64) -> Result<()> {
@@ -745,7 +787,13 @@ impl Database {
              ORDER BY COALESCE(r.date_modified, 0), r.id",
         )?;
         let rows = stmt.query_map(params![study_id], |row| {
-            Ok(MeasurementInput { def_key: row.get(0)?, value: row.get(1)?, unit: row.get(2)?, basis: row.get(3)?, date_modified: row.get(4)? })
+            Ok(MeasurementInput {
+                def_key: row.get(0)?,
+                value: row.get(1)?,
+                unit: row.get(2)?,
+                basis: row.get(3)?,
+                date_modified: row.get(4)?,
+            })
         })?;
         out.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
         let mut stmt = conn.prepare(
@@ -755,7 +803,13 @@ impl Database {
              ORDER BY COALESCE(r.date_modified, 0), r.id, v.def_key",
         )?;
         let rows = stmt.query_map(params![study_id], |row| {
-            Ok(MeasurementInput { def_key: row.get(0)?, value: row.get(1)?, unit: row.get(2)?, basis: row.get(3)?, date_modified: row.get(4)? })
+            Ok(MeasurementInput {
+                def_key: row.get(0)?,
+                value: row.get(1)?,
+                unit: row.get(2)?,
+                basis: row.get(3)?,
+                date_modified: row.get(4)?,
+            })
         })?;
         out.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
         out.sort_by_key(|m| m.date_modified);
@@ -783,9 +837,15 @@ impl Database {
     }
 
     fn roi_values_in(conn: &Connection, roi_id: i64) -> Result<Vec<RoiValue>> {
-        let mut stmt = conn.prepare("SELECT def_key, value, unit, basis FROM roi_value WHERE roi_id = ?1 ORDER BY def_key")?;
+        let mut stmt =
+            conn.prepare("SELECT def_key, value, unit, basis FROM roi_value WHERE roi_id = ?1 ORDER BY def_key")?;
         let rows = stmt.query_map(params![roi_id], |r| {
-            Ok(RoiValue { def_key: r.get(0)?, value: r.get(1)?, unit: r.get(2)?, basis: r.get(3)? })
+            Ok(RoiValue {
+                def_key: r.get(0)?,
+                value: r.get(1)?,
+                unit: r.get(2)?,
+                basis: r.get(3)?,
+            })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
@@ -941,7 +1001,9 @@ impl Database {
 
     pub fn image_path_exists(&self, path: &str) -> Result<bool> {
         let conn = self.conn.lock();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM image WHERE path = ?1", params![path], |r| r.get(0))?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM image WHERE path = ?1", params![path], |r| {
+            r.get(0)
+        })?;
         Ok(n > 0)
     }
 
@@ -953,7 +1015,7 @@ impl Database {
     }
 
     /// The calibration with the image point it was set from, when scoped.
-    pub fn calibration_scoped(&self, image_id: i64) -> Result<Option<([f64; 2], Option<(f64, f64)>)>> {
+    pub fn calibration_scoped(&self, image_id: i64) -> Result<Option<ScopedCalibration>> {
         let conn = self.conn.lock();
         Ok(conn
             .query_row(
@@ -976,11 +1038,26 @@ impl Database {
 
     /// Store a calibration, optionally scoped to the ultrasound region under
     /// the point it was set from.
-    pub fn set_calibration_scoped(&self, image_id: i64, row_mm: f64, col_mm: f64, description: &str, scope: Option<(f64, f64)>) -> Result<()> {
+    pub fn set_calibration_scoped(
+        &self,
+        image_id: i64,
+        row_mm: f64,
+        col_mm: f64,
+        description: &str,
+        scope: Option<(f64, f64)>,
+    ) -> Result<()> {
         self.conn.lock().execute(
             "INSERT OR REPLACE INTO calibration (image_id, row_mm, col_mm, description, date_set, scope_x, scope_y)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![image_id, row_mm, col_mm, description, now_unix(), scope.map(|s| s.0), scope.map(|s| s.1)],
+            params![
+                image_id,
+                row_mm,
+                col_mm,
+                description,
+                now_unix(),
+                scope.map(|s| s.0),
+                scope.map(|s| s.1)
+            ],
         )?;
         Ok(())
     }
@@ -990,7 +1067,14 @@ impl Database {
         self.set_series_calibration_scoped(series_id, row_mm, col_mm, description, None)
     }
 
-    pub fn set_series_calibration_scoped(&self, series_id: i64, row_mm: f64, col_mm: f64, description: &str, scope: Option<(f64, f64)>) -> Result<usize> {
+    pub fn set_series_calibration_scoped(
+        &self,
+        series_id: i64,
+        row_mm: f64,
+        col_mm: f64,
+        description: &str,
+        scope: Option<(f64, f64)>,
+    ) -> Result<usize> {
         let images = self.images_for_series(series_id)?;
         for img in &images {
             self.set_calibration_scoped(img.id, row_mm, col_mm, description, scope)?;
@@ -1178,7 +1262,9 @@ fn image_from_row(r: &Row<'_>) -> rusqlite::Result<ImageRow> {
 
 fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let existing: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(1))?.collect::<std::result::Result<_, _>>()?;
+    let existing: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
     if !existing.iter().any(|c| c == column) {
         conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
     }
@@ -1410,11 +1496,17 @@ mod tests {
     #[test]
     fn insert_dedup_and_counts() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
-        let a = db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap();
+        let a = db
+            .insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10)
+            .unwrap();
         assert!(matches!(a, InsertOutcome::Inserted { new_study: true, .. }));
-        let b = db.insert_instance(&meta("1", "1.1", "1.1.2"), "b.dcm", true, 10).unwrap();
+        let b = db
+            .insert_instance(&meta("1", "1.1", "1.1.2"), "b.dcm", true, 10)
+            .unwrap();
         assert!(matches!(b, InsertOutcome::Inserted { new_study: false, .. }));
-        let c = db.insert_instance(&meta("1", "1.1", "1.1.2"), "b.dcm", true, 10).unwrap();
+        let c = db
+            .insert_instance(&meta("1", "1.1", "1.1.2"), "b.dcm", true, 10)
+            .unwrap();
         assert_eq!(c, InsertOutcome::Duplicate);
         let mut m = meta("1", "1.2", "1.2.1");
         m.modality = "DX".into();
@@ -1428,19 +1520,29 @@ mod tests {
         assert_eq!(studies[0].patient_name, "REX, FIDO");
         assert_eq!(studies[0].study_date.as_deref(), Some("2026-01-01"));
 
-        let f = StudyFilter { modality: "DX".into(), ..Default::default() };
+        let f = StudyFilter {
+            modality: "DX".into(),
+            ..Default::default()
+        };
         assert_eq!(db.list_studies(&f).unwrap().len(), 1);
-        let f = StudyFilter { modality: "MR".into(), ..Default::default() };
+        let f = StudyFilter {
+            modality: "MR".into(),
+            ..Default::default()
+        };
         assert_eq!(db.list_studies(&f).unwrap().len(), 0);
-        let f = StudyFilter { text: "fido".into(), ..Default::default() };
+        let f = StudyFilter {
+            text: "fido".into(),
+            ..Default::default()
+        };
         assert_eq!(db.list_studies(&f).unwrap().len(), 1);
     }
 
     #[test]
     fn albums_and_delete() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
-        let InsertOutcome::Inserted { study_id, .. } =
-            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        let InsertOutcome::Inserted { study_id, .. } = db
+            .insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10)
+            .unwrap()
         else {
             panic!()
         };
@@ -1448,7 +1550,10 @@ mod tests {
         db.add_study_to_album(album, study_id).unwrap();
         let albums = db.albums().unwrap();
         assert_eq!(albums[0].number_of_studies, 1);
-        let f = StudyFilter { album_id: Some(album), ..Default::default() };
+        let f = StudyFilter {
+            album_id: Some(album),
+            ..Default::default()
+        };
         assert_eq!(db.list_studies(&f).unwrap().len(), 1);
 
         let files = db.delete_study(study_id).unwrap();
@@ -1471,7 +1576,9 @@ mod tests {
         still.sop_instance_uid = "1.1.3".into();
         still.number_of_frames = 1;
         still.instance_number = Some(3);
-        let InsertOutcome::Inserted { study_id, .. } = db.insert_instance(&loop1, "a.dcm", true, 10).unwrap() else { panic!() };
+        let InsertOutcome::Inserted { study_id, .. } = db.insert_instance(&loop1, "a.dcm", true, 10).unwrap() else {
+            panic!()
+        };
         db.insert_instance(&loop2, "b.dcm", true, 10).unwrap();
         db.insert_instance(&still, "c.dcm", true, 10).unwrap();
         let series = db.series_for_study(study_id).unwrap();
@@ -1485,8 +1592,9 @@ mod tests {
     #[test]
     fn report_round_trip() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
-        let InsertOutcome::Inserted { study_id, image_id, .. } =
-            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        let InsertOutcome::Inserted { study_id, image_id, .. } = db
+            .insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10)
+            .unwrap()
         else {
             panic!()
         };
@@ -1518,8 +1626,9 @@ mod tests {
     #[test]
     fn rois_round_trip() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
-        let InsertOutcome::Inserted { image_id, .. } =
-            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        let InsertOutcome::Inserted { image_id, .. } = db
+            .insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10)
+            .unwrap()
         else {
             panic!()
         };
@@ -1536,7 +1645,7 @@ mod tests {
             basis: None,
             def_key: None,
         };
-        db.replace_rois(image_id, 0, &[rec.clone()]).unwrap();
+        db.replace_rois(image_id, 0, std::slice::from_ref(&rec)).unwrap();
         let got = db.rois(image_id, 0).unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].points, rec.points);
@@ -1550,8 +1659,9 @@ mod tests {
     #[test]
     fn edited_rois_keep_their_row() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
-        let InsertOutcome::Inserted { image_id, .. } =
-            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        let InsertOutcome::Inserted { image_id, .. } = db
+            .insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10)
+            .unwrap()
         else {
             panic!()
         };
@@ -1570,7 +1680,11 @@ mod tests {
         db.sync_rois(image_id, 0, &mut recs).unwrap();
         let id = recs[0].id;
         assert!(id > 0, "sync fills in the new row's id");
-        let created: i64 = db.conn.lock().query_row("SELECT date_created FROM roi WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+        let created: i64 = db
+            .conn
+            .lock()
+            .query_row("SELECT date_created FROM roi WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
         // Move one corner: the row is updated in place.
         recs[0].points = vec![[1.0, 2.0], [6.0, 4.0]];
         recs[0].value = Some(50.0);
@@ -1581,13 +1695,26 @@ mod tests {
         assert_eq!(got[0].points, vec![[1.0, 2.0], [6.0, 4.0]]);
         assert_eq!(got[0].name.as_deref(), Some("LA"));
         // A definition key assigned from the label survives round trips.
-        assert_eq!(db.assign_def_keys_by_label(&[("la".into(), "echo.la".into())]).unwrap(), 1);
+        assert_eq!(
+            db.assign_def_keys_by_label(&[("la".into(), "echo.la".into())]).unwrap(),
+            1
+        );
         assert_eq!(db.rois(image_id, 0).unwrap()[0].def_key.as_deref(), Some("echo.la"));
         recs[0].def_key = Some("echo.la".into());
-        let created_after: i64 = db.conn.lock().query_row("SELECT date_created FROM roi WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+        let created_after: i64 = db
+            .conn
+            .lock()
+            .query_row("SELECT date_created FROM roi WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
         assert_eq!(created, created_after);
         // A second measurement added later gets its own id; the first keeps its row.
-        recs.push(RoiRecord { id: 0, name: None, kind: "length".into(), points: vec![[0.0, 0.0], [1.0, 1.0]], ..recs[0].clone() });
+        recs.push(RoiRecord {
+            id: 0,
+            name: None,
+            kind: "length".into(),
+            points: vec![[0.0, 0.0], [1.0, 1.0]],
+            ..recs[0].clone()
+        });
         db.sync_rois(image_id, 0, &mut recs).unwrap();
         assert_eq!(recs[0].id, id);
         assert!(recs[1].id > id);
@@ -1599,8 +1726,9 @@ mod tests {
     #[test]
     fn mmode_values_round_trip() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
-        let InsertOutcome::Inserted { image_id, .. } =
-            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        let InsertOutcome::Inserted { image_id, .. } = db
+            .insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10)
+            .unwrap()
         else {
             panic!()
         };
@@ -1621,7 +1749,12 @@ mod tests {
         let values: Vec<RoiValue> = crate::mmode::KEYS_D
             .iter()
             .zip([10.0, 40.0, 10.0])
-            .map(|(k, v)| RoiValue { def_key: (*k).into(), value: Some(v), unit: "mm".into(), basis: Some("ultrasound-region".into()) })
+            .map(|(k, v)| RoiValue {
+                def_key: (*k).into(),
+                value: Some(v),
+                unit: "mm".into(),
+                basis: Some("ultrasound-region".into()),
+            })
             .collect();
         db.set_roi_values(recs[0].id, &values).unwrap();
         let rows = db.mmode_rows_for_study(study_id).unwrap();
@@ -1637,8 +1770,11 @@ mod tests {
     #[test]
     fn calibration_round_trip() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
-        let InsertOutcome::Inserted { series_id, image_id, .. } =
-            db.insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10).unwrap()
+        let InsertOutcome::Inserted {
+            series_id, image_id, ..
+        } = db
+            .insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10)
+            .unwrap()
         else {
             panic!()
         };

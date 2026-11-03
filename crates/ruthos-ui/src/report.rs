@@ -61,11 +61,18 @@ impl ReportState {
     }
 
     pub fn title(&self) -> String {
-        format!("Report: {}  {} \u{2014} Ruthos", self.study.patient_name, self.study.study_date.clone().unwrap_or_default())
+        format!(
+            "Report: {}  {} \u{2014} Ruthos",
+            self.study.patient_name,
+            self.study.study_date.clone().unwrap_or_default()
+        )
     }
 
     fn refresh(&mut self, shared: &Shared) {
-        let mut measurements = shared.db.named_measurements_for_study(self.study.id).unwrap_or_default();
+        let mut measurements = shared
+            .db
+            .named_measurements_for_study(self.study.id)
+            .unwrap_or_default();
         // Values are recomputed from the image so a calibration applied after
         // the measurement was drawn is reflected.
         let mut frames: std::collections::HashMap<(i64, i64), Option<std::sync::Arc<ruthos_dicom::Frame>>> =
@@ -75,7 +82,12 @@ impl ReportState {
             let frame = frames
                 .entry(key)
                 .or_insert_with(|| {
-                    let path = shared.db.image(m.roi.image_id).ok().flatten().map(|i| shared.resolve(&i.path))?;
+                    let path = shared
+                        .db
+                        .image(m.roi.image_id)
+                        .ok()
+                        .flatten()
+                        .map(|i| shared.resolve(&i.path))?;
                     let mut frame = ruthos_dicom::decode_frame(&path, m.roi.frame as u32).ok()?;
                     if let Ok(Some((spacing, scope))) = shared.db.calibration_scoped(m.roi.image_id) {
                         let region = scope.and_then(|(x, y)| frame.meta.us_region_index_at(x, y));
@@ -112,10 +124,15 @@ impl ReportState {
                 let Some(line) = line else { continue };
                 for (key, label) in keys.iter().zip(labels) {
                     let v = line.values.iter().find(|v| v.def_key == *key);
-                    let basis = v.and_then(|v| v.basis.as_deref()).and_then(ruthos_dicom::SpacingBasis::from_key);
+                    let basis = v
+                        .and_then(|v| v.basis.as_deref())
+                        .and_then(ruthos_dicom::SpacingBasis::from_key);
                     out.push(ReportMeasurement {
                         name: label.to_string(),
-                        value: v.and_then(|v| v.value).map(|mm| echo_value(mm, cm)).unwrap_or_else(|| "\u{2014}".into()),
+                        value: v
+                            .and_then(|v| v.value)
+                            .map(|mm| echo_value(mm, cm))
+                            .unwrap_or_else(|| "\u{2014}".into()),
                         location: line.location(),
                         basis: basis.map(|b| b.label().to_string()).unwrap_or_default(),
                         patient_scale: basis.map(|b| b.is_patient_scale()).unwrap_or(true),
@@ -140,14 +157,28 @@ impl ReportState {
     fn calculations_block(&self, shared: &Shared) -> Vec<ReportMeasurement> {
         use ruthos_core::measure::{evaluate_all, Input};
         let library = shared.library.lock().clone();
-        let inputs = shared.db.measurement_inputs_for_study(self.study.id).unwrap_or_default();
+        let inputs = shared
+            .db
+            .measurement_inputs_for_study(self.study.id)
+            .unwrap_or_default();
         let mut values: std::collections::BTreeMap<String, Input> = std::collections::BTreeMap::new();
         for m in inputs {
             if m.unit == "px" {
                 continue;
             }
-            let patient_scale = m.basis.as_deref().and_then(ruthos_dicom::SpacingBasis::from_key).map(|b| b.is_patient_scale()).unwrap_or(true);
-            values.insert(m.def_key, Input { value: m.value, patient_scale });
+            let patient_scale = m
+                .basis
+                .as_deref()
+                .and_then(ruthos_dicom::SpacingBasis::from_key)
+                .map(|b| b.is_patient_scale())
+                .unwrap_or(true);
+            values.insert(
+                m.def_key,
+                Input {
+                    value: m.value,
+                    patient_scale,
+                },
+            );
         }
         let has_mmode = !self.mmode.is_empty();
         evaluate_all(&library, &values)
@@ -157,7 +188,11 @@ impl ReportState {
                 name: r.label.clone(),
                 value: r.text.clone(),
                 location: r.inputs.iter().map(|k| library.label(k)).collect::<Vec<_>>().join(", "),
-                basis: if r.scale_independent { "Scale independent".into() } else { String::new() },
+                basis: if r.scale_independent {
+                    "Scale independent".into()
+                } else {
+                    String::new()
+                },
                 patient_scale: r.trustworthy_scale,
             })
             .collect()
@@ -206,14 +241,27 @@ impl ReportState {
             .show(ui, |ui| {
                 theme::paint_toolbar_background(ui, false, egui::vec2(6.0, 3.0));
                 ui.horizontal(|ui| {
-                    if ToolbarButton::new(Bitmap::Save, "Save").enabled(self.is_dirty()).tooltip("Save the report text (Ctrl+S)").show(ui).clicked() {
+                    if ToolbarButton::new(Bitmap::Save, "Save")
+                        .enabled(self.is_dirty())
+                        .tooltip("Save the report text (Ctrl+S)")
+                        .show(ui)
+                        .clicked()
+                    {
                         self.save(shared);
                     }
-                    if ToolbarButton::new(Bitmap::Export, "Export PDF").tooltip("Write the report, measurements and key images as a PDF").show(ui).clicked() {
+                    if ToolbarButton::new(Bitmap::Export, "Export PDF")
+                        .tooltip("Write the report, measurements and key images as a PDF")
+                        .show(ui)
+                        .clicked()
+                    {
                         self.export_pdf(shared);
                     }
                     toolbar_separator(ui);
-                    if ToolbarButton::new(Bitmap::Viewer, "2D Viewer").tooltip("Open this study in the viewer").show(ui).clicked() {
+                    if ToolbarButton::new(Bitmap::Viewer, "2D Viewer")
+                        .tooltip("Open this study in the viewer")
+                        .show(ui)
+                        .clicked()
+                    {
                         shared.open_requests.lock().push(self.study.id);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -231,9 +279,15 @@ impl ReportState {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(Color32::from_rgb(246, 246, 246)).inner_margin(egui::Margin::same(18)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(Color32::from_rgb(246, 246, 246))
+                    .inner_margin(egui::Margin::same(18)),
+            )
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.body(ui));
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.body(ui));
             });
     }
 
@@ -241,22 +295,27 @@ impl ReportState {
         let s = &self.study;
         ui.label(RichText::new(&s.patient_name).size(20.0).strong());
         ui.add_space(4.0);
-        egui::Grid::new(("report-header", self.id)).num_columns(2).spacing([14.0, 3.0]).show(ui, |ui| {
-            for (label, value) in self.header_rows() {
-                ui.label(RichText::new(label).color(Color32::from_gray(110)));
-                ui.label(value);
-                ui.end_row();
-            }
-        });
+        egui::Grid::new(("report-header", self.id))
+            .num_columns(2)
+            .spacing([14.0, 3.0])
+            .show(ui, |ui| {
+                for (label, value) in self.header_rows() {
+                    ui.label(RichText::new(label).color(Color32::from_gray(110)));
+                    ui.label(value);
+                    ui.end_row();
+                }
+            });
         ui.add_space(14.0);
 
         ui.label(RichText::new("Measurements").size(15.0).strong());
         ui.add_space(4.0);
         if self.measurements.is_empty() {
             ui.label(
-                RichText::new("None yet. In the viewer, click a measurement's number to give it a name and it appears here.")
-                    .size(12.5)
-                    .color(Color32::from_gray(110)),
+                RichText::new(
+                    "None yet. In the viewer, click a measurement's number to give it a name and it appears here.",
+                )
+                .size(12.5)
+                .color(Color32::from_gray(110)),
             );
         } else {
             egui::Grid::new(("report-measurements", self.id))
@@ -274,7 +333,13 @@ impl ReportState {
                         ui.label(m.roi.name.clone().unwrap_or_default());
                         ui.label(format_value(m.roi.value, &m.roi.unit));
                         let basis = m.roi.basis.as_deref().and_then(ruthos_dicom::SpacingBasis::from_key);
-                        let r = ui.label(RichText::new(basis.map(|b| b.label()).unwrap_or("")).color(if basis.is_some_and(|b| !b.is_patient_scale()) { Color32::from_rgb(190, 90, 0) } else { Color32::from_gray(90) }));
+                        let r = ui.label(RichText::new(basis.map(|b| b.label()).unwrap_or("")).color(
+                            if basis.is_some_and(|b| !b.is_patient_scale()) {
+                                Color32::from_rgb(190, 90, 0)
+                            } else {
+                                Color32::from_gray(90)
+                            },
+                        ));
                         if let Some(b) = basis {
                             r.on_hover_text(b.explanation());
                         }
@@ -300,7 +365,11 @@ impl ReportState {
                     ui.label(RichText::new("Image").strong());
                     ui.end_row();
                     for m in &self.mmode {
-                        ui.label(if m.name == "FS" { RichText::new("FS (fractional shortening)").strong() } else { RichText::new(&m.name) });
+                        ui.label(if m.name == "FS" {
+                            RichText::new("FS (fractional shortening)").strong()
+                        } else {
+                            RichText::new(&m.name)
+                        });
                         ui.label(&m.value);
                         ui.label(RichText::new(&m.basis).color(Color32::from_gray(90)));
                         ui.label(RichText::new(&m.location).color(Color32::from_gray(90)));
@@ -325,10 +394,16 @@ impl ReportState {
                     ui.end_row();
                     for m in &self.calculations {
                         ui.label(&m.name);
-                        let value = if m.patient_scale { m.value.clone() } else { format!("{} *", m.value) };
+                        let value = if m.patient_scale {
+                            m.value.clone()
+                        } else {
+                            format!("{} *", m.value)
+                        };
                         let r = ui.label(value);
                         if !m.patient_scale {
-                            r.on_hover_text("Depends on the scale of an input that was not measured at the patient's scale");
+                            r.on_hover_text(
+                                "Depends on the scale of an input that was not measured at the patient's scale",
+                            );
                         }
                         ui.label(RichText::new(&m.location).color(Color32::from_gray(90)));
                         ui.end_row();
@@ -358,7 +433,8 @@ impl ReportState {
         let n = self.key_images.len();
         ui.label(
             RichText::new(match n {
-                0 => "No key images. Mark images with the Key Image button in the viewer to include them in the PDF.".to_string(),
+                0 => "No key images. Mark images with the Key Image button in the viewer to include them in the PDF."
+                    .to_string(),
                 1 => "1 key image will be included in the PDF.".to_string(),
                 n => format!("{n} key images will be included in the PDF."),
             })
@@ -439,8 +515,20 @@ impl ReportState {
                     name: m.roi.name.clone().unwrap_or_default(),
                     value: format_value(m.roi.value, &m.roi.unit),
                     location: m.location(),
-                    basis: m.roi.basis.as_deref().and_then(ruthos_dicom::SpacingBasis::from_key).map(|b| b.label().to_string()).unwrap_or_default(),
-                    patient_scale: m.roi.basis.as_deref().and_then(ruthos_dicom::SpacingBasis::from_key).map(|b| b.is_patient_scale()).unwrap_or(true),
+                    basis: m
+                        .roi
+                        .basis
+                        .as_deref()
+                        .and_then(ruthos_dicom::SpacingBasis::from_key)
+                        .map(|b| b.label().to_string())
+                        .unwrap_or_default(),
+                    patient_scale: m
+                        .roi
+                        .basis
+                        .as_deref()
+                        .and_then(ruthos_dicom::SpacingBasis::from_key)
+                        .map(|b| b.is_patient_scale())
+                        .unwrap_or(true),
                 })
                 .collect(),
             mmode: self.mmode.clone(),
@@ -467,7 +555,9 @@ impl ReportState {
         let mut out = Vec::new();
         for img in &self.key_images {
             let path = shared.resolve(&img.path);
-            let Ok(frame) = ruthos_dicom::decode_frame(&path, 0) else { continue };
+            let Ok(frame) = ruthos_dicom::decode_frame(&path, 0) else {
+                continue;
+            };
             let series = shared.db.series(img.series_id).ok().flatten();
             let (c, w) = match series.as_ref().and_then(|s| s.window_center.zip(s.window_width)) {
                 Some((c, w)) if w > 0.0 => (c as f32, w as f32),
@@ -475,10 +565,14 @@ impl ReportState {
             };
             let clut = ruthos_dicom::Clut::grayscale();
             let rgb = ruthos_dicom::pixels::frame_to_rgb8(&frame, c, w, &clut);
-            let Some(full) = image::RgbImage::from_raw(frame.width, frame.height, rgb) else { continue };
+            let Some(full) = image::RgbImage::from_raw(frame.width, frame.height, rgb) else {
+                continue;
+            };
             let max_w = 1000u32;
             let small = if frame.width > max_w {
-                let h = (frame.height as f32 * max_w as f32 / frame.width as f32).round().max(1.0) as u32;
+                let h = (frame.height as f32 * max_w as f32 / frame.width as f32)
+                    .round()
+                    .max(1.0) as u32;
                 image::imageops::resize(&full, max_w, h, image::imageops::FilterType::Triangle)
             } else {
                 full
@@ -488,7 +582,12 @@ impl ReportState {
                 series.map(|s| s.display_name()).unwrap_or_default(),
                 img.instance_number.unwrap_or(0)
             );
-            out.push(ReportImage { caption, width: small.width(), height: small.height(), rgb: small.into_raw() });
+            out.push(ReportImage {
+                caption,
+                width: small.width(),
+                height: small.height(),
+                rgb: small.into_raw(),
+            });
         }
         out
     }

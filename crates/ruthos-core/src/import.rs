@@ -54,7 +54,12 @@ impl ImportSummary {
 /// Result of importing one file.
 #[derive(Debug, Clone)]
 pub enum FileOutcome {
-    Imported { study_id: i64, series_id: i64, image_id: i64, new_study: bool },
+    Imported {
+        study_id: i64,
+        series_id: i64,
+        image_id: i64,
+        new_study: bool,
+    },
     Duplicate,
     NotDicom,
 }
@@ -89,7 +94,10 @@ impl Importer {
                         let _ = tx.send(ImportEvent::Progress {
                             done: n,
                             total,
-                            current: file.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                            current: file
+                                .file_name()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_default(),
                         });
                         (file, r)
                     })
@@ -98,7 +106,9 @@ impl Importer {
                 let mut summary = ImportSummary::default();
                 for (file, r) in results {
                     match r {
-                        Ok(FileOutcome::Imported { study_id, new_study, .. }) => {
+                        Ok(FileOutcome::Imported {
+                            study_id, new_study, ..
+                        }) => {
                             summary.imported += 1;
                             if new_study && !summary.new_study_ids.contains(&study_id) {
                                 summary.new_study_ids.push(study_id);
@@ -122,7 +132,9 @@ impl Importer {
                 // A folder written by the anonymiser carries its measurements in a sidecar.
                 for dir in sidecar_dirs(&sources) {
                     match crate::teaching::apply_sidecar(&db, &dir) {
-                        Ok(Some(reference)) => tracing::info!("applied teaching sidecar {reference} from {}", dir.display()),
+                        Ok(Some(reference)) => {
+                            tracing::info!("applied teaching sidecar {reference} from {}", dir.display())
+                        }
                         Ok(None) => {}
                         Err(e) => tracing::warn!("sidecar in {} not applied: {e}", dir.display()),
                     }
@@ -155,16 +167,44 @@ pub fn collect_files(sources: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn is_ignorable(path: &Path) -> bool {
-    let name = path.file_name().map(|s| s.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
     if name.starts_with('.') || name == "thumbs.db" || name == "desktop.ini" {
         return true;
     }
     // Files that are never DICOM; everything else is tried.
-    let ext = path.extension().map(|s| s.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
     matches!(
         ext.as_str(),
-        "txt" | "pdf" | "html" | "htm" | "xml" | "json" | "exe" | "dll" | "jpg" | "jpeg" | "png" | "gif" | "bmp"
-            | "zip" | "ini" | "log" | "db" | "sqlite" | "plist" | "css" | "js" | "mp4" | "mov" | "avi"
+        "txt"
+            | "pdf"
+            | "html"
+            | "htm"
+            | "xml"
+            | "json"
+            | "exe"
+            | "dll"
+            | "jpg"
+            | "jpeg"
+            | "png"
+            | "gif"
+            | "bmp"
+            | "zip"
+            | "ini"
+            | "log"
+            | "db"
+            | "sqlite"
+            | "plist"
+            | "css"
+            | "js"
+            | "mp4"
+            | "mov"
+            | "avi"
     )
 }
 
@@ -193,7 +233,11 @@ pub fn import_file(db: &Database, paths: &DataPaths, file: &Path, mode: ImportMo
     let (stored_path, in_db_folder) = match mode {
         ImportMode::Link => (file.to_string_lossy().to_string(), false),
         ImportMode::Copy | ImportMode::Move => {
-            let dest = paths.stored_path_for(&meta.study_instance_uid, &meta.series_instance_uid, &meta.sop_instance_uid);
+            let dest = paths.stored_path_for(
+                &meta.study_instance_uid,
+                &meta.series_instance_uid,
+                &meta.sop_instance_uid,
+            );
             let rel = paths
                 .relative(&dest)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -221,9 +265,17 @@ pub fn import_file(db: &Database, paths: &DataPaths, file: &Path, mode: ImportMo
     };
 
     match db.insert_instance(&meta, &stored_path, in_db_folder, file_size)? {
-        InsertOutcome::Inserted { study_id, series_id, image_id, new_study } => {
-            Ok(FileOutcome::Imported { study_id, series_id, image_id, new_study })
-        }
+        InsertOutcome::Inserted {
+            study_id,
+            series_id,
+            image_id,
+            new_study,
+        } => Ok(FileOutcome::Imported {
+            study_id,
+            series_id,
+            image_id,
+            new_study,
+        }),
         InsertOutcome::Duplicate => {
             // Raced with another thread or imported earlier with a different path.
             if in_db_folder && mode != ImportMode::Link {
@@ -246,25 +298,16 @@ fn looks_like_not_dicom(msg: &str) -> bool {
         || m.contains("could not read")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ignorable_names() {
-        assert!(is_ignorable(Path::new("x/.DS_Store")));
-        assert!(is_ignorable(Path::new("x/readme.txt")));
-        assert!(!is_ignorable(Path::new("x/IM000001")));
-        assert!(!is_ignorable(Path::new("x/scan.dcm")));
-    }
-}
-
 /// Folders among the sources (or containing the source files) that hold a
 /// `ruthos-case.json` sidecar.
 fn sidecar_dirs(sources: &[PathBuf]) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for src in sources {
-        let dir = if src.is_dir() { src.clone() } else { src.parent().map(Path::to_path_buf).unwrap_or_default() };
+        let dir = if src.is_dir() {
+            src.clone()
+        } else {
+            src.parent().map(Path::to_path_buf).unwrap_or_default()
+        };
         if dir.join(crate::teaching::SIDECAR_NAME).is_file() && !out.contains(&dir) {
             out.push(dir.clone());
         }
@@ -282,3 +325,15 @@ fn sidecar_dirs(sources: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ignorable_names() {
+        assert!(is_ignorable(Path::new("x/.DS_Store")));
+        assert!(is_ignorable(Path::new("x/readme.txt")));
+        assert!(!is_ignorable(Path::new("x/IM000001")));
+        assert!(!is_ignorable(Path::new("x/scan.dcm")));
+    }
+}

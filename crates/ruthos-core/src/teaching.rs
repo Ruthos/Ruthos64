@@ -18,8 +18,8 @@ use dicom_dictionary_std::{tags, uids};
 use dicom_object::FileMetaTableBuilder;
 
 use ruthos_dicom::deid::{
-    apply_mask, build_teaching_dataset, collect_context, derive_uid, regions_union, verify_file, verify_text, DateShift,
-    DeidParams, Finding, MaskPlan, MaskTemplate, Rect, VerifyContext,
+    apply_mask, build_teaching_dataset, collect_context, derive_uid, regions_union, verify_file, verify_text,
+    DateShift, DeidParams, Finding, MaskPlan, MaskTemplate, Rect, VerifyContext,
 };
 use ruthos_dicom::open::open_any;
 use ruthos_dicom::read_meta;
@@ -109,7 +109,10 @@ impl MaskDecision {
     fn plan(&self) -> Option<MaskPlan> {
         match self {
             MaskDecision::Regions(r) => Some(MaskPlan::KeepOnly(r.clone())),
-            MaskDecision::RegionsReviewed { keep, blank } => Some(MaskPlan::Combined { keep: keep.clone(), blank: blank.clone() }),
+            MaskDecision::RegionsReviewed { keep, blank } => Some(MaskPlan::Combined {
+                keep: keep.clone(),
+                blank: blank.clone(),
+            }),
             MaskDecision::Template { rects, .. } => Some(MaskPlan::Blank(rects.clone())),
             MaskDecision::Reviewed(r) => Some(MaskPlan::Blank(r.clone())),
             MaskDecision::Trusted => None,
@@ -122,8 +125,15 @@ impl MaskDecision {
 pub enum SeriesClassification {
     Regions(Vec<Rect>),
     /// Regions plus a saved device template for this machine.
-    RegionsWithTemplate { keep: Vec<Rect>, name: String, blank: Vec<Rect> },
-    Template { name: String, rects: Vec<Rect> },
+    RegionsWithTemplate {
+        keep: Vec<Rect>,
+        name: String,
+        blank: Vec<Rect>,
+    },
+    Template {
+        name: String,
+        rects: Vec<Rect>,
+    },
     Trusted,
     NeedsReview,
 }
@@ -149,7 +159,10 @@ pub struct ExportRequest {
 pub fn parse_tag_path(path: &str) -> Option<dicom_core::Tag> {
     let p = path.trim().trim_start_matches('(').trim_end_matches(')');
     let (g, e) = p.split_once(',')?;
-    Some(dicom_core::Tag(u16::from_str_radix(g.trim(), 16).ok()?, u16::from_str_radix(e.trim(), 16).ok()?))
+    Some(dicom_core::Tag(
+        u16::from_str_radix(g.trim(), 16).ok()?,
+        u16::from_str_radix(e.trim(), 16).ok()?,
+    ))
 }
 
 /// The measurements, calibrations and key images that travel with a copy.
@@ -229,10 +242,46 @@ pub struct ExportResult {
 // ------------------------------------------------------------ suggestions
 
 const SURNAMES: &[&str] = &[
-    "Hartley", "Fenwick", "Ashcombe", "Calloway", "Redmayne", "Thackeray", "Winslow", "Barrow", "Pemberton", "Oakes",
-    "Landry", "Marchant", "Holloway", "Dunmore", "Ellery", "Faraday", "Greaves", "Haverford", "Kendrick", "Lyle",
-    "Mortimer", "Norbury", "Prescott", "Quayle", "Rowntree", "Sedgwick", "Tillman", "Underhill", "Verity", "Whitlock",
-    "Yardley", "Abernathy", "Blakeney", "Crossley", "Dashwood", "Everly", "Fairfax", "Garrick", "Hazelwood", "Ingram",
+    "Hartley",
+    "Fenwick",
+    "Ashcombe",
+    "Calloway",
+    "Redmayne",
+    "Thackeray",
+    "Winslow",
+    "Barrow",
+    "Pemberton",
+    "Oakes",
+    "Landry",
+    "Marchant",
+    "Holloway",
+    "Dunmore",
+    "Ellery",
+    "Faraday",
+    "Greaves",
+    "Haverford",
+    "Kendrick",
+    "Lyle",
+    "Mortimer",
+    "Norbury",
+    "Prescott",
+    "Quayle",
+    "Rowntree",
+    "Sedgwick",
+    "Tillman",
+    "Underhill",
+    "Verity",
+    "Whitlock",
+    "Yardley",
+    "Abernathy",
+    "Blakeney",
+    "Crossley",
+    "Dashwood",
+    "Everly",
+    "Fairfax",
+    "Garrick",
+    "Hazelwood",
+    "Ingram",
 ];
 const HORSE_NAMES: &[&str] = &[
     "Bramble", "Copper", "Dapple", "Ember", "Finch", "Gulliver", "Hazel", "Indigo", "Juniper", "Kestrel", "Larkspur",
@@ -240,18 +289,63 @@ const HORSE_NAMES: &[&str] = &[
     "Zephyr", "Alder", "Biscuit", "Clover", "Dune", "Echo", "Fable",
 ];
 const DOG_NAMES: &[&str] = &[
-    "Barnaby", "Clementine", "Digby", "Elsie", "Fergus", "Gwen", "Humphrey", "Ivy", "Jasper", "Kit", "Lottie", "Monty",
-    "Nell", "Otis", "Peggy", "Quincy", "Rufus", "Sadie", "Teddy", "Una", "Vinnie", "Wren", "Ziggy", "Alfie", "Bonnie",
-    "Cosmo", "Dottie", "Ernie", "Flora", "Gus",
+    "Barnaby",
+    "Clementine",
+    "Digby",
+    "Elsie",
+    "Fergus",
+    "Gwen",
+    "Humphrey",
+    "Ivy",
+    "Jasper",
+    "Kit",
+    "Lottie",
+    "Monty",
+    "Nell",
+    "Otis",
+    "Peggy",
+    "Quincy",
+    "Rufus",
+    "Sadie",
+    "Teddy",
+    "Una",
+    "Vinnie",
+    "Wren",
+    "Ziggy",
+    "Alfie",
+    "Bonnie",
+    "Cosmo",
+    "Dottie",
+    "Ernie",
+    "Flora",
+    "Gus",
 ];
 const CAT_NAMES: &[&str] = &[
-    "Agatha", "Basil", "Clio", "Dorian", "Edith", "Figaro", "Greta", "Hugo", "Isolde", "Jinx", "Kiki", "Lupin", "Mabel",
-    "Nico", "Olive", "Pixel", "Quentin", "Rhubarb", "Sylvie", "Toulouse", "Ursula", "Vesper", "Wilbur", "Xanthe", "Yoshi",
-    "Zelda", "Amber", "Bertram", "Cleo", "Dexter",
+    "Agatha", "Basil", "Clio", "Dorian", "Edith", "Figaro", "Greta", "Hugo", "Isolde", "Jinx", "Kiki", "Lupin",
+    "Mabel", "Nico", "Olive", "Pixel", "Quentin", "Rhubarb", "Sylvie", "Toulouse", "Ursula", "Vesper", "Wilbur",
+    "Xanthe", "Yoshi", "Zelda", "Amber", "Bertram", "Cleo", "Dexter",
 ];
 const OTHER_NAMES: &[&str] = &[
-    "Acorn", "Button", "Cinnamon", "Dandelion", "Elm", "Fennel", "Ginger", "Honey", "Iris", "Jasmine", "Kiwi", "Lemon",
-    "Maple", "Nugget", "Olive", "Pebble", "Quince", "Rosemary", "Saffron", "Thistle",
+    "Acorn",
+    "Button",
+    "Cinnamon",
+    "Dandelion",
+    "Elm",
+    "Fennel",
+    "Ginger",
+    "Honey",
+    "Iris",
+    "Jasmine",
+    "Kiwi",
+    "Lemon",
+    "Maple",
+    "Nugget",
+    "Olive",
+    "Pebble",
+    "Quince",
+    "Rosemary",
+    "Saffron",
+    "Thistle",
 ];
 
 fn random_u64() -> u64 {
@@ -292,12 +386,16 @@ fn animal_names(species: Option<&str>) -> &'static [&'static str] {
 pub fn valid_label(s: &str, allow_caret: bool) -> bool {
     !s.trim().is_empty()
         && s.chars().count() <= 64
-        && s.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '-' || c == '\'' || (allow_caret && c == '^'))
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == ' ' || c == '-' || c == '\'' || (allow_caret && c == '^'))
 }
 
 /// Whether a proposed name or reference contains a sensitive token.
 pub fn conflicts_with_tokens(label: &str, ctx: &VerifyContext) -> Option<String> {
-    verify_text("label", label, ctx, false).into_iter().next().map(|f| f.matched)
+    verify_text("label", label, ctx, false)
+        .into_iter()
+        .next()
+        .map(|f| f.matched)
 }
 
 /// Suggest a fictitious name (`Surname^Animal`) that matches no sensitive
@@ -321,8 +419,15 @@ pub fn suggest_name(species: Option<&str>, taken: &[String], ctx: &VerifyContext
 
 /// The next reference from the prefix and the running number in the meta table.
 pub fn suggest_reference(db: &Database, prefix: &str) -> String {
-    let n = db.meta_get("teaching_next_number").and_then(|v| v.parse::<u64>().ok()).unwrap_or(1);
-    let prefix = if prefix.trim().is_empty() { "RUTHOS-2026" } else { prefix.trim() };
+    let n = db
+        .meta_get("teaching_next_number")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1);
+    let prefix = if prefix.trim().is_empty() {
+        "RUTHOS-2026"
+    } else {
+        prefix.trim()
+    };
     format!("{prefix}-{n:04}")
 }
 
@@ -333,7 +438,9 @@ fn templates_dir(paths: &DataPaths) -> PathBuf {
 }
 
 pub fn load_templates(paths: &DataPaths) -> Vec<MaskTemplate> {
-    let Ok(entries) = std::fs::read_dir(templates_dir(paths)) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(templates_dir(paths)) else {
+        return Vec::new();
+    };
     entries
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
@@ -345,12 +452,24 @@ pub fn load_templates(paths: &DataPaths) -> Vec<MaskTemplate> {
 pub fn save_template(paths: &DataPaths, template: &MaskTemplate) -> Result<PathBuf> {
     let dir = templates_dir(paths);
     std::fs::create_dir_all(&dir)?;
-    let file = dir.join(format!("{}.json", MaskTemplate::key(&template.manufacturer, &template.model, template.columns, template.rows)));
-    std::fs::write(&file, serde_json::to_string_pretty(template).map_err(|e| CoreError::Other(e.to_string()))?)?;
+    let file = dir.join(format!(
+        "{}.json",
+        MaskTemplate::key(&template.manufacturer, &template.model, template.columns, template.rows)
+    ));
+    std::fs::write(
+        &file,
+        serde_json::to_string_pretty(template).map_err(|e| CoreError::Other(e.to_string()))?,
+    )?;
     Ok(file)
 }
 
-pub fn find_template(paths: &DataPaths, manufacturer: &str, model: &str, columns: u32, rows: u32) -> Option<MaskTemplate> {
+pub fn find_template(
+    paths: &DataPaths,
+    manufacturer: &str,
+    model: &str,
+    columns: u32,
+    rows: u32,
+) -> Option<MaskTemplate> {
     let key = MaskTemplate::key(manufacturer, model, columns, rows);
     load_templates(paths)
         .into_iter()
@@ -359,8 +478,12 @@ pub fn find_template(paths: &DataPaths, manufacturer: &str, model: &str, columns
 
 /// What to propose for a series: regions, a template, trusted, or review.
 pub fn classify_series(db: &Database, paths: &DataPaths, series: &SeriesRow) -> SeriesClassification {
-    let Ok(Some(image)) = db.representative_image(series.id) else { return SeriesClassification::NeedsReview };
-    let Ok(meta) = read_meta(&paths.resolve(&image.path)) else { return SeriesClassification::NeedsReview };
+    let Ok(Some(image)) = db.representative_image(series.id) else {
+        return SeriesClassification::NeedsReview;
+    };
+    let Ok(meta) = read_meta(&paths.resolve(&image.path)) else {
+        return SeriesClassification::NeedsReview;
+    };
     let modality = series.modality.trim().to_ascii_uppercase();
     if modality == "US" && !meta.us_regions.is_empty() {
         let keep = regions_union(&meta.us_regions);
@@ -374,7 +497,10 @@ pub fn classify_series(db: &Database, paths: &DataPaths, series: &SeriesRow) -> 
         return SeriesClassification::Regions(keep);
     }
     if let Some(t) = find_template(paths, &meta.manufacturer, &meta.model_name, meta.columns, meta.rows) {
-        return SeriesClassification::Template { name: MaskTemplate::key(&t.manufacturer, &t.model, t.columns, t.rows), rects: t.rects };
+        return SeriesClassification::Template {
+            name: MaskTemplate::key(&t.manufacturer, &t.model, t.columns, t.rows),
+            rects: t.rects,
+        };
     }
     let trusted_modality = matches!(modality.as_str(), "CT" | "MR" | "CR" | "DX" | "MG" | "PT" | "NM");
     if trusted_modality && meta.burned_in_annotation.trim().eq_ignore_ascii_case("NO") {
@@ -387,8 +513,15 @@ pub fn classify_series(db: &Database, paths: &DataPaths, series: &SeriesRow) -> 
 
 /// Build the copy in a temporary folder and verify it. Nothing touches the
 /// destination; `commit` does that, `abandon` deletes the folder.
-pub fn prepare(db: &Database, paths: &DataPaths, request: ExportRequest, progress: &dyn Fn(usize, usize, &str)) -> Result<Prepared> {
-    let study = db.study(request.study_id)?.ok_or_else(|| CoreError::Other("study not found".into()))?;
+pub fn prepare(
+    db: &Database,
+    paths: &DataPaths,
+    request: ExportRequest,
+    progress: &dyn Fn(usize, usize, &str),
+) -> Result<Prepared> {
+    let study = db
+        .study(request.study_id)?
+        .ok_or_else(|| CoreError::Other("study not found".into()))?;
     let series_list = db.series_for_study(study.id)?;
     let mut images: Vec<(SeriesRow, ImageRow)> = Vec::new();
     for s in &series_list {
@@ -401,7 +534,10 @@ pub fn prepare(db: &Database, paths: &DataPaths, request: ExportRequest, progres
     }
     for s in &series_list {
         if !request.masks.contains_key(&s.id) {
-            return Err(CoreError::Other(format!("series {} has no masking decision", s.display_name())));
+            return Err(CoreError::Other(format!(
+                "series {} has no masking decision",
+                s.display_name()
+            )));
         }
     }
 
@@ -415,7 +551,9 @@ pub fn prepare(db: &Database, paths: &DataPaths, request: ExportRequest, progres
     // The case: existing from the register, or new and still in memory.
     let (secret, offset_days, preserve_season, reference, name, mut title) = match &request.case {
         CaseChoice::Existing(id) => {
-            let c = db.teaching_case(*id)?.ok_or_else(|| CoreError::Other("teaching case not found".into()))?;
+            let c = db
+                .teaching_case(*id)?
+                .ok_or_else(|| CoreError::Other("teaching case not found".into()))?;
             (c.secret, c.offset_days, c.preserve_season, c.reference, c.name, c.title)
         }
         CaseChoice::New(n) => {
@@ -426,22 +564,43 @@ pub fn prepare(db: &Database, paths: &DataPaths, request: ExportRequest, progres
                 return Err(CoreError::Other("the teaching name may use letters, digits, spaces, hyphens, apostrophes and ^, up to 64 characters".into()));
             }
             if db.teaching_case_by_reference(&n.reference)?.is_some() {
-                return Err(CoreError::Other(format!("reference {} already exists; pick it from the list to add this study to that case", n.reference)));
+                return Err(CoreError::Other(format!(
+                    "reference {} already exists; pick it from the list to add this study to that case",
+                    n.reference
+                )));
             }
-            if db.teaching_cases()?.iter().any(|c| c.name.eq_ignore_ascii_case(&n.name)) {
-                return Err(CoreError::Other(format!("teaching name {} is already used by another case", n.name)));
+            if db
+                .teaching_cases()?
+                .iter()
+                .any(|c| c.name.eq_ignore_ascii_case(&n.name))
+            {
+                return Err(CoreError::Other(format!(
+                    "teaching name {} is already used by another case",
+                    n.name
+                )));
             }
-            (random_secret(), random_offset_days(n.preserve_season), n.preserve_season, n.reference.clone(), n.name.clone(), n.title.clone())
+            (
+                random_secret(),
+                random_offset_days(n.preserve_season),
+                n.preserve_season,
+                n.reference.clone(),
+                n.name.clone(),
+                n.title.clone(),
+            )
         }
     };
     if let Some(t) = &request.title {
         title = t.clone();
     }
     if let Some(tok) = conflicts_with_tokens(&name, &ctx) {
-        return Err(CoreError::Other(format!("the teaching name contains \"{tok}\", which identifies the source")));
+        return Err(CoreError::Other(format!(
+            "the teaching name contains \"{tok}\", which identifies the source"
+        )));
     }
     if let Some(tok) = conflicts_with_tokens(&reference, &ctx) {
-        return Err(CoreError::Other(format!("the teaching reference contains \"{tok}\", which identifies the source")));
+        return Err(CoreError::Other(format!(
+            "the teaching reference contains \"{tok}\", which identifies the source"
+        )));
     }
 
     // Temporary folder on the destination volume.
@@ -456,7 +615,14 @@ pub fn prepare(db: &Database, paths: &DataPaths, request: ExportRequest, progres
     std::fs::create_dir_all(&temp_dir)?;
 
     let dates = DateShift::new(offset_days, preserve_season);
-    let params = DeidParams { teaching_name: &name, reference: &reference, title: Some(&title), secret: &secret, dates, software: SOFTWARE };
+    let params = DeidParams {
+        teaching_name: &name,
+        reference: &reference,
+        title: Some(&title),
+        secret: &secret,
+        dates,
+        software: SOFTWARE,
+    };
 
     let mut files = Vec::new();
     let mut sidecar = Sidecar {
@@ -497,17 +663,36 @@ pub fn prepare(db: &Database, paths: &DataPaths, request: ExportRequest, progres
                     if masked.samples_per_pixel > 1 {
                         put_u16(&mut out, tags::PLANAR_CONFIGURATION, 0);
                     }
-                    out.put(DataElement::new(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, dicom_value!(Str, masked.photometric.as_str())));
-                    out.put(DataElement::new(tags::NUMBER_OF_FRAMES, VR::IS, dicom_value!(Str, masked.frames.to_string())));
+                    out.put(DataElement::new(
+                        tags::PHOTOMETRIC_INTERPRETATION,
+                        VR::CS,
+                        dicom_value!(Str, masked.photometric.as_str()),
+                    ));
+                    out.put(DataElement::new(
+                        tags::NUMBER_OF_FRAMES,
+                        VR::IS,
+                        dicom_value!(Str, masked.frames.to_string()),
+                    ));
                     let vr = if masked.bits_allocated > 8 { VR::OW } else { VR::OB };
-                    out.put(DataElement::new(tags::PIXEL_DATA, vr, PrimitiveValue::from(masked.data)));
-                    out.put(DataElement::new(tags::BURNED_IN_ANNOTATION, VR::CS, dicom_value!(Str, "NO")));
+                    out.put(DataElement::new(
+                        tags::PIXEL_DATA,
+                        vr,
+                        PrimitiveValue::from(masked.data),
+                    ));
+                    out.put(DataElement::new(
+                        tags::BURNED_IN_ANNOTATION,
+                        VR::CS,
+                        dicom_value!(Str, "NO"),
+                    ));
                     uids::EXPLICIT_VR_LITTLE_ENDIAN.to_string()
                 }
                 None => source_ts,
             };
             let new_sop = derive_uid(&secret, &img.sop_instance_uid);
-            let sop_class = obj.get(tags::SOP_CLASS_UID).and_then(|e| e.value().to_str().ok().map(|s| s.to_string())).unwrap_or_default();
+            let sop_class = obj
+                .get(tags::SOP_CLASS_UID)
+                .and_then(|e| e.value().to_str().ok().map(|s| s.to_string()))
+                .unwrap_or_default();
             let meta = FileMetaTableBuilder::new()
                 .transfer_syntax(ts.trim_end_matches('\0'))
                 .media_storage_sop_class_uid(sop_class.trim_end_matches('\0'))
@@ -517,7 +702,9 @@ pub fn prepare(db: &Database, paths: &DataPaths, request: ExportRequest, progres
                 .build()
                 .map_err(|e| CoreError::Other(e.to_string()))?;
             let file = temp_dir.join(format!("{new_sop}.dcm"));
-            out.with_exact_meta(meta).write_to_file(&file).map_err(|e| CoreError::Other(e.to_string()))?;
+            out.with_exact_meta(meta)
+                .write_to_file(&file)
+                .map_err(|e| CoreError::Other(e.to_string()))?;
             files.push(file);
 
             // Measurements, calibrations and key images, re-keyed.
@@ -540,7 +727,11 @@ pub fn prepare(db: &Database, paths: &DataPaths, request: ExportRequest, progres
                 }
             }
             if let Some([row_mm, col_mm]) = db.calibration(img.id)? {
-                sidecar.calibrations.push(SidecarCalibration { sop_instance_uid: new_sop.clone(), row_mm, col_mm });
+                sidecar.calibrations.push(SidecarCalibration {
+                    sop_instance_uid: new_sop.clone(),
+                    row_mm,
+                    col_mm,
+                });
             }
             if img.is_key_image {
                 sidecar.key_images.push(new_sop.clone());
@@ -622,10 +813,27 @@ pub fn abandon(prepared: Prepared) {
 pub fn commit(db: &Database, paths: &DataPaths, prepared: Prepared) -> Result<ExportResult> {
     if !prepared.is_clean() {
         abandon(prepared);
-        return Err(CoreError::Other("the verification pass found problems; the copy was not written".into()));
+        return Err(CoreError::Other(
+            "the verification pass found problems; the copy was not written".into(),
+        ));
     }
-    let Prepared { request, study, secret, offset_days, preserve_season, reference, name, title, temp_dir, files, series_count, image_count, overridden, sidecar, .. } =
-        prepared;
+    let Prepared {
+        request,
+        study,
+        secret,
+        offset_days,
+        preserve_season,
+        reference,
+        name,
+        title,
+        temp_dir,
+        files,
+        series_count,
+        image_count,
+        overridden,
+        sidecar,
+        ..
+    } = prepared;
 
     let mut folder_out = None;
     let mut archive_study = None;
@@ -661,7 +869,11 @@ pub fn commit(db: &Database, paths: &DataPaths, prepared: Prepared) -> Result<Ex
         CaseChoice::New(n) => {
             let id = db.create_teaching_case(&reference, &name, &title, &secret, offset_days, preserve_season)?;
             if suggest_reference(db, reference_prefix(&n.reference).as_deref().unwrap_or("")) == reference {
-                let next = db.meta_get("teaching_next_number").and_then(|v| v.parse::<u64>().ok()).unwrap_or(1) + 1;
+                let next = db
+                    .meta_get("teaching_next_number")
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(1)
+                    + 1;
                 db.meta_set("teaching_next_number", &next.to_string())?;
             }
             id
@@ -673,7 +885,14 @@ pub fn commit(db: &Database, paths: &DataPaths, prepared: Prepared) -> Result<Ex
         (Some(f), None) => f.display().to_string(),
         (None, _) => "archive".to_string(),
     };
-    db.record_teaching_export(case_id, &study.study_instance_uid, &destination, "clean", series_count as i64, image_count as i64)?;
+    db.record_teaching_export(
+        case_id,
+        &study.study_instance_uid,
+        &destination,
+        "clean",
+        series_count as i64,
+        image_count as i64,
+    )?;
 
     // The log line: the only other place source UIDs appear.
     let log_path = paths.root.join(LOG_NAME);
@@ -694,7 +913,14 @@ pub fn commit(db: &Database, paths: &DataPaths, prepared: Prepared) -> Result<Ex
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
         writeln!(f, "{line}")?;
     }
-    Ok(ExportResult { reference, folder: folder_out, archive_study_id: archive_study, series: series_count, images: image_count, log_path })
+    Ok(ExportResult {
+        reference,
+        folder: folder_out,
+        archive_study_id: archive_study,
+        series: series_count,
+        images: image_count,
+        log_path,
+    })
 }
 
 fn reference_prefix(reference: &str) -> Option<String> {
@@ -727,14 +953,21 @@ fn import_copy_into_archive(db: &Database, paths: &DataPaths, dir: &Path, sideca
         study_ids.extend(studies_of_folder(db, dir));
     }
     apply_sidecar_data(db, sidecar, &study_ids)?;
-    study_ids.first().copied().ok_or_else(|| CoreError::Other("the copy did not import".into()))
+    study_ids
+        .first()
+        .copied()
+        .ok_or_else(|| CoreError::Other("the copy did not import".into()))
 }
 
 /// The archive studies the files of a folder belong to, by SOP Instance UID.
 fn studies_of_folder(db: &Database, dir: &Path) -> Vec<i64> {
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
-        for p in entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "dcm")) {
+        for p in entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "dcm"))
+        {
             if let Ok(meta) = read_meta(&p) {
                 if let Ok(Some(img)) = db.image_by_sop_uid(&meta.sop_instance_uid) {
                     if let Ok(Some(s)) = db.series(img.series_id) {
@@ -767,7 +1000,8 @@ pub fn apply_sidecar(db: &Database, dir: &Path) -> Result<Option<String>> {
         return Ok(None);
     }
     let text = std::fs::read_to_string(&file)?;
-    let sidecar: Sidecar = serde_json::from_str(&text).map_err(|e| CoreError::Other(format!("{}: {e}", file.display())))?;
+    let sidecar: Sidecar =
+        serde_json::from_str(&text).map_err(|e| CoreError::Other(format!("{}: {e}", file.display())))?;
     let studies = studies_of_folder(db, dir);
     apply_sidecar_data(db, &sidecar, &studies)?;
     Ok(Some(sidecar.reference))
@@ -821,7 +1055,10 @@ fn apply_sidecar_data(db: &Database, sidecar: &Sidecar, known_studies: &[i64]) -
             note_study(db, &mut study_ids, &img);
         }
     }
-    let album = db.albums()?.into_iter().find(|a| a.name == TEACHING_ALBUM && !a.is_smart);
+    let album = db
+        .albums()?
+        .into_iter()
+        .find(|a| a.name == TEACHING_ALBUM && !a.is_smart);
     let album_id = match album {
         Some(a) => a.id,
         None => db.create_album(TEACHING_ALBUM, None)?,
@@ -839,13 +1076,19 @@ fn apply_sidecar_data(db: &Database, sidecar: &Sidecar, known_studies: &[i64]) -
 /// Remove a case from the register and its lines from the log, severing
 /// the link for good.
 pub fn delete_case(db: &Database, paths: &DataPaths, case_id: i64) -> Result<()> {
-    let Some(case) = db.teaching_case(case_id)? else { return Ok(()) };
+    let Some(case) = db.teaching_case(case_id)? else {
+        return Ok(());
+    };
     db.delete_teaching_case(case_id)?;
     let log_path = paths.root.join(LOG_NAME);
     if let Ok(text) = std::fs::read_to_string(&log_path) {
         let kept: Vec<&str> = text
             .lines()
-            .filter(|l| serde_json::from_str::<serde_json::Value>(l).map(|v| v["reference"] != case.reference).unwrap_or(true))
+            .filter(|l| {
+                serde_json::from_str::<serde_json::Value>(l)
+                    .map(|v| v["reference"] != case.reference)
+                    .unwrap_or(true)
+            })
             .collect();
         std::fs::write(&log_path, kept.join("\n") + if kept.is_empty() { "" } else { "\n" })?;
     }
@@ -855,8 +1098,13 @@ pub fn delete_case(db: &Database, paths: &DataPaths, case_id: i64) -> Result<()>
 /// Export a study that is already a teaching copy, unchanged, under its
 /// reference: the files as they are plus a fresh sidecar from the archive.
 pub fn reexport_copy(db: &Database, paths: &DataPaths, study_id: i64, dest: &Path) -> Result<PathBuf> {
-    let study = db.study(study_id)?.ok_or_else(|| CoreError::Other("study not found".into()))?;
-    let reference = study.teaching_reference.clone().ok_or_else(|| CoreError::Other("not a teaching copy".into()))?;
+    let study = db
+        .study(study_id)?
+        .ok_or_else(|| CoreError::Other("study not found".into()))?;
+    let reference = study
+        .teaching_reference
+        .clone()
+        .ok_or_else(|| CoreError::Other("not a teaching copy".into()))?;
     let final_dir = dest.join(&reference);
     std::fs::create_dir_all(&final_dir)?;
     let mut sidecar = Sidecar {
@@ -887,7 +1135,11 @@ pub fn reexport_copy(db: &Database, paths: &DataPaths, study_id: i64, dest: &Pat
                 }
             }
             if let Some([row_mm, col_mm]) = db.calibration(img.id)? {
-                sidecar.calibrations.push(SidecarCalibration { sop_instance_uid: img.sop_instance_uid.clone(), row_mm, col_mm });
+                sidecar.calibrations.push(SidecarCalibration {
+                    sop_instance_uid: img.sop_instance_uid.clone(),
+                    row_mm,
+                    col_mm,
+                });
             }
             if img.is_key_image {
                 sidecar.key_images.push(img.sop_instance_uid.clone());
@@ -904,4 +1156,3 @@ pub fn reexport_copy(db: &Database, paths: &DataPaths, study_id: i64, dest: &Pat
     std::fs::write(final_dir.join(SIDECAR_NAME), json)?;
     Ok(final_dir)
 }
-

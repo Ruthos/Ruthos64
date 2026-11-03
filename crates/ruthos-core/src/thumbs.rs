@@ -39,7 +39,10 @@ impl ThumbnailService {
     pub fn new(paths: DataPaths, size: u32) -> Self {
         let (tx, work_rx) = unbounded::<Request>();
         let (done_tx, rx) = unbounded::<ThumbnailUpdate>();
-        let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).clamp(1, 3);
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+            .clamp(1, 3);
         for i in 0..workers {
             let work_rx = work_rx.clone();
             let done_tx = done_tx.clone();
@@ -118,7 +121,11 @@ fn make_thumbnail(paths: &DataPaths, req: &Request, size: u32) -> anyhow::Result
     let gray = frame_to_gray8(&frame, center, width);
     let src = image::GrayImage::from_raw(frame.width, frame.height, gray)
         .ok_or_else(|| anyhow::anyhow!("thumbnail buffer size mismatch"))?;
-    let thumb = image::imageops::thumbnail(&src, fit_w(frame.width, frame.height, size), fit_h(frame.width, frame.height, size));
+    let thumb = image::imageops::thumbnail(
+        &src,
+        fit_w(frame.width, frame.height, size),
+        fit_h(frame.width, frame.height, size),
+    );
     let _ = std::fs::create_dir_all(paths.thumbs_dir());
     let _ = thumb.save(&cached);
     let rgba = image::DynamicImage::ImageLuma8(thumb).to_rgba8();
