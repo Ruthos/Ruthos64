@@ -50,18 +50,18 @@ Work is organised in tiers. Each tier is usable on its own.
 
 ### Tier 1: a complete 2D viewer
 
-- Import files and folders into a local database; watch folders
-- Database window with albums, smart albums, search and filters
-- 2D viewer: window/level, presets, CLUTs, zoom, pan, rotate, flip, scroll, cine
-- Multi-series tiling, sync and propagate settings
-- Measurement and ROI tools with the ROI inspector and ROI manager
+- ### Import files and folders into a local database; watch folders
+- ### Database window with albums, smart albums, search and filters
+- ### 2D viewer: window/level, presets, CLUTs, zoom, pan, rotate, flip, scroll, cine
+- ### Multi-series tiling, sync and propagate settings
+- ### Measurement and ROI tools with the ROI inspector and ROI manager
 - Key images, comments and study state
 - Hounsfield and pixel value readout, histograms and plots
 - DICOM listener (C-STORE SCP), send (C-STORE SCU), query/retrieve (C-FIND, C-MOVE), echo
 - Export to DICOM, JPEG, PNG and MP4
-- Measurements with a stated scale basis, editable handles with undo, a GPU loupe, a Measurements menu, an LV M-mode tool with fractional shortening, and a library of definitions, sets and calculations with JSON import and export (see `docs/measurements.md`)
-- Anonymisation for teaching: allowlist header profile, derived UIDs, shifted dates, ultrasound-region and template pixel masking with review, named teaching cases, sidecar for measurements, independent verification pass (see `docs/anonymiser.md`)
-- Preferences window
+- ### Measurements with a stated scale basis, editable handles with undo, a GPU loupe, a Measurements menu, an LV M-mode tool with fractional shortening, and a library of definitions, sets and calculations with JSON import and export (see `docs/measurements.md`)
+- ### Anonymisation for teaching: allowlist header profile, derived UIDs, shifted dates, ultrasound-region and template pixel masking with review, named teaching cases, sidecar for measurements, independent verification pass (see `docs/anonymiser.md`)
+- ### Preferences window
 - Import an existing Horos database folder, including albums, comments and key images
 
 ### Tier 2: 3D
