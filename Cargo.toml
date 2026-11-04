@@ -39,6 +39,7 @@ dicom-core = "0.10"
 dicom-object = "0.10"
 dicom-dictionary-std = "0.10"
 dicom-encoding = "0.10"
+dicom-parser = "0.10"
 dicom-pixeldata = { version = "0.10", default-features = false, features = ["native", "rayon", "openjpeg-sys", "charls", "image"] }
 dicom-ul = "0.10"
 dicom-transfer-syntax-registry = "0.10"

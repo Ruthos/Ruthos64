@@ -3,17 +3,28 @@
 //! dicom-rs allocates (and zero-fills) an element's declared length before
 //! reading its value, so a file of a few bytes that claims a 4 GB element
 //! makes it take 4 GB: a denial of service through any import or the
-//! listener, found by the fuzzer. This walks the element headers, seeking
-//! past values without reading them, and refuses any element, item or
-//! fragment that claims more bytes than its container (or the file) holds.
-//! Nesting is limited in depth. It reads only headers, so a large file costs
-//! a few hundred small reads.
+//! listener, found by the fuzzer. This refuses any element or fragment that
+//! claims more bytes than the file holds, and limits nesting.
+//!
+//! The check is only worth anything if it reads a file exactly as the parser
+//! will: a difference lets a file steer the parser past it, and the fuzzer
+//! found several. So the data set is walked by dicom-parser's own lazy reader,
+//! which gives each length before its value is read, and the transfer syntax
+//! and its adapter are handled as `dicom-object` handles them. Only the file
+//! meta group is read here, because the parser's reader for it allocates, and
+//! that loop follows `FileMetaTable::read_from`. Values are seeked past, so a
+//! large file costs a few hundred small reads.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::cell::Cell;
+use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::rc::Rc;
 
-use dicom_core::dictionary::DataDictionary;
 use dicom_core::Tag;
-use dicom_dictionary_std::StandardDataDictionary;
+use dicom_encoding::transfer_syntax::{Codec, TransferSyntax, TransferSyntaxIndex};
+use dicom_parser::dataset::lazy_read::LazyDataSetReader;
+use dicom_parser::dataset::LazyDataToken;
+use dicom_parser::stateful::decode::StatefulDecode;
+use dicom_transfer_syntax_registry::{entries, TransferSyntaxRegistry};
 
 use crate::{DicomError, Result};
 
@@ -23,285 +34,84 @@ pub const DAMAGED: &str = "the file's structure is damaged: an element claims mo
 const MAX_DEPTH: u32 = 64;
 const UNDEFINED: u32 = 0xFFFF_FFFF;
 
-/// Random access to the bytes being checked.
-pub trait Source {
-    fn size(&self) -> u64;
-    /// Fill `buf` from `pos`; false if the bytes are not there.
-    fn read_at(&mut self, pos: u64, buf: &mut [u8]) -> bool;
-}
-
-impl Source for &[u8] {
-    fn size(&self) -> u64 {
-        <[u8]>::len(self) as u64
-    }
-    fn read_at(&mut self, pos: u64, buf: &mut [u8]) -> bool {
-        let start = pos as usize;
-        match self.get(start..start + buf.len()) {
-            Some(s) => {
-                buf.copy_from_slice(s);
-                true
-            }
-            None => false,
-        }
-    }
-}
-
-/// A file read a header at a time.
-pub struct FileSource {
-    file: std::fs::File,
-    len: u64,
-}
-
-impl FileSource {
-    pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
-        let file = std::fs::File::open(path)?;
-        let len = file.metadata()?.len();
-        Ok(Self { file, len })
-    }
-}
-
-impl Source for FileSource {
-    fn size(&self) -> u64 {
-        self.len
-    }
-    fn read_at(&mut self, pos: u64, buf: &mut [u8]) -> bool {
-        if pos + buf.len() as u64 > self.len {
-            return false;
-        }
-        self.file.seek(SeekFrom::Start(pos)).is_ok() && self.file.read_exact(buf).is_ok()
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Encoding {
-    explicit: bool,
-    big_endian: bool,
-}
-
-struct Walker<'a, S: Source> {
-    src: &'a mut S,
-    enc: Encoding,
-}
-
 fn damaged() -> DicomError {
-    DicomError::Read(DAMAGED.into())
+    DicomError::Read(DAMAGED.to_string())
 }
 
-impl<S: Source> Walker<'_, S> {
-    fn u16(&mut self, pos: u64) -> Option<u16> {
-        let mut b = [0u8; 2];
-        self.src.read_at(pos, &mut b).then(|| {
-            if self.enc.big_endian {
-                u16::from_be_bytes(b)
-            } else {
-                u16::from_le_bytes(b)
-            }
-        })
-    }
+fn at<R: Read + Seek>(src: &mut R, pos: u64, buf: &mut [u8]) -> Option<()> {
+    src.seek(SeekFrom::Start(pos)).ok()?;
+    src.read_exact(buf).ok()
+}
 
-    fn u32(&mut self, pos: u64) -> Option<u32> {
-        let mut b = [0u8; 4];
-        self.src.read_at(pos, &mut b).then(|| {
-            if self.enc.big_endian {
-                u32::from_be_bytes(b)
-            } else {
-                u32::from_le_bytes(b)
-            }
-        })
-    }
+fn u16_at<R: Read + Seek>(src: &mut R, pos: u64) -> Option<u16> {
+    let mut b = [0u8; 2];
+    at(src, pos, &mut b)?;
+    Some(u16::from_le_bytes(b))
+}
 
-    /// Item tags are little-endian in every little-endian syntax; in
-    /// big-endian they follow the syntax.
-    fn tag(&mut self, pos: u64) -> Option<Tag> {
-        Some(Tag(self.u16(pos)?, self.u16(pos + 2)?))
-    }
+fn u32_at<R: Read + Seek>(src: &mut R, pos: u64) -> Option<u32> {
+    let mut b = [0u8; 4];
+    at(src, pos, &mut b)?;
+    Some(u32::from_le_bytes(b))
+}
 
-    /// Walk a data set from `pos` to `end` (or, when `end` is `None`, to an
-    /// item delimitation item). Returns the position after it.
-    fn dataset(&mut self, mut pos: u64, end: Option<u64>, depth: u32) -> Result<u64> {
-        if depth > MAX_DEPTH {
-            return Err(damaged());
-        }
-        loop {
-            if let Some(e) = end {
-                if pos == e {
-                    return Ok(pos);
-                }
-                if pos > e {
-                    return Err(damaged());
-                }
-            } else if pos >= self.src.size() {
-                // Ran off the end inside an undefined-length item.
-                return Ok(pos);
-            }
-            let tag = self.tag(pos).ok_or_else(damaged)?;
-            if tag == Tag(0xFFFE, 0xE00D) {
-                // The end of an item. Outside one the parser steps over it
-                // and reads on, so the check must too.
-                if depth == 0 {
-                    pos += 8;
-                    continue;
-                }
-                return Ok(pos + 8);
-            }
-            if tag.group() == 0xFFFE {
-                return Err(damaged());
-            }
-            let (vr, len, header) = self.header(pos)?;
-            let value = pos + header;
-            if len == UNDEFINED {
-                pos = if tag == Tag(0x7FE0, 0x0010) {
-                    self.fragments(value)?
-                } else {
-                    self.sequence(value, None, depth + 1)?
-                };
-                continue;
-            }
-            let value_end = value + len as u64;
-            let limit = end.unwrap_or(self.src.size()).min(self.src.size());
-            if value_end > limit {
-                return Err(damaged());
-            }
-            let is_sq = vr == *b"SQ" || (!self.enc.explicit && is_sequence_tag(tag));
-            pos = if is_sq {
-                self.sequence(value, Some(value_end), depth + 1)?
-            } else {
-                value_end
-            };
-        }
+/// A meta element's tag, value length and header size, as the parser's
+/// explicit little-endian header decoder reads them.
+fn meta_header<R: Read + Seek>(src: &mut R, pos: u64) -> Option<(Tag, u32, u64)> {
+    let tag = Tag(u16_at(src, pos)?, u16_at(src, pos + 2)?);
+    if tag.group() == 0xFFFE {
+        return Some((tag, u32_at(src, pos + 4)?, 8));
     }
-
-    /// The VR (or "??" for implicit), the value length and the header size.
-    fn header(&mut self, pos: u64) -> Result<([u8; 2], u32, u64)> {
-        if !self.enc.explicit {
-            let len = self.u32(pos + 4).ok_or_else(damaged)?;
-            return Ok((*b"??", len, 8));
-        }
-        let mut vr = [0u8; 2];
-        if !self.src.read_at(pos + 4, &mut vr) {
-            return Err(damaged());
-        }
-        // Only these have a 16-bit length: the parser takes anything it does
-        // not know as UN, with a 32-bit one.
-        if matches!(
-            &vr,
-            b"AE"
-                | b"AS"
-                | b"AT"
-                | b"CS"
-                | b"DA"
-                | b"DS"
-                | b"DT"
-                | b"FL"
-                | b"FD"
-                | b"IS"
-                | b"LO"
-                | b"LT"
-                | b"PN"
-                | b"SH"
-                | b"SL"
-                | b"SS"
-                | b"ST"
-                | b"TM"
-                | b"UI"
-                | b"UL"
-                | b"US"
-        ) {
-            let len = self.u16(pos + 6).ok_or_else(damaged)? as u32;
-            Ok((vr, len, 8))
-        } else {
-            let len = self.u32(pos + 8).ok_or_else(damaged)?;
-            Ok((vr, len, 12))
-        }
-    }
-
-    /// Items of a sequence, each a data set, to `end` or a sequence
-    /// delimitation item.
-    fn sequence(&mut self, mut pos: u64, end: Option<u64>, depth: u32) -> Result<u64> {
-        if depth > MAX_DEPTH {
-            return Err(damaged());
-        }
-        loop {
-            if let Some(e) = end {
-                if pos == e {
-                    return Ok(pos);
-                }
-                if pos > e {
-                    return Err(damaged());
-                }
-            }
-            let tag = self.tag(pos).ok_or_else(damaged)?;
-            let len = self.u32(pos + 4).ok_or_else(damaged)?;
-            match tag {
-                Tag(0xFFFE, 0xE0DD) => return Ok(pos + 8),
-                Tag(0xFFFE, 0xE000) => {
-                    let start = pos + 8;
-                    pos = if len == UNDEFINED {
-                        self.dataset(start, None, depth + 1)?
-                    } else {
-                        let item_end = start + len as u64;
-                        if item_end > end.unwrap_or(self.src.size()).min(self.src.size()) {
-                            return Err(damaged());
-                        }
-                        self.dataset(start, Some(item_end), depth + 1)?
-                    };
-                }
-                _ => return Err(damaged()),
-            }
-        }
-    }
-
-    /// Encapsulated pixel data: the offset table and fragments, each a
-    /// defined-length item of raw bytes, to the sequence delimitation item.
-    fn fragments(&mut self, mut pos: u64) -> Result<u64> {
-        loop {
-            let tag = self.tag(pos).ok_or_else(damaged)?;
-            let len = self.u32(pos + 4).ok_or_else(damaged)?;
-            match tag {
-                Tag(0xFFFE, 0xE0DD) => return Ok(pos + 8),
-                Tag(0xFFFE, 0xE000) if len != UNDEFINED => {
-                    let next = pos + 8 + len as u64;
-                    if next > self.src.size() {
-                        return Err(damaged());
-                    }
-                    pos = next;
-                }
-                _ => return Err(damaged()),
-            }
-        }
+    let mut vr = [0u8; 2];
+    at(src, pos + 4, &mut vr)?;
+    // Only these have a 16-bit length: anything unknown is UN, with 32 bits.
+    if matches!(
+        &vr,
+        b"AE"
+            | b"AS"
+            | b"AT"
+            | b"CS"
+            | b"DA"
+            | b"DS"
+            | b"DT"
+            | b"FL"
+            | b"FD"
+            | b"IS"
+            | b"LO"
+            | b"LT"
+            | b"PN"
+            | b"SH"
+            | b"SL"
+            | b"SS"
+            | b"ST"
+            | b"TM"
+            | b"UI"
+            | b"UL"
+            | b"US"
+    ) {
+        Some((tag, u16_at(src, pos + 6)? as u32, 8))
+    } else {
+        Some((tag, u32_at(src, pos + 8)?, 12))
     }
 }
 
-fn is_sequence_tag(tag: Tag) -> bool {
-    StandardDataDictionary
-        .by_tag(tag)
-        .is_some_and(|e| e.vr.relaxed() == dicom_core::VR::SQ)
-}
-
-/// The transfer syntax a file meta group names, read from (0002,0010).
-fn meta_transfer_syntax<S: Source>(src: &mut S, start: u64, end: u64) -> Option<(String, u64)> {
-    let mut w = Walker {
-        src,
-        enc: Encoding {
-            explicit: true,
-            big_endian: false,
-        },
-    };
+/// The transfer syntax a meta group names, and where the data set starts.
+/// The parser ends the group after the bytes its length gives, whatever tags
+/// it meets. Without a group length it refuses the header, and the tags
+/// decide here.
+fn meta_group<R: Read + Seek>(src: &mut R, start: u64, end: u64) -> Option<(String, u64)> {
     let mut pos = start;
     let mut ts = None;
-    // The parser ends the group after the bytes its length gives, whatever
-    // tags it meets, so the data set starts where that puts it. Without a
-    // group length the parser refuses the header, and the tags decide here.
     let mut stop = None;
-    if pos + 12 <= end && w.tag(pos)? == Tag(0x0002, 0x0000) {
-        let (_, len, header) = w.header(pos).ok()?;
-        if len == 4 {
-            stop = Some(pos + header + 4 + w.u32(pos + header)? as u64);
+    if pos + 12 <= end {
+        let (tag, len, header) = meta_header(src, pos)?;
+        if tag == Tag(0x0002, 0x0000) && len == 4 {
+            stop = Some(pos + header + 4 + u32_at(src, pos + header)? as u64);
             pos += header + 4;
         }
     }
     while pos + 8 <= end {
-        let tag = w.tag(pos)?;
+        let (tag, len, header) = meta_header(src, pos)?;
         let done = match stop {
             Some(stop) => pos >= stop,
             None => tag.group() != 0x0002,
@@ -309,19 +119,17 @@ fn meta_transfer_syntax<S: Source>(src: &mut S, start: u64, end: u64) -> Option<
         if done {
             break;
         }
-        let (_, len, header) = w.header(pos).ok()?;
         if len == UNDEFINED {
             return None;
         }
         if tag == Tag(0x0002, 0x0010) && len < 4096 {
             let mut v = vec![0u8; len as usize];
-            if w.src.read_at(pos + header, &mut v) {
-                let text = String::from_utf8_lossy(&v);
-                ts = Some(
-                    text.trim_end_matches(|c: char| c.is_whitespace() || c == '\0')
-                        .to_string(),
-                );
-            }
+            at(src, pos + header, &mut v)?;
+            let text = String::from_utf8_lossy(&v);
+            ts = Some(
+                text.trim_end_matches(|c: char| c.is_whitespace() || c == '\0')
+                    .to_string(),
+            );
         }
         pos += header + len as u64;
         if pos > end {
@@ -331,101 +139,148 @@ fn meta_transfer_syntax<S: Source>(src: &mut S, start: u64, end: u64) -> Option<
     Some((ts.unwrap_or_default(), pos))
 }
 
+/// A source whose reads can be counted off without touching it. The parser's
+/// `seek` does not move its own position, which sequence bounds depend on, and
+/// its `skip_bytes` reads every byte. So a value is seeked past for real, then
+/// skipped through here to bring the position along.
+struct Skipper<R> {
+    inner: R,
+    pending: Rc<Cell<u64>>,
+}
+
+impl<R: Read> Read for Skipper<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let pending = self.pending.get();
+        if pending == 0 {
+            return self.inner.read(buf);
+        }
+        let n = pending.min(buf.len() as u64);
+        self.pending.set(pending - n);
+        Ok(n as usize)
+    }
+}
+
+impl<R: Seek> Seek for Skipper<R> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+/// A defined length that cannot fit in the file, whatever position it is at.
+fn beyond(len: u32, total: u64) -> bool {
+    len != UNDEFINED && len as u64 > total
+}
+
+/// Walk a data set from the source's position with the parser's own reader.
+fn walk<R: Read + Seek>(src: &mut R, ts: &TransferSyntax, total: u64) -> Result<()> {
+    let pending = Rc::new(Cell::new(0));
+    let source = Skipper {
+        inner: src,
+        pending: pending.clone(),
+    };
+    let mut reader = LazyDataSetReader::new_with_ts(source, ts).map_err(|_| damaged())?;
+    let mut depth = 0u32;
+    while let Some(token) = reader.advance() {
+        let (mut decoder, len) = match token.map_err(|_| damaged())? {
+            LazyDataToken::SequenceStart { len, .. } => {
+                depth += 1;
+                if depth > MAX_DEPTH || beyond(len.0, total) {
+                    return Err(damaged());
+                }
+                continue;
+            }
+            LazyDataToken::ItemStart { len } => {
+                if beyond(len.0, total) {
+                    return Err(damaged());
+                }
+                continue;
+            }
+            LazyDataToken::SequenceEnd => {
+                depth = depth.saturating_sub(1);
+                continue;
+            }
+            LazyDataToken::LazyValue { header, decoder } => (decoder, header.len.0),
+            LazyDataToken::LazyItemValue { len, decoder } => (decoder, len),
+            _ => continue,
+        };
+        let value_end = decoder.position() + len as u64;
+        if len == UNDEFINED || value_end > total {
+            return Err(damaged());
+        }
+        decoder.seek(value_end).map_err(|_| damaged())?;
+        pending.set(len as u64);
+        decoder.skip_bytes(len).map_err(|_| damaged())?;
+    }
+    Ok(())
+}
+
 /// Does a data set with no header hold together in this encoding? The parser
 /// must try only those that do: a sound implicit file read as explicit takes
 /// value bytes for lengths.
-pub fn bare_holds<S: Source>(src: &mut S, explicit: bool) -> bool {
-    let total = src.size();
-    let enc = Encoding {
-        explicit,
-        big_endian: false,
+pub fn bare_holds(bytes: &[u8], explicit: bool) -> bool {
+    holds(&mut Cursor::new(bytes), explicit, bytes.len() as u64)
+}
+
+fn holds<R: Read + Seek>(src: &mut R, explicit: bool, total: u64) -> bool {
+    let ts = if explicit {
+        entries::EXPLICIT_VR_LITTLE_ENDIAN.erased()
+    } else {
+        entries::IMPLICIT_VR_LITTLE_ENDIAN.erased()
     };
-    Walker { src, enc }.dataset(0, Some(total), 0).is_ok()
+    src.seek(SeekFrom::Start(0)).is_ok() && walk(src, &ts, total).is_ok()
 }
 
-const DEFLATED: &str = "1.2.840.10008.1.2.1.99";
-
-/// Reads a `Source` from a position, for the inflater.
-struct SourceReader<'a, S: Source> {
-    src: &'a mut S,
-    pos: u64,
-}
-
-impl<S: Source> std::io::Read for SourceReader<'_, S> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = (buf.len() as u64).min(self.src.size().saturating_sub(self.pos)) as usize;
-        if n > 0 && !self.src.read_at(self.pos, &mut buf[..n]) {
-            return Err(std::io::ErrorKind::UnexpectedEof.into());
+/// Check the data set at `pos` under the transfer syntax the meta group names.
+fn check_data_set<R: Read + Seek>(src: &mut R, uid: &str, pos: u64, total: u64) -> Result<()> {
+    // An unknown syntax, or one whose adapter is missing, is refused by the
+    // parser before it reads the data set, with a better message than this.
+    let Some(ts) = TransferSyntaxRegistry.get(uid) else {
+        return Ok(());
+    };
+    src.seek(SeekFrom::Start(pos)).map_err(|_| damaged())?;
+    match ts.codec() {
+        // Deflated data sets hide their lengths, so they are inflated with
+        // the parser's adapter and walked. The cap also stops a small file
+        // inflating to gigabytes.
+        Codec::Dataset(Some(adapter)) => {
+            let cap = crate::guard::limits().series_bytes;
+            let mut inflated = Vec::new();
+            adapter
+                .adapt_reader(Box::new(&mut *src))
+                .take(cap + 1)
+                .read_to_end(&mut inflated)
+                .map_err(|_| damaged())?;
+            if inflated.len() as u64 > cap {
+                return Err(damaged());
+            }
+            let total = inflated.len() as u64;
+            walk(&mut Cursor::new(inflated), ts, total)
         }
-        self.pos += n as u64;
-        Ok(n)
-    }
-}
-
-/// Deflated data sets hide their lengths, so they are inflated and walked
-/// like any other, in explicit little-endian. The cap also stops a small
-/// file inflating to gigabytes.
-fn check_deflated<S: Source>(src: &mut S, data: u64) -> Result<()> {
-    use std::io::Read;
-    let cap = crate::guard::limits().series_bytes;
-    let mut inflated = Vec::new();
-    flate2::read::DeflateDecoder::new(SourceReader { src, pos: data })
-        .take(cap + 1)
-        .read_to_end(&mut inflated)
-        .map_err(|_| damaged())?;
-    if inflated.len() as u64 > cap {
-        return Err(damaged());
-    }
-    let total = inflated.len() as u64;
-    let enc = Encoding {
-        explicit: true,
-        big_endian: false,
-    };
-    let mut plain: &[u8] = &inflated;
-    Walker { src: &mut plain, enc }.dataset(0, Some(total), 0).map(|_| ())
-}
-
-fn encoding_of(ts: &str) -> Encoding {
-    match ts {
-        "1.2.840.10008.1.2" => Encoding {
-            explicit: false,
-            big_endian: false,
-        },
-        "1.2.840.10008.1.2.2" => Encoding {
-            explicit: true,
-            big_endian: true,
-        },
-        _ => Encoding {
-            explicit: true,
-            big_endian: false,
-        },
+        Codec::Dataset(None) => Ok(()),
+        Codec::None | Codec::EncapsulatedPixelData(..) => walk(src, ts, total),
     }
 }
 
 /// Check the structure of a whole DICOM stream: with a preamble, starting
-/// at "DICM", or a bare data set (explicit or implicit little-endian).
-pub fn check<S: Source>(src: &mut S) -> Result<()> {
-    let total = src.size();
+/// "DICM", or a bare data set.
+pub fn check<R: Read + Seek>(src: &mut R) -> Result<()> {
+    let total = src.seek(SeekFrom::End(0)).map_err(|_| damaged())?;
     let mut magic = [0u8; 4];
-    let start = if src.read_at(128, &mut magic) && &magic == b"DICM" {
+    let start = if at(src, 128, &mut magic).is_some() && &magic == b"DICM" {
         Some(132)
-    } else if src.read_at(0, &mut magic) && &magic == b"DICM" {
+    } else if at(src, 0, &mut magic).is_some() && &magic == b"DICM" {
         Some(4)
     } else {
         None
     };
     match start {
         Some(start) => {
-            let (ts, data) = meta_transfer_syntax(src, start, total).ok_or_else(damaged)?;
-            if ts == DEFLATED {
-                return check_deflated(src, data);
-            }
-            let enc = encoding_of(&ts);
-            Walker { src, enc }.dataset(data, Some(total), 0).map(|_| ())
+            let (ts, data) = meta_group(src, start, total).ok_or_else(damaged)?;
+            check_data_set(src, &ts, data, total)
         }
         None => {
             // A bare data set: whichever little-endian encoding holds.
-            if bare_holds(src, true) || bare_holds(src, false) {
+            if holds(src, true, total) || holds(src, false, total) {
                 return Ok(());
             }
             // No preamble and no data set that holds together: not DICOM
@@ -437,15 +292,15 @@ pub fn check<S: Source>(src: &mut S) -> Result<()> {
     }
 }
 
-/// Check a file on disk.
+/// `check` on a file on disk.
 pub fn check_file(path: &std::path::Path) -> Result<()> {
-    let mut src = FileSource::open(path)?;
-    check(&mut src)
+    let mut file = std::io::BufReader::new(std::fs::File::open(path)?);
+    check(&mut file)
 }
 
-/// Check bytes in memory.
-pub fn check_bytes(mut bytes: &[u8]) -> Result<()> {
-    check(&mut bytes)
+/// `check` on bytes in memory.
+pub fn check_bytes(bytes: &[u8]) -> Result<()> {
+    check(&mut Cursor::new(bytes))
 }
 
 #[cfg(test)]

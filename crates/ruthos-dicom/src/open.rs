@@ -106,8 +106,7 @@ fn open_raw_bytes(bytes: &[u8]) -> Result<DefaultDicomObject> {
     ];
     let mut last_err = None;
     for (explicit, ts) in candidates {
-        let mut source = bytes;
-        if !crate::structure::bare_holds(&mut source, explicit) {
+        if !crate::structure::bare_holds(bytes, explicit) {
             continue;
         }
         match InMemDicomObject::read_dataset_with_ts(Cursor::new(bytes), &ts) {

@@ -21,6 +21,7 @@ dicom-core = { workspace = true }
 dicom-object = { workspace = true }
 dicom-dictionary-std = { workspace = true }
 dicom-encoding = { workspace = true }
+dicom-parser = { workspace = true }
 dicom-pixeldata = { workspace = true }
 dicom-transfer-syntax-registry = { workspace = true }
 turbojpeg-sys = { workspace = true }
@@ -35,8 +36,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
-flate2 = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
+flate2 = { workspace = true }
