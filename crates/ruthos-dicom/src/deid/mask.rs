@@ -127,9 +127,10 @@ pub fn apply_mask(obj: &dicom_object::DefaultDicomObject, plan: &MaskPlan) -> Re
     meta.transfer_syntax = obj.meta().transfer_syntax().trim_end_matches('\0').to_string();
     crate::guard::check_object(obj, &meta, &[])?;
     crate::guard::check_series_bytes(crate::guard::decoded_bytes(&meta))?;
-    let decoded = obj
-        .decode_pixel_data()
-        .map_err(|e| DicomError::Pixels(crate::pixels::error_chain(&e)))?;
+    let decoded = crate::pixels::contained(|| {
+        obj.decode_pixel_data()
+            .map_err(|e| DicomError::Pixels(crate::pixels::error_chain(&e)))
+    })?;
     let rows = decoded.rows();
     let columns = decoded.columns();
     let frames = decoded.number_of_frames().max(1);

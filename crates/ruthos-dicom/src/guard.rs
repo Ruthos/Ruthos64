@@ -188,6 +188,7 @@ pub enum Codec {
     Jpeg,
     Jpeg2000,
     JpegLs,
+    Rle,
     Other,
 }
 
@@ -204,6 +205,7 @@ pub fn codec_of(transfer_syntax: &str) -> Codec {
         | "1.2.840.10008.1.2.4.202"
         | "1.2.840.10008.1.2.4.203" => Codec::Jpeg2000,
         "1.2.840.10008.1.2.4.80" | "1.2.840.10008.1.2.4.81" => Codec::JpegLs,
+        "1.2.840.10008.1.2.5" => Codec::Rle,
         _ => Codec::Other,
     }
 }
@@ -315,6 +317,61 @@ pub fn jpeg2000_header(data: &[u8]) -> Option<CodecHeader> {
 }
 
 /// Check one frame's codestream against the attributes.
+/// How many bytes a PackBits segment decodes to, stopping at `enough`.
+fn packbits_length(segment: &[u8], enough: u64) -> u64 {
+    let (mut i, mut out) = (0, 0u64);
+    while i < segment.len() && out < enough {
+        let h = segment[i] as i8;
+        i += 1;
+        if h >= 0 {
+            let n = h as usize + 1;
+            out += n.min(segment.len() - i) as u64;
+            i += n;
+        } else if h != -128 {
+            if i >= segment.len() {
+                break;
+            }
+            out += 1 + h.unsigned_abs() as u64;
+            i += 1;
+        }
+    }
+    out
+}
+
+/// An RLE frame: its 64-byte header (DICOM part 5, annex G) must describe the
+/// segments the image needs, and each must hold a full plane. The decoder
+/// behind dicom-pixeldata indexes all of this unchecked and panics.
+fn check_rle(meta: &InstanceMeta, data: &[u8]) -> Result<()> {
+    let bad = |what: &str| {
+        tracing::warn!("RLE frame: {what}");
+        refuse(format!("{MISMATCH} ({what})"))
+    };
+    if !matches!(meta.bits_allocated, 8 | 16) {
+        return Err(bad("RLE needs 8 or 16 bits allocated"));
+    }
+    if data.len() < 64 {
+        return Err(bad("the RLE header is cut short"));
+    }
+    let word = |i: usize| u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
+    let count = word(0);
+    let needed = meta.samples_per_pixel.max(1) as usize * (meta.bits_allocated as usize / 8);
+    if count > 15 || count < needed {
+        return Err(bad("the wrong number of RLE segments"));
+    }
+    let plane = meta.rows as u64 * meta.columns as u64;
+    for n in 0..needed {
+        let start = word(4 + 4 * n);
+        let end = if n + 1 < count { word(8 + 4 * n) } else { data.len() };
+        let Some(segment) = data.get(start..end) else {
+            return Err(bad("an RLE segment lies outside its frame"));
+        };
+        if packbits_length(segment, plane) < plane {
+            return Err(bad("an RLE segment is too short for the image"));
+        }
+    }
+    Ok(())
+}
+
 pub fn check_codestream(meta: &InstanceMeta, codec: Codec, data: &[u8]) -> Result<()> {
     let l = limits();
     if data.len() as u64 > l.fragment_bytes {
@@ -327,6 +384,7 @@ pub fn check_codestream(meta: &InstanceMeta, codec: Codec, data: &[u8]) -> Resul
         Codec::Jpeg => jpeg_header(data),
         Codec::Jpeg2000 => jpeg2000_header(data),
         Codec::JpegLs => jpeg_ls_header(data),
+        Codec::Rle => return check_rle(meta, data),
         Codec::Other => return Ok(()),
     };
     let Some(h) = header else {
@@ -381,6 +439,11 @@ pub fn check_object(obj: &dicom_object::DefaultDicomObject, meta: &InstanceMeta,
             }
             if codec == Codec::Other {
                 return Ok(());
+            }
+            // Part 5 gives each RLE frame exactly one fragment, and every
+            // fragment goes through the decoder.
+            if codec == Codec::Rle && fragments.len() != n {
+                return Err(refuse(format!("{MISMATCH} (RLE needs one fragment per frame)")));
             }
             // One fragment per frame: check each frame asked for. Otherwise
             // the first fragment holds the first frame's header.
@@ -508,6 +571,36 @@ mod tests {
         assert!(check_codestream(&m, Codec::Jpeg2000, &jp2).is_err());
         // Garbage is refused, not trusted.
         assert!(check_codestream(&m, Codec::Jpeg2000, &[1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn rle_headers_must_describe_full_segments() {
+        let m = meta(4, 2, 1, 8, 1);
+        // One segment: a literal run of 8 bytes.
+        let frame = |count: u32, offset: u32, body: &[u8]| {
+            let mut d = vec![0u8; 64];
+            d[0..4].copy_from_slice(&count.to_le_bytes());
+            d[4..8].copy_from_slice(&offset.to_le_bytes());
+            d.extend_from_slice(body);
+            d
+        };
+        let good = [7u8, 1, 2, 3, 4, 5, 6, 7, 8];
+        assert!(check_codestream(&m, Codec::Rle, &frame(1, 64, &good)).is_ok());
+        // A replicate run counts for its full length: -7 gives 8 bytes.
+        assert!(check_codestream(&m, Codec::Rle, &frame(1, 64, &[0xF9, 9])).is_ok());
+        // What the fuzzer found: a segment that decodes short of the image.
+        let short = check_codestream(&m, Codec::Rle, &frame(1, 64, &[3, 1, 2, 3, 4])).unwrap_err();
+        assert!(short.to_string().contains("too short"), "{short}");
+        // A literal run cut off by the end of the data.
+        assert!(check_codestream(&m, Codec::Rle, &frame(1, 64, &[7, 1, 2])).is_err());
+        // A header cut short, a huge count, no segments, offsets outside.
+        assert!(check_codestream(&m, Codec::Rle, &[1, 0, 0]).is_err());
+        assert!(check_codestream(&m, Codec::Rle, &frame(u32::MAX, 64, &good)).is_err());
+        assert!(check_codestream(&m, Codec::Rle, &frame(0, 64, &good)).is_err());
+        assert!(check_codestream(&m, Codec::Rle, &frame(1, 5000, &good)).is_err());
+        // 12 bits allocated has no RLE form, and 16 needs two segments.
+        assert!(check_codestream(&meta(4, 2, 1, 12, 1), Codec::Rle, &frame(1, 64, &good)).is_err());
+        assert!(check_codestream(&meta(4, 2, 1, 16, 1), Codec::Rle, &frame(1, 64, &good)).is_err());
     }
 
     #[test]

@@ -95,6 +95,16 @@ pub fn decode_frame(path: &Path, frame_index: u32) -> Result<Frame> {
     decode_object_frame(&obj, frame_index)
 }
 
+/// Run a third-party decoder so that a panic costs one image rather than the
+/// thread decoding it. The guard turns away what is known to cause one; this
+/// is for what is not. Fuzz builds abort on any panic, so they still report it.
+pub(crate) fn contained<T>(decode: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)).unwrap_or_else(|_| {
+        tracing::warn!("a decoder panicked on this image");
+        Err(DicomError::Pixels("the decoder could not read this image".into()))
+    })
+}
+
 /// Decode one frame of an opened object (the fuzz targets come in here).
 pub fn decode_object_frame(obj: &dicom_object::DefaultDicomObject, frame_index: u32) -> Result<Frame> {
     let meta = {
@@ -110,9 +120,10 @@ pub fn decode_object_frame(obj: &dicom_object::DefaultDicomObject, frame_index: 
         return decode_jpeg_frame(obj, meta, frame_index);
     }
 
-    let decoded = obj
-        .decode_pixel_data_frame(frame_index)
-        .map_err(|e| DicomError::Pixels(error_chain(&e)))?;
+    let decoded = contained(|| {
+        obj.decode_pixel_data_frame(frame_index)
+            .map_err(|e| DicomError::Pixels(error_chain(&e)))
+    })?;
 
     let width = decoded.columns();
     let height = decoded.rows();
@@ -170,9 +181,7 @@ pub fn decode_all_frames(path: &Path) -> Result<Vec<Frame>> {
         return (0..frames).map(|k| decode_jpeg_frame(&obj, meta.clone(), k)).collect();
     }
 
-    let decoded = obj
-        .decode_pixel_data()
-        .map_err(|e| DicomError::Pixels(error_chain(&e)))?;
+    let decoded = contained(|| obj.decode_pixel_data().map_err(|e| DicomError::Pixels(error_chain(&e))))?;
     let width = decoded.columns();
     let height = decoded.rows();
     if width == 0 || height == 0 {
@@ -402,6 +411,12 @@ pub fn frame_to_rgb8(frame: &Frame, center: f32, width: f32, clut: &Clut) -> Vec
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_decoder_panic_costs_one_image() {
+        let r: crate::Result<()> = super::contained(|| panic!("a bug in a decoder"));
+        assert!(r.is_err());
+    }
+
     use super::*;
 
     fn synthetic_frame(values: Vec<f32>, w: u32, h: u32) -> Frame {
