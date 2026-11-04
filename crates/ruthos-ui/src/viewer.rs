@@ -421,19 +421,25 @@ pub fn snap_refresh(hz: f32) -> f32 {
         .unwrap_or_else(|| hz.round())
 }
 
-/// "1×", "0.5×", "0.25×".
+/// "1×", "0.5×", "0.25×", "0.33×".
 pub fn speed_label(s: f32) -> String {
-    format!("{}\u{d7}", if s == 1.0 { "1".to_string() } else { format!("{s}") })
+    let t = format!("{s:.2}");
+    let t = t.trim_end_matches('0').trim_end_matches('.');
+    format!("{t}\u{d7}")
 }
 
 /// The speeds offered when the file gives a frame rate, fastest first.
 pub const CINE_SPEEDS: [f32; 3] = [1.0, 0.5, 0.25];
 
-/// The fastest offered speed that shows every frame of a loop recorded at
-/// `rate` on a screen refreshing at `hz`; `None` when even the slowest
-/// skips frames.
+/// The fastest speed, in hundredths, that shows every frame of a loop
+/// recorded at `rate` on a screen refreshing at `hz`; `None` below the
+/// slider's slowest (0.05x).
 pub fn speed_for_every_frame(rate: f32, hz: f32) -> Option<f32> {
-    CINE_SPEEDS.into_iter().find(|s| rate * s <= hz * 1.02)
+    if rate <= hz * 1.02 {
+        return Some(1.0);
+    }
+    let s = ((hz / rate) * 100.0).floor() / 100.0;
+    (s >= 0.05).then_some(s)
 }
 
 impl Pane {
@@ -3285,6 +3291,7 @@ impl ViewerState {
         self.keyboard(ui, shared);
         self.draw_dial_indicator(ui, shared);
         self.draw_cine_banner(ui);
+        self.draw_status(ui);
 
         let dark = true;
         egui::Panel::top(("viewer-toolbar", self.id))
@@ -3502,15 +3509,24 @@ impl ViewerState {
                     .map(|s| s.display_name())
                     .unwrap_or_default();
                 let mut chosen = self.panes[self.active].series_idx;
-                egui::ComboBox::from_id_salt(("series-popup", self.id))
-                    .selected_text(crate::widgets::truncate(&current, 15))
-                    .width(138.0)
-                    .show_ui(ui, |ui| {
+                // A short button; the menu is as wide as the names need.
+                ui.menu_button(
+                    (
+                        egui::RichText::new(crate::widgets::truncate(&current, 11)).size(13.0),
+                        icons::rich(icons::CARET_DOWN, 11.0),
+                    ),
+                    |ui| {
                         for (i, s) in self.series.iter().enumerate() {
                             let label = format!("{}  ({} im)", s.display_name(), s.number_of_images);
-                            ui.selectable_value(&mut chosen, i, label);
+                            if menu_item(ui, label.as_str(), chosen == i).clicked() {
+                                chosen = i;
+                                ui.close();
+                            }
                         }
-                    });
+                    },
+                )
+                .response
+                .on_hover_text(current.clone());
                 if chosen != self.panes[self.active].series_idx {
                     self.select_series(shared, chosen);
                 }
@@ -3870,14 +3886,6 @@ impl ViewerState {
                 }
             }
             toolbar_separator(ui);
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if let Some((text, when)) = &self.status {
-                    if when.elapsed().as_secs_f32() < 3.0 {
-                        ui.label(egui::RichText::new(text).size(12.0).color(Color32::from_gray(210)));
-                    }
-                }
-            });
         });
     }
 
@@ -3896,45 +3904,81 @@ impl ViewerState {
             self.playing = !self.playing;
             self.last_tick = None;
         }
-        // The file's own rate plays at 1x, 0.5x or 0.25x; without one, a
-        // frames-a-second slider.
+        // One compact button; its menu is a vertical slider. A file
+        // with a frame rate is played at a fraction of it, otherwise at
+        // so many frames a second.
         let file_rate = self.active_file_rate();
+        let label = match file_rate {
+            Some(rate) => format!("{} \u{b7} {:.0} fps", speed_label(self.speed), rate * self.speed),
+            None => format!("{:.0} fps", self.fps),
+        };
         ui.vertical(|ui| {
-            ui.add_space(4.0);
-            match file_rate {
-                Some(rate) => {
-                    ui.horizontal(|ui| {
-                        for s in CINE_SPEEDS {
-                            if ui
-                                .add_enabled(can_play, egui::Button::selectable(self.speed == s, speed_label(s)))
-                                .on_hover_text(format!("{:.0} frames a second", rate * s))
-                                .clicked()
-                            {
-                                self.speed = s;
-                            }
-                        }
-                    });
-                    toolbar_caption(ui, &format!("Recorded at {:.0} fps", rate));
-                }
-                None => {
-                    // A clear track and fill on the dark toolbar.
-                    ui.scope(|ui| {
-                        let v = ui.visuals_mut();
-                        v.widgets.inactive.bg_fill = Color32::from_gray(120);
-                        v.widgets.hovered.bg_fill = Color32::from_gray(150);
-                        v.widgets.active.bg_fill = Color32::from_gray(170);
-                        v.selection.bg_fill = Color32::from_rgb(70, 140, 230);
-                        v.slider_trailing_fill = true;
-                        ui.add_enabled(
-                            can_play,
-                            egui::Slider::new(&mut self.fps, 1.0..=240.0)
-                                .show_value(false)
-                                .trailing_fill(true),
-                        );
-                    });
-                    toolbar_caption(ui, &format!("Speed {} fps", self.fps.round() as i32));
-                }
-            }
+            ui.add_space(2.0);
+            ui.add_enabled_ui(can_play, |ui| {
+                ui.menu_button(
+                    (
+                        egui::RichText::new(label).size(13.0),
+                        icons::rich(icons::CARET_DOWN, 11.0),
+                    ),
+                    |ui| {
+                        ui.set_min_width(150.0);
+                        ui.scope(|ui| {
+                            let v = ui.visuals_mut();
+                            v.widgets.inactive.bg_fill = Color32::from_gray(120);
+                            v.widgets.hovered.bg_fill = Color32::from_gray(150);
+                            v.widgets.active.bg_fill = Color32::from_gray(170);
+                            v.selection.bg_fill = Color32::from_rgb(70, 140, 230);
+                            v.slider_trailing_fill = true;
+                            ui.spacing_mut().slider_width = 180.0;
+                            ui.horizontal(|ui| match file_rate {
+                                Some(rate) => {
+                                    ui.add(
+                                        egui::Slider::new(&mut self.speed, 0.05..=1.0)
+                                            .vertical()
+                                            .logarithmic(true)
+                                            .show_value(false)
+                                            .trailing_fill(true),
+                                    );
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new(speed_label(self.speed)).strong().size(16.0));
+                                        ui.label(format!("{:.0} fps", rate * self.speed));
+                                        ui.add_space(6.0);
+                                        ui.label(
+                                            egui::RichText::new(format!("Recorded at\n{rate:.0} fps"))
+                                                .size(11.5)
+                                                .color(Color32::from_gray(150)),
+                                        );
+                                        if self.speed < 0.999 && ui.small_button("Real time").clicked() {
+                                            self.speed = 1.0;
+                                        }
+                                    });
+                                }
+                                None => {
+                                    ui.add(
+                                        egui::Slider::new(&mut self.fps, 1.0..=240.0)
+                                            .vertical()
+                                            .logarithmic(true)
+                                            .show_value(false)
+                                            .trailing_fill(true),
+                                    );
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!("{:.0} fps", self.fps)).strong().size(16.0),
+                                        );
+                                        ui.add_space(6.0);
+                                        ui.label(
+                                            egui::RichText::new("This series gives\nno frame rate")
+                                                .size(11.5)
+                                                .color(Color32::from_gray(150)),
+                                        );
+                                    });
+                                }
+                            });
+                        });
+                    },
+                );
+            });
+            toolbar_caption(ui, "Speed");
         });
     }
 
@@ -4118,6 +4162,50 @@ impl ViewerState {
         }
     }
 
+    /// The latest status message, briefly, on the image above its bottom
+    /// edge, rather than squeezed into the toolbar.
+    fn draw_status(&self, ui: &Ui) {
+        let Some((text, when)) = &self.status else { return };
+        let age = when.elapsed().as_secs_f32();
+        if age >= 3.0 {
+            return;
+        }
+        let Some(rect) = self.cell_rects.get(self.active) else {
+            return;
+        };
+        let fade = (1.0 - (age - 2.5).max(0.0) / 0.5).clamp(0.0, 1.0);
+        let painter = ui
+            .ctx()
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::unique(("ruthos-status", self.id)),
+            ))
+            .with_clip_rect(*rect);
+        let galley = painter.layout(
+            text.clone(),
+            egui::FontId::proportional(13.0),
+            Color32::WHITE,
+            rect.width() - 40.0,
+        );
+        let lift = if self.skipping.is_some() && self.playing {
+            44.0
+        } else {
+            0.0
+        };
+        let size = galley.size() + Vec2::new(16.0, 8.0);
+        let r = Rect::from_min_size(
+            Pos2::new(rect.center().x - size.x / 2.0, rect.bottom() - size.y - 54.0 - lift),
+            size,
+        );
+        painter.rect_filled(r, 5.0, Color32::from_black_alpha((190.0 * fade) as u8));
+        painter.galley(
+            r.min + Vec2::new(8.0, 4.0),
+            galley,
+            Color32::from_white_alpha((255.0 * fade) as u8),
+        );
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    }
+
     /// The banner on the image while cine skips frames: why, and what shows
     /// every frame. Part of the image area, not a pop-up.
     fn draw_cine_banner(&self, ui: &Ui) {
@@ -4134,9 +4222,11 @@ impl ViewerState {
         let advice = if has_file_rate {
             let recorded = rate / self.speed.max(0.01);
             match speed_for_every_frame(recorded, hz) {
-                Some(s) if s < self.speed => format!(" Choose {} to see every frame.", speed_label(s)),
+                Some(s) if s < self.speed => format!(" Set the speed to {} or slower to see every frame.", speed_label(s)),
                 Some(_) => String::new(),
-                None => " Even 0.25\u{d7} skips frames on this screen; step with the arrow keys or the dial to see each one.".into(),
+                None => {
+                    " Even the slowest speed skips frames on this screen; step with the arrow keys or the dial to see each one.".into()
+                }
             }
         } else {
             format!(" Set the speed to {hz:.0} fps or less to see every frame.")
@@ -5801,10 +5891,11 @@ mod cine_tests {
     #[test]
     fn the_speed_that_shows_every_frame() {
         assert_eq!(speed_for_every_frame(60.0, 60.0), Some(1.0));
-        assert_eq!(speed_for_every_frame(110.0, 60.0), Some(0.5));
-        assert_eq!(speed_for_every_frame(200.0, 60.0), Some(0.25));
-        assert_eq!(speed_for_every_frame(400.0, 60.0), None);
-        assert_eq!(speed_for_every_frame(200.0, 144.0), Some(0.5));
+        assert_eq!(speed_for_every_frame(110.0, 60.0), Some(0.54));
+        assert_eq!(speed_for_every_frame(200.0, 60.0), Some(0.3));
+        assert_eq!(speed_for_every_frame(2000.0, 60.0), None);
+        assert_eq!(speed_for_every_frame(200.0, 144.0), Some(0.72));
+        assert_eq!(speed_label(0.333), "0.33\u{d7}");
         assert_eq!(speed_label(0.25), "0.25\u{d7}");
         assert_eq!(speed_label(1.0), "1\u{d7}");
         assert_eq!(snap_refresh(118.7), 120.0);
