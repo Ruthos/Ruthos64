@@ -378,6 +378,57 @@ pub struct Pane {
     fit_pending: bool,
     window_initialised_for: Option<i64>,
     load_error: Option<String>,
+    /// The cine clock while playing: where and when playback started and at
+    /// what rate, and the position last shown.
+    cine: Option<CineClock>,
+}
+
+/// Cine playback by the clock: the position is the start plus elapsed time
+/// times the rate, so a loop keeps real time whatever the screen does,
+/// skipping frames when the screen refreshes more slowly than the loop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CineClock {
+    start: Instant,
+    from: usize,
+    rate: f32,
+    shown: usize,
+}
+
+/// Where a loop is after `elapsed` seconds at `rate` frames a second,
+/// starting at `from`, in a loop of `n`.
+pub fn cine_position(from: usize, elapsed: f32, rate: f32, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    let steps = (elapsed.max(0.0) * rate.max(0.0)).floor() as usize;
+    (from + steps) % n
+}
+
+/// A measured refresh rate, snapped to the usual display rate it is within
+/// 4 per cent of (timing jitter makes 60 Hz measure as 59.3 or 61.0).
+pub fn snap_refresh(hz: f32) -> f32 {
+    const RATES: [f32; 14] = [
+        24.0, 30.0, 48.0, 50.0, 60.0, 72.0, 75.0, 90.0, 100.0, 120.0, 144.0, 165.0, 240.0, 360.0,
+    ];
+    RATES
+        .into_iter()
+        .find(|r| (hz - r).abs() <= r * 0.04)
+        .unwrap_or_else(|| hz.round())
+}
+
+/// "1×", "0.5×", "0.25×".
+pub fn speed_label(s: f32) -> String {
+    format!("{}\u{d7}", if s == 1.0 { "1".to_string() } else { format!("{s}") })
+}
+
+/// The speeds offered when the file gives a frame rate, fastest first.
+pub const CINE_SPEEDS: [f32; 3] = [1.0, 0.5, 0.25];
+
+/// The fastest offered speed that shows every frame of a loop recorded at
+/// `rate` on a screen refreshing at `hz`; `None` when even the slowest
+/// skips frames.
+pub fn speed_for_every_frame(rate: f32, hz: f32) -> Option<f32> {
+    CINE_SPEEDS.into_iter().find(|s| rate * s <= hz * 1.02)
 }
 
 impl Pane {
@@ -394,6 +445,7 @@ impl Pane {
             fit_pending: true,
             window_initialised_for: None,
             load_error: None,
+            cine: None,
         }
     }
 
@@ -436,6 +488,46 @@ impl Pane {
         } else {
             self.image_idx = pos;
             self.frame_idx = 0;
+        }
+    }
+
+    /// What cine steps through: the frames of the current image when it is
+    /// a loop (which then repeats), otherwise the images of the series.
+    fn loop_len(&self) -> usize {
+        match self.image() {
+            Some(img) if img.number_of_frames > 1 => img.number_of_frames as usize,
+            _ => self.images.len(),
+        }
+    }
+
+    fn loop_pos(&self) -> usize {
+        match self.image() {
+            Some(img) if img.number_of_frames > 1 => self.frame_idx as usize,
+            _ => self.image_idx,
+        }
+    }
+
+    /// The frame shown at loop position `pos`.
+    fn key_at(&self, pos: usize) -> Option<FrameKey> {
+        match self.image() {
+            Some(img) if img.number_of_frames > 1 => Some(FrameKey {
+                image_id: img.id,
+                frame: pos as u32,
+            }),
+            _ => self.images.get(pos).map(|img| FrameKey {
+                image_id: img.id,
+                frame: 0,
+            }),
+        }
+    }
+
+    fn set_loop_pos(&mut self, pos: usize) {
+        match self.image() {
+            Some(img) if img.number_of_frames > 1 => self.frame_idx = pos as u32,
+            _ => {
+                self.image_idx = pos;
+                self.frame_idx = 0;
+            }
         }
     }
 }
@@ -523,8 +615,29 @@ pub struct ViewerState {
     undo: Vec<UndoEntry>,
 
     pub playing: bool,
+    /// Frames a second when the file gives no rate.
     pub fps: f32,
+    /// 1, 0.5 or 0.25 of the rate the file was recorded at.
+    pub speed: f32,
     last_tick: Option<Instant>,
+    /// The time between this window's frames, smoothed, while playing: the
+    /// screen's refresh as it actually happens.
+    frame_interval: f32,
+    last_frame_at: Option<Instant>,
+    /// Frames shown and skipped since `stats_since`.
+    cine_stats: (u32, u32, Option<Instant>),
+    /// When cine is skipping frames: the loop's rate, the screen's and the
+    /// share skipped, for the banner.
+    skipping: Option<(f32, f32, f32)>,
+    /// Frames a second each image was recorded at, once known.
+    file_rates: HashMap<i64, Option<f32>>,
+    /// While playing, how many positions ahead to decode: half a second.
+    cine_ahead: usize,
+    /// When the window opened, and whether the developer screenshot and
+    /// playback options have run.
+    opened_at: Instant,
+    dev_shot_done: bool,
+    dev_play_done: bool,
     /// A movie being written (the Movie button).
     movie: Option<MovieJob>,
     /// The dial's mode and the indicator (dial/mod.rs).
@@ -752,7 +865,17 @@ impl ViewerState {
             undo: Vec::new(),
             playing: false,
             fps: 10.0,
+            speed: 1.0,
             last_tick: None,
+            frame_interval: 1.0 / 60.0,
+            last_frame_at: None,
+            cine_stats: (0, 0, None),
+            skipping: None,
+            file_rates: HashMap::new(),
+            cine_ahead: 1,
+            opened_at: Instant::now(),
+            dev_shot_done: false,
+            dev_play_done: false,
             movie: None,
             dial: crate::dial::Dial::new(&shared.settings.lock().dial),
             dial_inbox: Vec::new(),
@@ -1374,6 +1497,42 @@ impl ViewerState {
 
     // ------------------------------------------------------------ the dial
 
+    /// Developer options: `RUTHOS_CINE_PLAY=1` starts cine once an image
+    /// is up, `RUTHOS_CINE_FPS=<n>` sets the rate for files without one,
+    /// `RUTHOS_CINE_SPEED=0.5` the speed, and
+    /// `RUTHOS_VIEWER_SCREENSHOT=<file.png>` saves this window as drawn
+    /// four seconds after it opened.
+    fn dev_options(&mut self, ui: &Ui) {
+        if !self.dev_play_done && self.current_key().is_some_and(|k| self.frames.contains_key(&k)) {
+            self.dev_play_done = true;
+            if let Some(f) = std::env::var("RUTHOS_CINE_FPS").ok().and_then(|v| v.parse().ok()) {
+                self.fps = f;
+            }
+            if let Some(s) = std::env::var("RUTHOS_CINE_SPEED").ok().and_then(|v| v.parse().ok()) {
+                self.speed = s;
+            }
+            if std::env::var_os("RUTHOS_CINE_PLAY").is_some() {
+                self.playing = true;
+            }
+        }
+        if !self.dev_shot_done && self.opened_at.elapsed() > std::time::Duration::from_secs(4) {
+            if let Some(path) = std::env::var_os("RUTHOS_VIEWER_SCREENSHOT") {
+                self.dev_shot_done = true;
+                ui.ctx().request_screenshot(move |img| {
+                    let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
+                    if let Some(png) = image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, rgba) {
+                        let _ = png.save(&path);
+                    }
+                });
+            } else {
+                self.dev_shot_done = true;
+            }
+        }
+        if !self.dev_shot_done {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
+
     /// What the dial can act on in the active cell.
     fn dial_context(&self) -> crate::dial::Context {
         // An image still loading counts as the series' other images do.
@@ -1510,23 +1669,6 @@ impl ViewerState {
         }
         if scripted {
             self.dial.shown = Some(now + std::time::Duration::from_secs(20));
-            // Developer option: `RUTHOS_VIEWER_SCREENSHOT=<file.png>` saves
-            // this window as drawn, a moment after the script.
-            if let Some(path) = std::env::var_os("RUTHOS_VIEWER_SCREENSHOT") {
-                let ctx = ui.ctx().clone();
-                let vid = self.viewport_id;
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(1500));
-                    let save = egui::ScreenshotCallback::new(move |img| {
-                        let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
-                        if let Some(png) = image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, rgba) {
-                            let _ = png.save(&path);
-                        }
-                    });
-                    ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Screenshot(save));
-                    ctx.request_repaint_of(vid);
-                });
-            }
         }
         ui.ctx().request_repaint();
     }
@@ -1719,6 +1861,8 @@ impl ViewerState {
         let Some(img) = self.current_image().cloned() else {
             return;
         };
+        // The movie plays at the rate cine shows: the file's times the speed.
+        let movie_rate = self.cine_rate(self.active);
         let p = &self.panes[self.active];
         let (loop_only, files): (bool, Vec<std::path::PathBuf>) = if img.number_of_frames > 1 {
             (true, vec![shared.resolve(&img.path)])
@@ -1755,7 +1899,7 @@ impl ViewerState {
             .cloned()
             .unwrap_or_else(ruthos_dicom::Clut::grayscale);
         let (center, width) = (p.view.window_center, p.view.window_width);
-        let fps = self.fps;
+        let fps = movie_rate;
         let progress = Arc::new(parking_lot::Mutex::new((0usize, 0usize)));
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (prog, stop, out) = (progress.clone(), cancel.clone(), path.clone());
@@ -2889,6 +3033,18 @@ impl ViewerState {
             .map(|i| i.number_of_frames.max(1) as usize)
             .sum::<usize>()
             .min(MAX_CACHED_FRAMES);
+        // A stack being played is kept whole, so each pass is not decoded again.
+        let stack = if self.playing {
+            self.panes
+                .iter()
+                .filter(|p| p.images.len() > 1)
+                .map(|p| p.images.len())
+                .sum::<usize>()
+                .min(MAX_CACHED_FRAMES)
+        } else {
+            0
+        };
+        let loop_frames = loop_frames.max(stack);
         (
             FRAME_CACHE.max(cells * 3 + 6).max(loop_frames + 8),
             GPU_CACHE.max(cells * 2).max(loop_frames + cells * 2),
@@ -2968,6 +3124,7 @@ impl ViewerState {
         crate::crash::debug_panic("viewer");
         self.pump_movie();
         self.dial_input(ui, shared);
+        self.dev_options(ui);
         let ctx = ui.ctx().clone();
         self.text_prompt_window(&ctx);
         self.roi_manager_window(&ctx);
@@ -3025,6 +3182,7 @@ impl ViewerState {
         self.tick_cine(ui);
         self.keyboard(ui, shared);
         self.draw_dial_indicator(ui, shared);
+        self.draw_cine_banner(ui);
 
         let dark = true;
         egui::Panel::top(("viewer-toolbar", self.id))
@@ -3304,6 +3462,8 @@ impl ViewerState {
                     self.set_tiling(shared, t);
                 }
             });
+            toolbar_separator(ui);
+            self.cine_controls(ui);
             toolbar_separator(ui);
 
             if ToolbarButton::new(icons::ANNOTATIONS, "Annotations")
@@ -3593,26 +3753,6 @@ impl ViewerState {
             }
             toolbar_separator(ui);
 
-            let can_play = self.panes[self.active].images.len() > 1
-                || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);
-            let (bitmap, label) = if self.playing {
-                (Bitmap::Pause, "Pause")
-            } else {
-                (Bitmap::Play, "Play")
-            };
-            if ToolbarButton::new(bitmap, label).enabled(can_play).show(ui).clicked() {
-                self.playing = !self.playing;
-                self.last_tick = None;
-            }
-            ui.vertical(|ui| {
-                ui.add_space(6.0);
-                ui.add_enabled(
-                    can_play,
-                    egui::Slider::new(&mut self.fps, 1.0..=120.0).show_value(false),
-                );
-                toolbar_caption(ui, &format!("Speed {} fps", self.fps.round() as i32));
-            });
-
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some((text, when)) = &self.status {
                     if when.elapsed().as_secs_f32() < 3.0 {
@@ -3620,6 +3760,52 @@ impl ViewerState {
                     }
                 }
             });
+        });
+    }
+
+    /// Play and the speed: early in the toolbar, so a narrow window never
+    /// hides them. The file's own rate plays at 1x, 0.5x or 0.25x; without
+    /// one, a frames-a-second slider.
+    fn cine_controls(&mut self, ui: &mut Ui) {
+        let can_play = self.panes[self.active].images.len() > 1
+            || self.current_image().map(|i| i.number_of_frames > 1).unwrap_or(false);
+        let (bitmap, label) = if self.playing {
+            (Bitmap::Pause, "Pause")
+        } else {
+            (Bitmap::Play, "Play")
+        };
+        if ToolbarButton::new(bitmap, label).enabled(can_play).show(ui).clicked() {
+            self.playing = !self.playing;
+            self.last_tick = None;
+        }
+        // The file's own rate plays at 1x, 0.5x or 0.25x; without one, a
+        // frames-a-second slider.
+        let file_rate = self.active_file_rate();
+        ui.vertical(|ui| {
+            ui.add_space(4.0);
+            match file_rate {
+                Some(rate) => {
+                    ui.horizontal(|ui| {
+                        for s in CINE_SPEEDS {
+                            if ui
+                                .add_enabled(can_play, egui::Button::selectable(self.speed == s, speed_label(s)))
+                                .on_hover_text(format!("{:.0} frames a second", rate * s))
+                                .clicked()
+                            {
+                                self.speed = s;
+                            }
+                        }
+                    });
+                    toolbar_caption(ui, &format!("Recorded at {:.0} fps", rate));
+                }
+                None => {
+                    ui.add_enabled(
+                        can_play,
+                        egui::Slider::new(&mut self.fps, 1.0..=240.0).show_value(false),
+                    );
+                    toolbar_caption(ui, &format!("Speed {} fps", self.fps.round() as i32));
+                }
+            }
         });
     }
 
@@ -3669,32 +3855,184 @@ impl ViewerState {
         }
     }
 
+    /// Frames a second image `image_id` was recorded at, from any of its
+    /// decoded frames' headers.
+    fn file_rate(&mut self, image_id: i64) -> Option<f32> {
+        if let Some(r) = self.file_rates.get(&image_id) {
+            return *r;
+        }
+        let rate = self.frames.iter().find(|(k, _)| k.image_id == image_id).map(|(_, f)| {
+            f.meta
+                .frame_time_ms
+                .filter(|ms| *ms > 0.0)
+                .map(|ms| (1000.0 / ms) as f32)
+        })?;
+        self.file_rates.insert(image_id, rate);
+        rate
+    }
+
+    /// The rate pane `k` plays at: the file's times the speed, or the
+    /// slider's when the file gives none.
+    fn cine_rate(&mut self, k: usize) -> f32 {
+        let image = self.panes[k].image().map(|i| i.id);
+        match image.and_then(|id| self.file_rate(id)) {
+            Some(r) => r * self.speed,
+            None => self.fps.max(0.1),
+        }
+    }
+
+    /// The active image's recorded rate, if its file gives one.
+    fn active_file_rate(&mut self) -> Option<f32> {
+        let id = self.current_image().map(|i| i.id)?;
+        self.file_rate(id)
+    }
+
     fn tick_cine(&mut self, ui: &mut Ui) {
+        let now = Instant::now();
         if !self.playing {
+            for p in &mut self.panes {
+                p.cine = None;
+            }
+            self.skipping = None;
+            self.cine_stats = (0, 0, None);
+            self.last_frame_at = None;
             return;
         }
-        let now = Instant::now();
-        let period = 1.0 / self.fps.max(1.0);
-        match self.last_tick {
-            None => self.last_tick = Some(now),
-            Some(t) if now.duration_since(t).as_secs_f32() >= period => {
-                if self.tiling.mode == TilingMode::Study && self.panes.len() > 1 {
-                    // Every unlocked loop on screen plays.
-                    for p in &mut self.panes {
-                        let n = p.positions();
-                        if !p.locked && n > 1 {
-                            p.set_position((p.position() + 1) % n);
-                        }
-                    }
-                } else if !self.active_locked() {
-                    self.step_image(1);
-                }
-                self.last_tick = Some(now);
+        // How often this window is actually drawn.
+        if let Some(t) = self.last_frame_at {
+            let dt = now.duration_since(t).as_secs_f32();
+            if dt > 0.0 && dt < 0.25 {
+                self.frame_interval = self.frame_interval * 0.9 + dt * 0.1;
             }
-            _ => {}
         }
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_secs_f32(period / 2.0));
+        self.last_frame_at = Some(now);
+
+        // A tiled series steps its block of cells, as before.
+        if self.tiled_series() {
+            let period = 1.0 / self.fps.max(1.0);
+            match self.last_tick {
+                Some(t) if now.duration_since(t).as_secs_f32() < period => {}
+                _ => {
+                    if !self.active_locked() && self.last_tick.is_some() {
+                        self.step_block(1);
+                    }
+                    self.last_tick = Some(now);
+                }
+            }
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f32(period / 2.0));
+            return;
+        }
+
+        let targets: Vec<usize> = if self.tiling.mode == TilingMode::Study && self.panes.len() > 1 {
+            (0..self.panes.len()).collect()
+        } else {
+            vec![self.active]
+        };
+        let mut fastest = 0.0f32;
+        for k in targets {
+            if self.panes[k].locked || self.panes[k].loop_len() < 2 {
+                self.panes[k].cine = None;
+                continue;
+            }
+            let rate = self.cine_rate(k);
+            fastest = fastest.max(rate);
+            let p = &mut self.panes[k];
+            let n = p.loop_len();
+            let pos = p.loop_pos();
+            // Start (or restart) the clock: at the first tick, on a new rate,
+            // or when the position was moved by hand.
+            let clock = match p.cine {
+                Some(c) if c.rate == rate && c.shown == pos => c,
+                _ => CineClock {
+                    start: now,
+                    from: pos,
+                    rate,
+                    shown: pos,
+                },
+            };
+            let next = cine_position(clock.from, now.duration_since(clock.start).as_secs_f32(), rate, n);
+            let advance = (next + n - pos) % n;
+            // A frame still decoding is not shown blank: the cell keeps its
+            // frame and the clock runs on, so real time is kept.
+            let ready = p.key_at(next).is_some_and(|k| self.frames.contains_key(&k));
+            let shown = if advance > 0 && ready {
+                p.set_loop_pos(next);
+                self.cine_stats.0 += 1;
+                self.cine_stats.1 += advance as u32 - 1;
+                next
+            } else {
+                pos
+            };
+            p.cine = Some(CineClock { shown, ..clock });
+        }
+
+        self.cine_ahead = ((fastest * 0.5).ceil() as usize).clamp(1, 64);
+
+        // Once a second: is the screen keeping up?
+        let since = *self.cine_stats.2.get_or_insert(now);
+        if now.duration_since(since).as_secs_f32() >= 1.0 {
+            let (shown, skipped, _) = self.cine_stats;
+            let hz = snap_refresh(1.0 / self.frame_interval.max(1e-3));
+            let share = skipped as f32 / (shown + skipped).max(1) as f32;
+            self.skipping = (share > 0.05).then_some((fastest, hz, share));
+            self.cine_stats = (0, 0, Some(now));
+        }
+
+        // Fast loops ask for every screen frame; slow ones just in time.
+        if fastest > 20.0 {
+            ui.ctx().request_repaint();
+        } else {
+            let period = 1.0 / fastest.max(0.5);
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f32(period / 2.0));
+        }
+    }
+
+    /// The banner on the image while cine skips frames: why, and what shows
+    /// every frame. Part of the image area, not a pop-up.
+    fn draw_cine_banner(&self, ui: &Ui) {
+        let Some((rate, hz, share)) = self.skipping.filter(|_| self.playing) else {
+            return;
+        };
+        let Some(rect) = self.cell_rects.get(self.active) else {
+            return;
+        };
+        let has_file_rate = self
+            .current_image()
+            .and_then(|i| self.file_rates.get(&i.id).copied().flatten())
+            .is_some();
+        let advice = if has_file_rate {
+            let recorded = rate / self.speed.max(0.01);
+            match speed_for_every_frame(recorded, hz) {
+                Some(s) if s < self.speed => format!(" Choose {} to see every frame.", speed_label(s)),
+                Some(_) => String::new(),
+                None => " Even 0.25\u{d7} skips frames on this screen; step with the arrow keys or the dial to see each one.".into(),
+            }
+        } else {
+            format!(" Set the speed to {hz:.0} fps or less to see every frame.")
+        };
+        let text = format!(
+            "Playing at {:.0} frames a second on a screen that shows {:.0}: about {:.0}% of frames are skipped to keep real time.{advice}",
+            rate,
+            hz,
+            share * 100.0
+        );
+        let painter = ui
+            .ctx()
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::unique(("ruthos-cine-banner", self.id)),
+            ))
+            .with_clip_rect(*rect);
+        let font = egui::FontId::proportional(13.0);
+        let galley = painter.layout(text, font, Color32::from_rgb(40, 30, 0), rect.width() - 24.0);
+        let band = Rect::from_min_size(
+            Pos2::new(rect.left(), rect.bottom() - galley.size().y - 12.0),
+            Vec2::new(rect.width(), galley.size().y + 12.0),
+        );
+        painter.rect_filled(band, 0.0, Color32::from_rgba_unmultiplied(250, 205, 90, 235));
+        painter.galley(band.min + Vec2::new(12.0, 6.0), galley, Color32::from_rgb(40, 30, 0));
     }
 
     fn keyboard(&mut self, ui: &mut Ui, shared: &Shared) {
@@ -4091,6 +4429,13 @@ impl ViewerState {
                         self.ensure_requested(shared, &p.images, next, 0);
                         self.ensure_requested(shared, &p.images, prev, 0);
                     }
+                    // Playing a stack: half a second of images ahead.
+                    if self.playing && p.images.len() > 1 && p.image().is_some_and(|i| i.number_of_frames <= 1) {
+                        let at = p.image_idx;
+                        for k in 1..=self.cine_ahead {
+                            self.ensure_requested(shared, &p.images, (at + k) % p.images.len(), 0);
+                        }
+                    }
                 }
             }
         }
@@ -4135,7 +4480,7 @@ impl ViewerState {
             // Cine plays at the rate the file was recorded at.
             if let Some(ms) = frame.meta.frame_time_ms.filter(|ms| *ms > 0.0) {
                 if active {
-                    self.fps = (1000.0 / ms as f32).clamp(1.0, 120.0);
+                    self.fps = (1000.0 / ms as f32).clamp(1.0, 240.0);
                 }
             }
         }
@@ -5305,6 +5650,37 @@ fn draft_kind(tool: Tool, a: Vec2, b: Vec2) -> Option<RoiKind> {
 #[allow(dead_code)]
 fn rect_from_points(a: Pos2, b: Pos2) -> Rect {
     Rect::from_two_pos(a, b)
+}
+
+#[cfg(test)]
+mod cine_tests {
+    use super::*;
+
+    #[test]
+    fn the_clock_keeps_real_time_by_skipping() {
+        // 120 fps for 1/60 s moves two frames: one is skipped on a 60 Hz screen.
+        assert_eq!(cine_position(0, 1.0 / 60.0 + 1e-4, 120.0, 64), 2);
+        // A second at 30 fps is 30 frames, wrapping round a 25-frame loop.
+        assert_eq!(cine_position(0, 1.0, 30.0, 25), 5);
+        assert_eq!(cine_position(10, 0.0, 30.0, 25), 10);
+        assert_eq!(cine_position(3, 1.0, 30.0, 0), 0);
+    }
+
+    #[test]
+    fn the_speed_that_shows_every_frame() {
+        assert_eq!(speed_for_every_frame(60.0, 60.0), Some(1.0));
+        assert_eq!(speed_for_every_frame(110.0, 60.0), Some(0.5));
+        assert_eq!(speed_for_every_frame(200.0, 60.0), Some(0.25));
+        assert_eq!(speed_for_every_frame(400.0, 60.0), None);
+        assert_eq!(speed_for_every_frame(200.0, 144.0), Some(0.5));
+        assert_eq!(speed_label(0.25), "0.25\u{d7}");
+        assert_eq!(speed_label(1.0), "1\u{d7}");
+        assert_eq!(snap_refresh(118.7), 120.0);
+        assert_eq!(snap_refresh(59.2), 60.0);
+        assert_eq!(snap_refresh(143.0), 144.0);
+        assert_eq!(snap_refresh(87.3), 90.0);
+        assert_eq!(snap_refresh(80.4), 80.0);
+    }
 }
 
 #[cfg(test)]
