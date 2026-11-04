@@ -10,6 +10,23 @@ use std::ffi::CStr;
 
 use crate::{DicomError, Result};
 
+#[cfg(all(feature = "fuzz-canary", not(fuzzing)))]
+compile_error!("fuzz-canary is a planted memory bug: it exists only in fuzz builds");
+
+/// The bytes libjpeg-turbo reads. With the canary, a copy too short for the
+/// length it is told, so the decoder runs off the end of the allocation inside
+/// instrumented C. The nightly fuzz job fails unless AddressSanitizer reports
+/// that, which proves the harness reaches the codec and the codec is watched.
+#[cfg(feature = "fuzz-canary")]
+fn scan_bytes(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    data[..data.len() / 2].to_vec().into()
+}
+
+#[cfg(not(feature = "fuzz-canary"))]
+fn scan_bytes(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    data.into()
+}
+
 /// Decoded samples at their native precision.
 #[derive(Debug, Clone)]
 pub enum JpegSamples {
@@ -123,6 +140,7 @@ pub fn decode(data: &[u8]) -> Result<JpegImage> {
 
 fn decode_inner(data: &[u8]) -> Result<JpegImage> {
     use turbojpeg_sys as tj;
+    let scan = scan_bytes(data);
     // SAFETY: plain FFI into libjpeg-turbo with buffers we own and sizes we
     // compute from the header the library itself reports.
     unsafe {
@@ -160,7 +178,7 @@ fn decode_inner(data: &[u8]) -> Result<JpegImage> {
                 let mut buf = crate::guard::try_zeroed::<u8>(n)?;
                 if tj::tj3Decompress8(
                     handle.0,
-                    data.as_ptr(),
+                    scan.as_ptr(),
                     data.len() as _,
                     buf.as_mut_ptr(),
                     0,

@@ -8,6 +8,14 @@ authors.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+# A planted out-of-bounds read, proving the fuzzer reaches the C decoders
+# (src/jpeg.rs). Refuses to compile outside a fuzz build.
+fuzz-canary = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
 [dependencies]
 dicom-core = { workspace = true }
 dicom-object = { workspace = true }

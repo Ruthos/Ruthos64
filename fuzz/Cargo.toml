@@ -18,6 +18,12 @@ libfuzzer-sys = "0.4"
 serde_json = "1"
 ruthos-dicom = { path = "../crates/ruthos-dicom" }
 ruthos-core = { path = "../crates/ruthos-core" }
+ruthos-session = { path = "../crates/ruthos-session" }
+chrono = "0.4"
+
+[features]
+# The nightly job's proof that the C codecs are reached and watched.
+canary = ["ruthos-dicom/fuzz-canary"]
 
 # Not part of the Ruthos workspace.
 [workspace]
@@ -64,6 +70,13 @@ bench = false
 [[bin]]
 name = "sidecar"
 path = "fuzz_targets/sidecar.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "profile_and_link"
+path = "fuzz_targets/profile_and_link.rs"
 test = false
 doc = false
 bench = false

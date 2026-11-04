@@ -89,7 +89,7 @@ jobs:
           SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && '1800' || inputs.seconds || '60' }}
         run: |
           failed=""
-          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar; do
+          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar profile_and_link; do
             dict=""
             case $t in
               open_file|decode_frame|anonymise) dict="-dict=dict/dicom.dict" ;;
@@ -135,7 +135,7 @@ jobs:
         run: |
           set -e
           cd fuzz
-          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar; do
+          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar profile_and_link; do
             mkdir -p /tmp/min/$t
             cargo fuzz run -O $t /tmp/min/$t corpus/$t -- -merge=1 || true
           done
@@ -145,3 +145,46 @@ jobs:
           git add -A
           git -c user.name=ruthos-fuzz -c user.email=ruthos-fuzz@users.noreply.github.com commit -qm "Minimised fuzz corpus $(date -u +%F)"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:fuzz-corpus
+
+  # The proof that a clean night means something: a planted out-of-bounds
+  # read in the JPEG path (crates/ruthos-dicom/src/jpeg.rs, feature
+  # fuzz-canary) must be found inside libjpeg-turbo. The bug is ours and its
+  # input is one of the samples, so its crash file is thrown away.
+  canary:
+    name: Canary (planted bug is found in the C decoder)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev llvm nasm cmake
+          cargo install cargo-fuzz --locked
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Seed corpus
+        run: python3 fuzz/seed.py
+      - name: decode_frame finds the planted read
+        working-directory: fuzz
+        run: |
+          if cargo fuzz run -O --debug-assertions --features canary decode_frame corpus/decode_frame -- \
+              -max_total_time=900 -rss_limit_mb=4096 -timeout=30 > /tmp/canary.log 2>&1; then
+            tail -20 /tmp/canary.log
+            echo "::error::the planted out-of-bounds read was not found"; exit 1
+          fi
+          grep -E "ERROR: AddressSanitizer|SUMMARY" /tmp/canary.log | head
+          if ! grep -q "heap-buffer-overflow" /tmp/canary.log; then
+            tail -40 /tmp/canary.log
+            echo "::error::the run stopped, but not on the planted read"; exit 1
+          fi
+          # Inside the instrumented C library, not somewhere in Rust.
+          if ! grep -qE "#[0-9]+ .* in [a-z_0-9]+ .*/jd[a-z0-9]+\.c" /tmp/canary.log; then
+            grep -E "^ +#[0-9]+ " /tmp/canary.log | head -20
+            echo "::error::the read was not reported from libjpeg-turbo's C code"; exit 1
+          fi
+          echo "The planted read was found inside libjpeg-turbo."
+          rm -rf artifacts
