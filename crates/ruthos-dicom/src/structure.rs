@@ -12,14 +12,16 @@
 //! which gives each length before its value is read, and the transfer syntax
 //! and its adapter are handled as `dicom-object` handles them. Only the file
 //! meta group is read here, because the parser's reader for it allocates, and
-//! that loop follows `FileMetaTable::read_from`. Values are seeked past, so a
-//! large file costs a few hundred small reads.
+//! that loop follows `FileMetaTable::read_from`. The one rule added is `unit`:
+//! the lazy reader skips what the parser would decode, and the decoder has a
+//! quirk skipping cannot show. Values are seeked past, so a large file costs a
+//! few hundred small reads.
 
 use std::cell::Cell;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::rc::Rc;
 
-use dicom_core::Tag;
+use dicom_core::{Tag, VR};
 use dicom_encoding::transfer_syntax::{Codec, TransferSyntax, TransferSyntaxIndex};
 use dicom_parser::dataset::lazy_read::LazyDataSetReader;
 use dicom_parser::dataset::LazyDataToken;
@@ -166,6 +168,18 @@ impl<R: Seek> Seek for Skipper<R> {
     }
 }
 
+/// The size of one value of a fixed-size VR. The parser reads whole values
+/// and leaves any remainder unread while counting it as read, which puts it
+/// out of step with the file, so a length must be a whole number of them.
+fn unit(vr: VR) -> u32 {
+    match vr {
+        VR::US | VR::SS | VR::OW => 2,
+        VR::AT | VR::UL | VR::SL | VR::OL | VR::FL | VR::OF => 4,
+        VR::FD | VR::OD | VR::SV | VR::UV | VR::OV => 8,
+        _ => 1,
+    }
+}
+
 /// A defined length that cannot fit in the file, whatever position it is at.
 fn beyond(len: u32, total: u64) -> bool {
     len != UNDEFINED && len as u64 > total
@@ -199,7 +213,12 @@ fn walk<R: Read + Seek>(src: &mut R, ts: &TransferSyntax, total: u64) -> Result<
                 depth = depth.saturating_sub(1);
                 continue;
             }
-            LazyDataToken::LazyValue { header, decoder } => (decoder, header.len.0),
+            LazyDataToken::LazyValue { header, decoder } => {
+                if header.len.0 != UNDEFINED && header.len.0 % unit(header.vr) != 0 {
+                    return Err(damaged());
+                }
+                (decoder, header.len.0)
+            }
             LazyDataToken::LazyItemValue { len, decoder } => (decoder, len),
             _ => continue,
         };
