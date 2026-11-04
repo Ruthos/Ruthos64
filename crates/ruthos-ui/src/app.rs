@@ -101,6 +101,12 @@ impl RuthosApp {
             renderer
                 .callback_resources
                 .insert(ImageRenderer::new(&render_state.device, render_state.target_format));
+            renderer
+                .callback_resources
+                .insert(ruthos_render::volume3d::VolumeRenderer::new(
+                    &render_state.device,
+                    render_state.target_format,
+                ));
         }
 
         let shared = Shared::new(db.clone(), paths.clone(), settings.clone(), render_state);
@@ -633,7 +639,8 @@ impl eframe::App for RuthosApp {
                 ViewportBuilder::default()
                     .with_title(title)
                     .with_inner_size([1500.0, 640.0])
-                    .with_min_inner_size([800.0, 360.0]),
+                    // Wide enough for the whole toolbar, cut buttons included.
+                    .with_min_inner_size([1320.0, 420.0]),
                 move |ui, _class| {
                     if let Err(msg) = crate::crash::guarded(|| m.lock().show(ui, &shared)) {
                         m.lock().close_requested = true;

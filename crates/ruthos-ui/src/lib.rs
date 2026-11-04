@@ -25,6 +25,9 @@ pub mod query;
 pub mod report;
 pub mod roi;
 pub mod routing;
+pub mod segments;
+#[cfg(feature = "ai")]
+pub mod segments_ai;
 pub mod session;
 pub mod shared;
 pub mod theme;

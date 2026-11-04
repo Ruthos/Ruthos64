@@ -1,0 +1,26 @@
+[package]
+name = "ruthos-segment"
+description = "Segments: label maps, classical tools, surfaces and mesh export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+rayon = { workspace = true }
+ruthos-core = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "directml", "api-24"], optional = true }
+reqwest = { workspace = true, features = ["blocking"], optional = true }
+sha2 = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[features]
+# The promptable segmentation model. Without it no ONNX Runtime is built in and
+# the tool is absent from the interface.
+ai = ["dep:ort", "dep:reqwest", "dep:sha2", "dep:zip", "dep:serde_json"]

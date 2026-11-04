@@ -539,7 +539,11 @@ impl BrowserState {
                         .fill(Color32::from_rgb(230, 232, 236))
                         .inner_margin(egui::Margin::same(8)),
                 )
-                .show(ui, |ui| self.source_list(ui, shared));
+                .show(ui, |ui| {
+                    // Albums and sources can outgrow the window, and Preferences
+                    // is at the bottom of them.
+                    egui::ScrollArea::vertical().show(ui, |ui| self.source_list(ui, shared));
+                });
         }
 
         egui::CentralPanel::default()

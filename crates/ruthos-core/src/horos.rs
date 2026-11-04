@@ -702,7 +702,7 @@ pub fn migrate(
                 return Outcome::Skipped;
             }
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if n % 25 == 0 || n == total {
+            if n.is_multiple_of(25) || n == total {
                 progress(n, total, &format!("image {n} of {total}"));
             }
             let Some(file) = &img.file else {

@@ -8,6 +8,10 @@ authors.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+# The promptable segmentation model (ruthos-segment/ai).
+ai = ["ruthos-segment/ai"]
+
 [dependencies]
 egui = { workspace = true }
 eframe = { workspace = true }
@@ -24,7 +28,9 @@ image = { workspace = true }
 ruthos-core = { workspace = true }
 ruthos-dicom = { workspace = true }
 ruthos-net = { workspace = true }
+rayon = { workspace = true }
 ruthos-render = { workspace = true }
+ruthos-segment = { workspace = true }
 ruthos-session = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

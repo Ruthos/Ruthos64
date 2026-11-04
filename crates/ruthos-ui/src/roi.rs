@@ -202,7 +202,7 @@ impl BrushMask {
 
     pub fn from_points(points: &[Vec2]) -> Self {
         let mut m = BrushMask::default();
-        for pair in points.chunks_exact(2) {
+        for pair in points.as_chunks::<2>().0 {
             let y = pair[0].y.round() as i32;
             let (a, b) = (pair[0].x.round() as i32, pair[1].x.round() as i32);
             if b > a {

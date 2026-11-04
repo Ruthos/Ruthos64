@@ -5,24 +5,26 @@ members = [
     "crates/ruthos-dicom",
     "crates/ruthos-net",
     "crates/ruthos-render",
+    "crates/ruthos-segment",
     "crates/ruthos-session",
     "crates/ruthos-ui",
     "crates/ruthos",
 ]
 
 [workspace.package]
-version = "0.1.5-alpha"
+version = "0.1.6-alpha"
 edition = "2021"
 license = "LGPL-3.0-only"
 repository = "https://github.com/Ruthos/Ruthos64"
 authors = ["The Ruthos contributors"]
-rust-version = "1.85"
+rust-version = "1.92"
 
 [workspace.dependencies]
 ruthos-core = { path = "crates/ruthos-core" }
 ruthos-dicom = { path = "crates/ruthos-dicom" }
 ruthos-net = { path = "crates/ruthos-net" }
 ruthos-render = { path = "crates/ruthos-render" }
+ruthos-segment = { path = "crates/ruthos-segment" }
 ruthos-session = { path = "crates/ruthos-session" }
 ruthos-ui = { path = "crates/ruthos-ui" }
 

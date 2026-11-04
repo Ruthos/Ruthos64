@@ -9,6 +9,7 @@
 
 pub mod gpu;
 pub mod view;
+pub mod volume3d;
 
 pub use gpu::{GpuImage, ImageCallback, ImageRenderer, Interpolation};
 pub use view::{ViewState, ViewTransform};

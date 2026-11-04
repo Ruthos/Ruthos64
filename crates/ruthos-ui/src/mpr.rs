@@ -28,6 +28,12 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, FontId, Key, Pos2, Rect, Sense, Stroke, Ui, Vec2, ViewportId};
 use parking_lot::Mutex;
+use rayon::prelude::*;
+use ruthos_render::volume3d::{
+    Camera, GpuVolume, Placement, RenderMode, TransferFunction, VolumeCallback, SEGMENT_WIDTH,
+};
+use ruthos_segment::tools::{flood, Outline};
+use ruthos_segment::{Field, Grid};
 
 use ruthos_core::mpr_export::{save_planes, stack, MprSaveResult, SavedPlane};
 use ruthos_core::volume::{
@@ -37,9 +43,14 @@ use ruthos_core::{SeriesRow, StudyRow};
 use ruthos_dicom::{Clut, Frame};
 use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTransform};
 
+use crate::icons::{self, Bitmap};
 use crate::pacs::Task;
 use crate::roi::{roi_color, Roi, RoiKind};
+use crate::segments::SegmentPanel;
 use crate::shared::Shared;
+use crate::widgets::{
+    menu_heading, menu_item, menu_item_enabled, tool_menu_row, toolbar_caption, toolbar_separator, Icon, ToolbarButton,
+};
 
 /// The colour of each plane's line, as Horos draws them; the fourth is the
 /// original slice.
@@ -90,6 +101,22 @@ impl MprTool {
         MprTool::Point,
         MprTool::Text,
     ];
+
+    fn icon(self) -> Icon {
+        match self {
+            MprTool::Crosshair => Icon::Glyph(icons::TOOL_POINT),
+            MprTool::Window => Icon::Bitmap(Bitmap::Wlww),
+            MprTool::Pan => Icon::Bitmap(Bitmap::Move),
+            MprTool::Zoom => Icon::Bitmap(Bitmap::Zoom),
+            MprTool::Length => Icon::Bitmap(Bitmap::Length),
+            MprTool::Angle => Icon::Bitmap(Bitmap::Angle),
+            MprTool::Rectangle => Icon::Bitmap(Bitmap::Rectangle),
+            MprTool::Oval => Icon::Bitmap(Bitmap::Oval),
+            MprTool::Arrow => Icon::Bitmap(Bitmap::Arrow),
+            MprTool::Point => Icon::Bitmap(Bitmap::Point),
+            MprTool::Text => Icon::Bitmap(Bitmap::Text),
+        }
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -147,6 +174,9 @@ struct PaneView {
     frame: Option<Arc<Frame>>,
     plane: Option<Plane>,
     gpu: Option<Arc<GpuImage>>,
+    /// Segments over this plane.
+    overlay: Option<egui::TextureHandle>,
+    overlay_signature: String,
 }
 
 /// What a drag in a pane is doing.
@@ -252,6 +282,591 @@ pub struct MprState {
     active: usize,
     /// Frames drawn since the volume arrived, for the screenshot option.
     frames_shown: u32,
+    /// The 3D pane, in the fourth place of the 2x2 layout.
+    three_d: Option<View3d>,
+    segments: SegmentPanel,
+}
+
+/// What the left button does in the 3D pane. The middle button always moves
+/// and the right always zooms, as in the 2D viewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tool3d {
+    Rotate,
+    Window,
+    Move,
+    Zoom,
+    /// Build a box, then cut inside or outside it.
+    CutBox,
+    /// Build an outline from clicks or a drag, then cut through the depth.
+    CutPath,
+    /// Remove everything connected to the point clicked.
+    RemovePiece,
+}
+
+impl Tool3d {
+    const VIEW: [Tool3d; 4] = [Tool3d::Rotate, Tool3d::Window, Tool3d::Move, Tool3d::Zoom];
+    const CUT: [Tool3d; 3] = [Tool3d::CutBox, Tool3d::CutPath, Tool3d::RemovePiece];
+
+    fn icon(self) -> Icon {
+        match self {
+            Tool3d::Rotate => Icon::Glyph(icons::TOOL_ROTATE),
+            Tool3d::Window => Icon::Bitmap(Bitmap::Wlww),
+            Tool3d::Move => Icon::Bitmap(Bitmap::Move),
+            Tool3d::Zoom => Icon::Bitmap(Bitmap::Zoom),
+            Tool3d::CutBox => Icon::Glyph(icons::THREE_D),
+            Tool3d::CutPath => Icon::Bitmap(Bitmap::Pencil),
+            Tool3d::RemovePiece => Icon::Glyph(icons::TRASH),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Tool3d::Rotate => "Rotate",
+            Tool3d::Window => "Window",
+            Tool3d::Move => "Move",
+            Tool3d::Zoom => "Zoom",
+            Tool3d::CutBox => "Cut box",
+            Tool3d::CutPath => "Cut path",
+            Tool3d::RemovePiece => "Remove piece",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Tool3d::Rotate => "Drag to turn the volume",
+            Tool3d::Window => "Drag across for contrast, up and down for level",
+            Tool3d::Move => "Drag to move the view",
+            Tool3d::Zoom => "Drag up and down to zoom",
+            Tool3d::CutBox => {
+                "Drag the handles to size a box, turning the view to check it, then choose Cut inside or Cut outside"
+            }
+            Tool3d::CutPath => {
+                "Click points or drag to draw, drag a point to move it, then choose Cut inside or Cut outside"
+            }
+            Tool3d::RemovePiece => "Click the table: everything connected to that point goes",
+        }
+    }
+}
+
+/// A toolbar menu: an icon and caret over a caption, as in the viewer.
+fn menu_with_caption(ui: &mut Ui, icon: Icon, caption: &str, add: impl FnOnce(&mut Ui)) {
+    ui.vertical(|ui| {
+        ui.add_space(2.0);
+        let caret = icons::rich(icons::CARET_DOWN, 11.0);
+        let gap = egui::RichText::new(" ").size(13.0);
+        match icon {
+            Icon::Glyph(g) => ui.menu_button((icons::rich(g, 18.0), gap, caret), add),
+            Icon::Bitmap(b) => ui.menu_button((icons::image(ui.ctx(), b, 18.0), gap, caret), add),
+        };
+        toolbar_caption(ui, caption);
+    });
+}
+
+/// A box along the volume's axes, in voxels, built before it cuts anything.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CutBox {
+    low: V3,
+    high: V3,
+}
+
+impl CutBox {
+    /// The whole volume: the user brings the faces in.
+    fn around(dims: [usize; 3]) -> Self {
+        Self {
+            low: [-0.5; 3],
+            high: std::array::from_fn(|a| dims[a] as f64 - 0.5),
+        }
+    }
+
+    fn contains(&self, voxel: [usize; 3]) -> bool {
+        (0..3).all(|a| (self.low[a]..=self.high[a]).contains(&(voxel[a] as f64)))
+    }
+
+    fn corner(&self, n: usize) -> V3 {
+        std::array::from_fn(|a| if n >> a & 1 == 1 { self.high[a] } else { self.low[a] })
+    }
+
+    /// The middle of a face.
+    fn face(&self, axis: usize, high: bool) -> V3 {
+        let mut c: V3 = std::array::from_fn(|a| (self.low[a] + self.high[a]) / 2.0);
+        c[axis] = if high { self.high[axis] } else { self.low[axis] };
+        c
+    }
+
+    /// Move a face by some voxels, keeping the box in the volume and at least
+    /// one voxel thick.
+    fn move_face(&mut self, axis: usize, high: bool, by: f64, dims: [usize; 3]) {
+        if high {
+            self.high[axis] = (self.high[axis] + by).clamp(self.low[axis] + 1.0, dims[axis] as f64 - 0.5);
+        } else {
+            self.low[axis] = (self.low[axis] + by).clamp(-0.5, self.high[axis] - 1.0);
+        }
+    }
+}
+
+/// The twelve edges of a box, by corner.
+const BOX_EDGES: [(usize, usize); 12] = [
+    (0, 1),
+    (2, 3),
+    (4, 5),
+    (6, 7),
+    (0, 2),
+    (1, 3),
+    (4, 6),
+    (5, 7),
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7),
+];
+
+/// How far along an axis a drag on screen goes, given the screen distance one
+/// unit of that axis covers. Nothing when the axis points at the viewer.
+fn along_axis(drag: Vec2, unit: Vec2) -> f64 {
+    let square = unit.length_sq();
+    if square < 1e-3 {
+        return 0.0;
+    }
+    (drag.dot(unit) / square) as f64
+}
+
+/// An outline built on the view, cut straight through the depth from the
+/// direction it was started in, however the view has turned since.
+#[derive(Debug, Clone, PartialEq)]
+struct CutPath {
+    points: Vec<V3>,
+    /// The view it extrudes along, drawn back so the points stay in frame.
+    camera: Camera,
+    aspect: f64,
+}
+
+/// What a press took hold of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Grabbed {
+    Face(usize, bool),
+    Point(usize),
+}
+
+/// How close a press must be to a handle, in screen points.
+const HANDLE_REACH: f32 = 12.0;
+
+/// The 3D pane. The slices stay in charge: it sits beside them, and every
+/// view of it is a derived picture.
+struct View3d {
+    gpu: Arc<GpuVolume>,
+    placement: Placement,
+    camera: Camera,
+    presets: Vec<TransferFunction>,
+    preset: usize,
+    mode: RenderMode,
+    baked: Arc<Vec<u8>>,
+    segments: Arc<Vec<u8>>,
+    /// When the user last moved the view: rendering refines after it.
+    moved: Option<std::time::Instant>,
+    tool: Tool3d,
+    /// The window dragged onto the preset: a shift in values and a stretch.
+    shift: f32,
+    scale: f32,
+    /// On the source grid: 0 is shown, and n is what cut n removed, so undoing
+    /// a cut takes no copy of the volume.
+    labels: Vec<u8>,
+    cuts: u8,
+    cut_box: Option<CutBox>,
+    cut_path: Option<CutPath>,
+    grabbed: Option<Grabbed>,
+    /// The segments' labels as last sent, and which change that was.
+    segment_labels: Option<Arc<Vec<u8>>>,
+    segment_generation: u64,
+    segment_only: bool,
+}
+
+/// While rotating, rays take longer steps; when the user stops, the final
+/// image is always computed at full quality.
+const REFINE_AFTER: std::time::Duration = std::time::Duration::from_millis(180);
+
+/// The most memory a volume takes on the GPU.
+const VOLUME_BYTES: u64 = 1 << 30;
+
+impl View3d {
+    fn new(shared: &Shared, volume: &Volume) -> Self {
+        let rs = &shared.render_state;
+        let placement = Placement {
+            dims: volume.dims,
+            spacing: volume.spacing,
+            origin: volume.origin,
+            axes: volume.axes,
+        };
+        let gpu = GpuVolume::upload(
+            &rs.device,
+            &rs.queue,
+            &placement,
+            (volume.min, volume.max),
+            VOLUME_BYTES,
+            |x, y, z| volume.voxel(x, y, z),
+        );
+        let presets = TransferFunction::presets();
+        let baked = Arc::new(presets[0].bake(volume.min, volume.max));
+        Self {
+            gpu: Arc::new(gpu),
+            camera: Camera::framing(&placement),
+            placement,
+            presets,
+            preset: 0,
+            mode: RenderMode::Shaded,
+            baked,
+            segments: Arc::new(shown_only()),
+            moved: None,
+            tool: Tool3d::Rotate,
+            shift: 0.0,
+            scale: 1.0,
+            labels: vec![0; volume.dims[0] * volume.dims[1] * volume.dims[2]],
+            cuts: 0,
+            cut_box: None,
+            cut_path: None,
+            grabbed: None,
+            segment_labels: None,
+            segment_generation: 0,
+            segment_only: false,
+        }
+    }
+
+    fn set_preset(&mut self, i: usize) {
+        self.preset = i;
+        self.shift = 0.0;
+        self.scale = 1.0;
+        self.rebake();
+    }
+
+    fn transfer(&self) -> TransferFunction {
+        self.presets[self.preset].windowed(self.shift, self.scale)
+    }
+
+    fn rebake(&mut self) {
+        self.baked = Arc::new(self.transfer().bake(self.gpu.min, self.gpu.max));
+    }
+
+    /// Back to the framing and the preset's own window.
+    fn reset_view(&mut self) {
+        self.camera = Camera::framing(&self.placement);
+        self.shift = 0.0;
+        self.scale = 1.0;
+        self.rebake();
+    }
+
+    /// Cuts hide voxels whatever segment they are in, so what reaches the GPU
+    /// is the segment labels with cut voxels as label 255.
+    fn send_labels(&self, shared: &Shared) {
+        let merged: Vec<u8> = match &self.segment_labels {
+            Some(seg) => self
+                .labels
+                .par_iter()
+                .zip(seg.par_iter())
+                .map(|(cut, label)| if *cut != 0 { 255 } else { *label })
+                .collect(),
+            None => self.labels.par_iter().map(|c| if *c != 0 { 255 } else { 0 }).collect(),
+        };
+        self.gpu
+            .write_labels(&shared.render_state.queue, self.placement.dims, &merged);
+    }
+
+    /// Take the segments as they now stand.
+    fn set_segments(&mut self, shared: &Shared, panel: &SegmentPanel) {
+        self.segment_labels = panel.seg.as_ref().map(|s| Arc::new(s.labels.clone()));
+        self.segments = Arc::new(panel.table());
+        self.segment_generation = panel.generation;
+        self.segment_only = panel.only_segments;
+        self.send_labels(shared);
+    }
+
+    /// Hide voxels as the next cut. The 254th cut joins the 253rd, which only
+    /// means they undo together.
+    fn cut(&mut self, shared: &Shared, voxels: impl IntoIterator<Item = usize>) {
+        self.cuts = (self.cuts + 1).min(254);
+        for i in voxels {
+            if self.labels[i] == 0 {
+                self.labels[i] = self.cuts;
+            }
+        }
+        self.send_labels(shared);
+    }
+
+    fn undo_cut(&mut self, shared: &Shared) {
+        if self.cuts == 0 {
+            return;
+        }
+        let cut = self.cuts;
+        self.labels.par_iter_mut().filter(|l| **l == cut).for_each(|l| *l = 0);
+        self.cuts -= 1;
+        self.send_labels(shared);
+    }
+
+    fn restore_cuts(&mut self, shared: &Shared) {
+        self.labels.fill(0);
+        self.cuts = 0;
+        self.send_labels(shared);
+    }
+
+    fn grid(&self) -> Grid {
+        Grid {
+            dims: self.placement.dims,
+            spacing: self.placement.spacing,
+        }
+    }
+
+    /// A patient point from a place in the voxel grid.
+    fn patient(&self, voxel: V3) -> V3 {
+        let p = &self.placement;
+        std::array::from_fn(|c| p.origin[c] + (0..3).map(|a| p.axes[a][c] * voxel[a] * p.spacing[a]).sum::<f64>())
+    }
+
+    fn to_screen(&self, rect: Rect, aspect: f64, point: V3) -> Pos2 {
+        let s = self.camera.project(point, aspect);
+        rect.center() + Vec2::new(s[0] as f32 * rect.width() / 2.0, -s[1] as f32 * rect.height() / 2.0)
+    }
+
+    fn has_shape(&self) -> bool {
+        match self.tool {
+            Tool3d::CutBox => self.cut_box.is_some(),
+            Tool3d::CutPath => self.cut_path.as_ref().is_some_and(|c| c.points.len() >= 3),
+            _ => false,
+        }
+    }
+
+    fn clear_shape(&mut self) {
+        match self.tool {
+            Tool3d::CutBox => self.cut_box = Some(CutBox::around(self.placement.dims)),
+            _ => self.cut_path = None,
+        }
+        self.grabbed = None;
+    }
+
+    /// Cut with the shape that has been built: what is inside it, or what is
+    /// outside. Only now does anything leave the view.
+    fn cut_shape(&mut self, shared: &Shared, inside: bool) {
+        let grid = self.grid();
+        let voxels: Vec<usize> = match self.tool {
+            Tool3d::CutBox => {
+                let Some(shape) = self.cut_box else { return };
+                let labels = &self.labels;
+                (0..grid.len())
+                    .into_par_iter()
+                    .filter(|&i| labels[i] == 0 && shape.contains(grid.position(i)) == inside)
+                    .collect()
+            }
+            Tool3d::CutPath => {
+                let Some(path) = self.cut_path.clone() else { return };
+                let points: Vec<[f32; 2]> = path
+                    .points
+                    .iter()
+                    .map(|q| {
+                        let s = path.camera.project(*q, path.aspect);
+                        [s[0] as f32, s[1] as f32]
+                    })
+                    .collect();
+                let outline = Outline::new(&points);
+                let labels = &self.labels;
+                let this = &*self;
+                (0..grid.len())
+                    .into_par_iter()
+                    .filter(|&i| {
+                        if labels[i] != 0 {
+                            return false;
+                        }
+                        let at = grid.position(i);
+                        let s = path
+                            .camera
+                            .project(this.patient([at[0] as f64, at[1] as f64, at[2] as f64]), path.aspect);
+                        outline.contains([s[0] as f32, s[1] as f32]) == inside
+                    })
+                    .collect()
+            }
+            _ => return,
+        };
+        self.cut(shared, voxels);
+        // The box stays where it was built, for the next cut or to undo and
+        // adjust; a path has done its job.
+        if self.tool == Tool3d::CutPath {
+            self.clear_shape();
+        }
+    }
+
+    /// Add a point to the path, at a place on the view.
+    fn add_point(&mut self, ndc: [f64; 2], aspect: f64) {
+        let point = self.camera.point_at(ndc, aspect);
+        let camera = self.camera;
+        self.cut_path
+            .get_or_insert_with(|| {
+                let mut camera = camera;
+                camera.zoom(2.0);
+                CutPath {
+                    points: Vec::new(),
+                    camera,
+                    aspect,
+                }
+            })
+            .points
+            .push(point);
+    }
+
+    /// Take hold of whatever handle is under a press.
+    fn grab(&mut self, rect: Rect, aspect: f64, at: Pos2) {
+        let mut best: Option<(f32, Grabbed)> = None;
+        let mut offer = |p: Pos2, g: Grabbed| {
+            let d = p.distance(at);
+            if d <= HANDLE_REACH && best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, g));
+            }
+        };
+        match self.tool {
+            Tool3d::CutBox => {
+                if let Some(b) = self.cut_box {
+                    for axis in 0..3 {
+                        for high in [false, true] {
+                            offer(
+                                self.to_screen(rect, aspect, self.patient(b.face(axis, high))),
+                                Grabbed::Face(axis, high),
+                            );
+                        }
+                    }
+                }
+            }
+            Tool3d::CutPath => {
+                if let Some(path) = &self.cut_path {
+                    for (i, q) in path.points.iter().enumerate() {
+                        offer(self.to_screen(rect, aspect, *q), Grabbed::Point(i));
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.grabbed = best.map(|(_, g)| g);
+    }
+
+    /// Follow a drag on whatever has been taken hold of.
+    fn drag_grabbed(&mut self, grabbed: Grabbed, rect: Rect, aspect: f64, drag: Vec2, at: Option<Pos2>) {
+        match grabbed {
+            Grabbed::Face(axis, high) => {
+                let Some(mut b) = self.cut_box else { return };
+                let from = b.face(axis, high);
+                let mut next = from;
+                next[axis] += 1.0;
+                let unit =
+                    self.to_screen(rect, aspect, self.patient(next)) - self.to_screen(rect, aspect, self.patient(from));
+                b.move_face(axis, high, along_axis(drag, unit), self.placement.dims);
+                self.cut_box = Some(b);
+            }
+            Grabbed::Point(i) => {
+                if let Some(p) = at {
+                    let v = to_view(rect, p);
+                    let point = self.camera.point_at([v[0] as f64, v[1] as f64], aspect);
+                    if let Some(q) = self.cut_path.as_mut().and_then(|c| c.points.get_mut(i)) {
+                        *q = point;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The shape being built, drawn over the rendering.
+    fn draw_shape(&self, painter: &egui::Painter, rect: Rect, aspect: f64) {
+        const LINE: Color32 = Color32::from_rgb(255, 210, 90);
+        let handle = |p: Pos2, held: bool| {
+            let fill = if held { Color32::WHITE } else { LINE };
+            painter.circle(p, 5.5, fill, Stroke::new(1.0, Color32::BLACK));
+        };
+        match self.tool {
+            Tool3d::CutBox => {
+                let Some(b) = self.cut_box else { return };
+                let screen = |c: V3| self.to_screen(rect, aspect, self.patient(c));
+                for (i, j) in BOX_EDGES {
+                    painter.line_segment([screen(b.corner(i)), screen(b.corner(j))], Stroke::new(1.5, LINE));
+                }
+                for axis in 0..3 {
+                    for high in [false, true] {
+                        handle(
+                            screen(b.face(axis, high)),
+                            self.grabbed == Some(Grabbed::Face(axis, high)),
+                        );
+                    }
+                }
+            }
+            Tool3d::CutPath => {
+                let Some(path) = &self.cut_path else { return };
+                let mut line: Vec<Pos2> = path.points.iter().map(|q| self.to_screen(rect, aspect, *q)).collect();
+                for (i, p) in line.iter().enumerate() {
+                    if path.points.len() <= 64 {
+                        handle(*p, self.grabbed == Some(Grabbed::Point(i)));
+                    }
+                }
+                if line.len() >= 3 {
+                    line.push(line[0]);
+                }
+                painter.add(egui::Shape::line(line, Stroke::new(1.5, LINE)));
+            }
+            _ => {}
+        }
+    }
+
+    /// The first visible voxel along the ray through a point on the view.
+    fn pick(&self, volume: &Volume, ndc: [f64; 2], aspect: f64) -> Option<usize> {
+        let transfer = self.transfer();
+        let (c, p) = (self.camera, &self.placement);
+        let grid = Grid {
+            dims: p.dims,
+            spacing: p.spacing,
+        };
+        let forward = c.forward();
+        let reach = p.diagonal();
+        let step = p.spacing.iter().copied().fold(f64::MAX, f64::min).max(0.1) / 2.0;
+        let middle = c.point_at(ndc, aspect);
+        let mut depth = -reach;
+        while depth < reach {
+            let at: V3 = std::array::from_fn(|i| middle[i] + forward[i] * depth);
+            depth += step;
+            let index = volume.to_index(at);
+            let voxel = std::array::from_fn::<isize, 3, _>(|a| index[a].round() as isize);
+            if (0..3).any(|a| voxel[a] < 0 || voxel[a] >= p.dims[a] as isize) {
+                continue;
+            }
+            let (x, y, z) = (voxel[0] as usize, voxel[1] as usize, voxel[2] as usize);
+            let i = grid.index(x, y, z);
+            if self.labels[i] == 0 && transfer.at(volume.voxel(x, y, z))[3] > 0.05 {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Remove everything shown that is connected to the point clicked.
+    fn remove_piece(&mut self, shared: &Shared, volume: &Volume, ndc: [f64; 2], aspect: f64) -> Option<usize> {
+        let seed = self.pick(volume, ndc, aspect)?;
+        let transfer = self.transfer();
+        let grid = Grid {
+            dims: self.placement.dims,
+            spacing: self.placement.spacing,
+        };
+        let labels = &self.labels;
+        let piece = flood(&grid, seed, |i| labels[i] == 0 && transfer.at(volume.at(i))[3] > 0.02);
+        let n = piece.len();
+        self.cut(shared, piece);
+        Some(n)
+    }
+}
+
+/// The segment table with only uncut voxels shown: label 0 has no colour of its
+/// own, and every other label is hidden.
+fn shown_only() -> Vec<u8> {
+    let mut table = vec![0; SEGMENT_WIDTH * 4];
+    table[3] = 255;
+    table
+}
+
+/// A point on the pane in -1 to 1 across the view, up being positive.
+fn to_view(rect: Rect, p: Pos2) -> [f32; 2] {
+    [
+        (p.x - rect.left()) / rect.width() * 2.0 - 1.0,
+        1.0 - (p.y - rect.top()) / rect.height() * 2.0,
+    ]
 }
 
 impl MprState {
@@ -320,6 +935,22 @@ impl MprState {
             save: None,
             active: 0,
             frames_shown: 0,
+            three_d: None,
+            segments: SegmentPanel::default(),
+        }
+    }
+
+    /// Show or hide the 3D pane, which takes the fourth place of the grid.
+    fn set_3d(&mut self, on: bool, shared: &Shared) {
+        if !on {
+            self.three_d = None;
+            return;
+        }
+        if let Some(volume) = &self.volume {
+            let mut view = View3d::new(shared, volume);
+            view.set_segments(shared, &self.segments);
+            self.three_d = Some(view);
+            self.layout = Layout::Grid;
         }
     }
 
@@ -470,11 +1101,44 @@ impl MprState {
         }
         self.pump(shared);
         self.keys(ui);
-        egui::Panel::top("mpr-toolbar").show(ui, |ui| self.toolbar(ui));
-        egui::Panel::top("mpr-tools").show(ui, |ui| self.tool_bar(ui, shared));
+        ui.style_mut().visuals = crate::theme::viewer_visuals();
+        egui::Panel::top(("mpr-toolbar", self.id))
+            .exact_size(crate::theme::TOOLBAR_HEIGHT)
+            .frame(
+                egui::Frame::NONE
+                    .fill(Color32::TRANSPARENT)
+                    .stroke(crate::theme::toolbar_stroke(true))
+                    .inner_margin(egui::Margin::symmetric(6, 3)),
+            )
+            .show(ui, |ui| {
+                crate::theme::paint_toolbar_background(ui, true, egui::vec2(6.0, 3.0));
+                self.toolbar(ui, shared)
+            });
         egui::Panel::bottom("mpr-status").show(ui, |ui| {
             ui.label(egui::RichText::new(&self.status).size(12.0));
         });
+        if self.segments.open {
+            if let Some(volume) = self.volume.clone() {
+                #[cfg(feature = "ai")]
+                self.segments.pump_ai(&volume);
+                let root = shared.paths.root.clone();
+                let source = format!(
+                    "{}, {}",
+                    self.series.series_description,
+                    self.study.study_date.as_deref().unwrap_or("no date")
+                );
+                egui::Panel::right("mpr-segments").default_size(270.0).show(ui, |ui| {
+                    self.segments.ui(ui, &volume, &root, &source);
+                });
+            }
+        }
+        if let Some(v) = self.three_d.as_mut() {
+            let changed =
+                v.segment_generation != self.segments.generation || v.segment_only != self.segments.only_segments;
+            if changed && !self.segments.ai_busy() {
+                v.set_segments(shared, &self.segments);
+            }
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::BLACK))
             .show(ui, |ui| self.panes_ui(ui, shared));
@@ -485,7 +1149,68 @@ impl MprState {
         // Developer option: `RUTHOS_MPR_SCREENSHOT=<file.png>` saves the
         // window as drawn, once the volume has been on screen a moment.
         if self.volume.is_some() {
-            self.frames_shown += 1;
+            // Developer option: `RUTHOS_MPR_3D=<preset number>` opens the 3D
+            // pane on that preset; `RUTHOS_MPR_3D_TURN=<radians>` turns it.
+            if self.frames_shown == 0 {
+                if let Some(n) = std::env::var("RUTHOS_MPR_3D")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                {
+                    if let (Some(range), Some(volume)) = (std::env::var("RUTHOS_MPR_SEG").ok(), self.volume.clone()) {
+                        if let Some((low, high)) = range.split_once(',') {
+                            let (low, high) = (low.parse().unwrap_or(200.0), high.parse().unwrap_or(3000.0));
+                            let mask = ruthos_segment::tools::threshold(volume.as_ref(), low, high);
+                            self.segments.add(&volume, "Threshold", "Threshold", &mask);
+                            self.segments.split_now(&volume);
+                            self.segments.open = true;
+                        }
+                    }
+                    self.set_3d(true, shared);
+                    if let Some(v) = self.three_d.as_mut() {
+                        v.set_preset(n.min(v.presets.len() - 1));
+                        if let Some(a) = std::env::var("RUTHOS_MPR_3D_TURN")
+                            .ok()
+                            .and_then(|t| t.parse::<f64>().ok())
+                        {
+                            v.camera.orbit(a, a / 3.0);
+                        }
+                        // `RUTHOS_MPR_SEG=low,high` adds a threshold segment,
+                        // opens the panel and splits it into pieces.
+                        // `RUTHOS_MPR_3D_BOX=x0,y0,z0,x1,y1,z1` (shares of the
+                        // volume) builds a box and `RUTHOS_MPR_3D_CUT=inside`
+                        // or `outside` then cuts with it.
+                        let share_box: Vec<f64> = std::env::var("RUTHOS_MPR_3D_BOX")
+                            .ok()
+                            .iter()
+                            .flat_map(|c| c.split(','))
+                            .filter_map(|n| n.parse().ok())
+                            .collect();
+                        if let [a, b, c, d, e, f] = share_box[..] {
+                            let n = v.placement.dims.map(|d| d as f64);
+                            v.tool = Tool3d::CutBox;
+                            v.cut_box = Some(CutBox {
+                                low: [a * n[0] - 0.5, b * n[1] - 0.5, c * n[2] - 0.5],
+                                high: [d * n[0] - 0.5, e * n[1] - 0.5, f * n[2] - 0.5],
+                            });
+                            if let Some(how) = std::env::var("RUTHOS_MPR_3D_CUT").ok().filter(|h| !h.is_empty()) {
+                                v.cut_shape(shared, how == "inside");
+                            }
+                        }
+                    }
+                }
+            }
+            #[cfg(feature = "ai")]
+            let waiting = match self.volume.clone() {
+                Some(volume) => self.segments.dev_option(&volume, &shared.paths.root),
+                None => false,
+            };
+            #[cfg(not(feature = "ai"))]
+            let waiting = false;
+            if waiting {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+            } else {
+                self.frames_shown += 1;
+            }
             if self.frames_shown < 30 {
                 ui.ctx().request_repaint();
             }
@@ -534,145 +1259,329 @@ impl MprState {
         }
     }
 
-    fn toolbar(&mut self, ui: &mut Ui) {
+    /// The toolbar, built as the viewer's is: buttons with an icon over a label,
+    /// and menus with a caption saying what is set.
+    fn toolbar(&mut self, ui: &mut Ui, shared: &Shared) {
+        let ready = self.volume.is_some();
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(self.volume.is_some(), |ui| {
-                if ui
-                    .button("Reset")
-                    .on_hover_text("Back to the original planes")
-                    .clicked()
-                {
-                    self.reset();
+            if ToolbarButton::new(Bitmap::DatabaseWindow, "Database")
+                .tooltip("Show the database window")
+                .show(ui)
+                .clicked()
+            {
+                shared.focus_browser.store(true, Ordering::Relaxed);
+            }
+            toolbar_separator(ui);
+            if ToolbarButton::new(Bitmap::Reset, "Reset")
+                .enabled(ready)
+                .tooltip("Back to the original planes")
+                .show(ui)
+                .clicked()
+            {
+                self.reset();
+            }
+            if ToolbarButton::new(icons::LOCKED, "Lock")
+                .enabled(ready)
+                .selected(self.locked)
+                .tooltip("Stop the planes moving or tilting while you measure")
+                .show(ui)
+                .clicked()
+            {
+                self.locked = !self.locked;
+            }
+            toolbar_separator(ui);
+            ui.add_enabled_ui(ready, |ui| {
+                self.layout_menu(ui);
+                self.slab_menu(ui);
+            });
+            toolbar_separator(ui);
+            ui.add_enabled_ui(ready, |ui| {
+                self.tool_menu(ui);
+                self.window_menu(ui, shared);
+                self.clut_menu(ui, shared);
+            });
+            toolbar_separator(ui);
+            if ToolbarButton::new(icons::SERIES, "Segments")
+                .enabled(ready)
+                .selected(self.segments.open)
+                .tooltip("Threshold, region grow, islands and AI, on the slices and in 3D")
+                .show(ui)
+                .clicked()
+            {
+                self.segments.open = !self.segments.open;
+            }
+            if ToolbarButton::new(icons::THREE_D, "3D")
+                .enabled(ready)
+                .selected(self.three_d.is_some())
+                .tooltip("Volume rendering in the fourth pane")
+                .show(ui)
+                .clicked()
+            {
+                let on = self.three_d.is_none();
+                self.set_3d(on, shared);
+            }
+            self.three_d_controls(ui, shared);
+            toolbar_separator(ui);
+            if ToolbarButton::new(Bitmap::Save, "Save to study")
+                .width(76.0)
+                .enabled(ready)
+                .tooltip("Write this plane, or a stack of planes, as a new series in the study, with its measurements")
+                .show(ui)
+                .clicked()
+            {
+                self.open_save_dialog();
+            }
+            if ToolbarButton::new(Bitmap::Export, "Save image")
+                .width(68.0)
+                .enabled(ready)
+                .tooltip("Save the pane last worked in as a PNG or JPEG picture")
+                .show(ui)
+                .clicked()
+            {
+                self.save_image();
+            }
+        });
+    }
+
+    fn open_save_dialog(&mut self) {
+        let pane = self.active;
+        let spacing = self.volume.as_ref().map(|v| v.finest().max(0.5)).unwrap_or(1.0);
+        self.save = Some(SaveDialog {
+            pane,
+            stack: false,
+            spacing_mm: (spacing * 10.0).round() / 10.0,
+            description: format!("MPR {}", self.pane_name(pane).to_lowercase()),
+            running: None,
+            progress: Arc::new(Mutex::new((0, 0))),
+            message: None,
+        });
+    }
+
+    fn layout_menu(&mut self, ui: &mut Ui) {
+        let caption = match self.layout {
+            Layout::Row => "Layout: 1×3".to_string(),
+            Layout::Grid => "Layout: 2×2".to_string(),
+            Layout::Single(i) => format!("Layout: {}", self.pane_name(i)),
+        };
+        let names: Vec<String> = (0..4).map(|i| self.pane_name(i)).collect();
+        menu_with_caption(ui, Icon::Glyph(icons::TILING), &caption, |ui| {
+            if menu_item(ui, "1×3: three planes", self.layout == Layout::Row).clicked() {
+                self.layout = Layout::Row;
+                ui.close();
+            }
+            let grid = if self.three_d.is_some() {
+                "2×2: three planes and 3D"
+            } else {
+                "2×2: three planes and the original slice"
+            };
+            if menu_item(ui, grid, self.layout == Layout::Grid).clicked() {
+                self.layout = Layout::Grid;
+                ui.close();
+            }
+            ui.separator();
+            for (i, name) in names.iter().enumerate() {
+                if menu_item(ui, format!("1×1: {name}"), self.layout == Layout::Single(i)).clicked() {
+                    self.layout = Layout::Single(i);
+                    ui.close();
                 }
-                ui.toggle_value(&mut self.locked, "Lock planes")
-                    .on_hover_text("Stop the planes moving or tilting while you measure");
-                ui.separator();
-                ui.label("Layout");
-                let label = match self.layout {
-                    Layout::Row => "1×3".to_string(),
-                    Layout::Grid => "2×2".to_string(),
-                    Layout::Single(i) => format!("1×1: {}", self.pane_name(i)),
-                };
-                egui::ComboBox::from_id_salt("mpr-layout")
-                    .selected_text(label)
-                    .width(150.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.layout, Layout::Row, "1×3: three planes");
-                        ui.selectable_value(
-                            &mut self.layout,
-                            Layout::Grid,
-                            "2×2: three planes and the original slice",
-                        );
-                        for i in 0..4 {
-                            let name = format!("1×1: {}", self.pane_name(i));
-                            ui.selectable_value(&mut self.layout, Layout::Single(i), name);
-                        }
-                    });
-                ui.separator();
-                ui.label("Slab");
+            }
+        });
+    }
+
+    fn slab_menu(&mut self, ui: &mut Ui) {
+        let mode = match self.slab_mode {
+            SlabMode::Mip => "MIP",
+            SlabMode::MinIp => "MinIP",
+            SlabMode::Mean => "Mean",
+        };
+        let caption = if self.slab_mm > 0.0 {
+            format!("Slab: {:.1} mm {mode}", self.slab_mm)
+        } else {
+            "Slab: off".to_string()
+        };
+        menu_with_caption(ui, Icon::Bitmap(Bitmap::Stack), &caption, |ui| {
+            menu_heading(ui, "Thickness");
+            ui.add(
+                egui::Slider::new(&mut self.slab_mm, 0.0..=60.0)
+                    .suffix(" mm")
+                    .step_by(0.5),
+            )
+            .on_hover_text("0 shows a single plane");
+            ui.separator();
+            for (m, label, hint) in [
+                (SlabMode::Mip, "MIP", "Maximum intensity: vessels, bone, contrast"),
+                (SlabMode::MinIp, "MinIP", "Minimum intensity: airways, gas"),
+                (SlabMode::Mean, "Mean", "Average: a thicker, smoother slice"),
+            ] {
+                if menu_item(ui, label, self.slab_mode == m).on_hover_text(hint).clicked() {
+                    self.slab_mode = m;
+                    ui.close();
+                }
+            }
+        });
+    }
+
+    fn tool_menu(&mut self, ui: &mut Ui) {
+        let caption = format!("Tool: {}", self.tool.label());
+        menu_with_caption(ui, self.tool.icon(), &caption, |ui| {
+            let mut row = |ui: &mut Ui, t: MprTool| {
+                let label = format!("{}  ({:?})", t.label(), t.key());
+                if tool_menu_row(ui, t.icon(), &label, self.tool == t, false).clicked() {
+                    self.tool = t;
+                    self.angle_draft = None;
+                    ui.close();
+                }
+            };
+            menu_heading(ui, "Navigate");
+            for t in MprTool::ALL
+                .into_iter()
+                .filter(|t| !t.measures() && *t != MprTool::Text)
+            {
+                row(ui, t);
+            }
+            menu_heading(ui, "Measure and annotate");
+            for t in MprTool::ALL.into_iter().filter(|t| t.measures() || *t == MprTool::Text) {
+                row(ui, t);
+            }
+        });
+    }
+
+    fn window_menu(&mut self, ui: &mut Ui, shared: &Shared) {
+        let caption = format!("WL {:.0}  WW {:.0}", self.window.0, self.window.1);
+        menu_with_caption(ui, Icon::Bitmap(Bitmap::Wlww), &caption, |ui| {
+            if menu_item(ui, "Default WL & WW", false).clicked() {
+                if let Some(v) = &self.volume {
+                    self.window = volume_window(v);
+                }
+                ui.close();
+            }
+            ui.separator();
+            for p in &shared.presets.presets {
+                if menu_item(ui, format!("{}  ({} / {})", p.name, p.center, p.width), false).clicked() {
+                    self.window = (p.center, p.width);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            menu_heading(ui, "Custom");
+            ui.horizontal(|ui| {
+                ui.add_space(6.0);
+                ui.label("WL");
+                ui.add(egui::DragValue::new(&mut self.window.0).speed(2.0));
+                ui.label("WW");
                 ui.add(
-                    egui::Slider::new(&mut self.slab_mm, 0.0..=60.0)
-                        .suffix(" mm")
-                        .step_by(0.5),
-                )
-                .on_hover_text("Thickness of a slab of planes; 0 shows a single plane");
-                egui::ComboBox::from_id_salt("mpr-slab")
-                    .selected_text(match self.slab_mode {
-                        SlabMode::Mip => "MIP",
-                        SlabMode::MinIp => "MinIP",
-                        SlabMode::Mean => "Mean",
-                    })
-                    .width(70.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.slab_mode, SlabMode::Mip, "MIP")
-                            .on_hover_text("Maximum intensity: vessels, bone, contrast");
-                        ui.selectable_value(&mut self.slab_mode, SlabMode::MinIp, "MinIP")
-                            .on_hover_text("Minimum intensity: airways, gas");
-                        ui.selectable_value(&mut self.slab_mode, SlabMode::Mean, "Mean")
-                            .on_hover_text("Average: a thicker, smoother slice");
-                    });
-                ui.separator();
-                if ui
-                    .button("Save to study…")
-                    .on_hover_text(
-                        "Write this plane, or a stack of planes, as a new series in the study, with its measurements",
-                    )
-                    .clicked()
-                {
-                    let pane = self.active;
-                    let spacing = self.volume.as_ref().map(|v| v.finest().max(0.5)).unwrap_or(1.0);
-                    self.save = Some(SaveDialog {
-                        pane,
-                        stack: false,
-                        spacing_mm: (spacing * 10.0).round() / 10.0,
-                        description: format!("MPR {}", self.pane_name(pane).to_lowercase()),
-                        running: None,
-                        progress: Arc::new(Mutex::new((0, 0))),
-                        message: None,
-                    });
-                }
-                if ui
-                    .button("Save image…")
-                    .on_hover_text("Save the pane last worked in as a PNG or JPEG picture")
-                    .clicked()
-                {
-                    self.save_image();
-                }
+                    egui::DragValue::new(&mut self.window.1)
+                        .speed(2.0)
+                        .range(1.0..=100000.0),
+                );
             });
         });
     }
 
-    /// The tools, window and colours.
-    fn tool_bar(&mut self, ui: &mut Ui, shared: &Shared) {
-        ui.horizontal(|ui| {
-            ui.add_enabled_ui(self.volume.is_some(), |ui| {
-                for t in MprTool::ALL {
-                    if t == MprTool::Length {
-                        ui.separator();
-                    }
-                    let key = format!("{:?}", t.key());
-                    if ui
-                        .selectable_label(self.tool == t, t.label())
-                        .on_hover_text(format!("{} ({key})", t.label()))
-                        .clicked()
-                    {
-                        self.tool = t;
-                        self.angle_draft = None;
-                    }
+    fn clut_menu(&mut self, ui: &mut Ui, shared: &Shared) {
+        let caption = crate::widgets::truncate(&self.clut, 12);
+        menu_with_caption(ui, Icon::Glyph(icons::CLUT), &caption, |ui| {
+            for name in shared.cluts.names() {
+                if menu_item(ui, name, self.clut == name).clicked() {
+                    self.clut = name.to_string();
+                    ui.close();
                 }
-                ui.separator();
-                ui.label("WL/WW");
-                let (mut c, mut w) = self.window;
-                ui.add(egui::DragValue::new(&mut c).speed(2.0));
-                ui.add(egui::DragValue::new(&mut w).speed(2.0).range(1.0..=100000.0));
-                self.window = (c, w);
-                egui::ComboBox::from_id_salt("mpr-presets")
-                    .selected_text("Presets")
-                    .width(110.0)
-                    .show_ui(ui, |ui| {
-                        if ui.selectable_label(false, "Default").clicked() {
-                            if let Some(v) = &self.volume {
-                                self.window = volume_window(v);
-                            }
-                        }
-                        for p in &shared.presets.presets {
-                            if ui.selectable_label(false, &p.name).clicked() {
-                                self.window = (p.center, p.width);
-                            }
-                        }
-                    });
-                egui::ComboBox::from_id_salt("mpr-clut")
-                    .selected_text(self.clut.clone())
-                    .width(110.0)
-                    .show_ui(ui, |ui| {
-                        for name in shared.cluts.names() {
-                            if ui.selectable_label(self.clut == name, name).clicked() {
-                                self.clut = name.to_string();
-                            }
-                        }
-                    });
-            });
+            }
         });
+    }
+
+    /// The 3D pane's own controls, shown only while it is open.
+    fn three_d_controls(&mut self, ui: &mut Ui, shared: &Shared) {
+        let Some(v) = self.three_d.as_mut() else { return };
+        let caption = format!("3D: {}", v.tool.label());
+        menu_with_caption(ui, v.tool.icon(), &caption, |ui| {
+            let row = |ui: &mut Ui, v: &mut View3d, t: Tool3d| {
+                if tool_menu_row(ui, t.icon(), t.label(), v.tool == t, false)
+                    .on_hover_text(t.hint())
+                    .clicked()
+                {
+                    v.tool = t;
+                    if t == Tool3d::CutBox && v.cut_box.is_none() {
+                        v.cut_box = Some(CutBox::around(v.placement.dims));
+                    }
+                    ui.close();
+                }
+            };
+            menu_heading(ui, "View");
+            for t in Tool3d::VIEW {
+                row(ui, v, t);
+            }
+            menu_heading(ui, "Cut");
+            for t in Tool3d::CUT {
+                row(ui, v, t);
+            }
+            ui.separator();
+            if menu_item_enabled(ui, "Undo cut", false, v.cuts > 0).clicked() {
+                v.undo_cut(shared);
+                ui.close();
+            }
+            if menu_item_enabled(ui, "Restore everything cut", false, v.cuts > 0).clicked() {
+                v.restore_cuts(shared);
+                ui.close();
+            }
+            if menu_item(ui, "Reset view", false).clicked() {
+                v.reset_view();
+                ui.close();
+            }
+        });
+        let caption = crate::widgets::truncate(&v.presets[v.preset].name, 13);
+        menu_with_caption(ui, Icon::Glyph(icons::CLUT), &caption, |ui| {
+            let mut chosen = None;
+            for (i, p) in v.presets.iter().enumerate() {
+                if menu_item(ui, p.name.as_str(), i == v.preset).clicked() {
+                    chosen = Some(i);
+                    ui.close();
+                }
+            }
+            if let Some(i) = chosen {
+                v.set_preset(i);
+            }
+            ui.separator();
+            for (mode, label) in [
+                (RenderMode::Shaded, "Shaded"),
+                (RenderMode::Maximum, "Maximum intensity (MIP)"),
+                (RenderMode::Minimum, "Minimum intensity (MinIP)"),
+            ] {
+                if menu_item(ui, label, v.mode == mode).clicked() {
+                    v.mode = mode;
+                    ui.close();
+                }
+            }
+        });
+        if matches!(v.tool, Tool3d::CutBox | Tool3d::CutPath) {
+            toolbar_separator(ui);
+            let ready = v.has_shape();
+            if ToolbarButton::new(icons::TRASH, "Cut inside")
+                .width(64.0)
+                .enabled(ready)
+                .tooltip("Remove what the shape encloses")
+                .show(ui)
+                .clicked()
+            {
+                v.cut_shape(shared, true);
+            }
+            if ToolbarButton::new(icons::THREE_D, "Cut outside")
+                .width(68.0)
+                .enabled(ready)
+                .tooltip("Keep only what the shape encloses")
+                .show(ui)
+                .clicked()
+            {
+                v.cut_shape(shared, false);
+            }
+            if ToolbarButton::new(icons::RESET, "Clear")
+                .tooltip("Discard the shape")
+                .show(ui)
+                .clicked()
+            {
+                v.clear_shape();
+            }
+        }
     }
 
     fn panes_ui(&mut self, ui: &mut Ui, shared: &Shared) {
@@ -734,8 +1643,131 @@ impl MprState {
         };
         let clut = Arc::new(shared.cluts.get(&self.clut).cloned().unwrap_or_else(Clut::grayscale));
         for (i, rect) in cells {
-            self.pane(ui, shared, &volume, i, rect, &clut);
+            if i == 3 && self.three_d.is_some() {
+                self.pane_3d(ui, shared, rect);
+            } else {
+                self.pane(ui, shared, &volume, i, rect, &clut);
+            }
         }
+    }
+
+    fn pane_3d(&mut self, ui: &mut Ui, shared: &Shared, rect: Rect) {
+        let key = self.id * 64 + 48;
+        let assisted = self.segments.has_ai();
+        let volume = self.volume.clone();
+        let Some(v) = self.three_d.as_mut() else { return };
+        let response = ui.interact(rect, egui::Id::unique(("mpr-3d", self.id)), Sense::click_and_drag());
+        let aspect = (rect.width() / rect.height().max(1.0)) as f64;
+        let d = response.drag_delta();
+        let share = |value: f32| (value / rect.height().max(1.0)) as f64 * 2.0;
+        let primary = response.dragged_by(egui::PointerButton::Primary);
+        let pointer = response.interact_pointer_pos();
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            if let Some(at) = ui.input(|i| i.pointer.press_origin()) {
+                v.grab(rect, aspect, at);
+            }
+        }
+        if response.drag_stopped() {
+            v.grabbed = None;
+        }
+        if response.dragged_by(egui::PointerButton::Middle) || (primary && v.tool == Tool3d::Move) {
+            v.camera.slide(share(d.x), -share(d.y));
+            v.moved = Some(std::time::Instant::now());
+        } else if response.dragged_by(egui::PointerButton::Secondary) || (primary && v.tool == Tool3d::Zoom) {
+            v.camera.zoom((d.y as f64 * 0.006).exp());
+            v.moved = Some(std::time::Instant::now());
+        } else if primary {
+            match (v.grabbed, v.tool) {
+                (Some(g), _) => v.drag_grabbed(g, rect, aspect, d, pointer),
+                // Off every handle the box tool still turns the view, so a box
+                // can be checked from all sides as it is built.
+                (None, Tool3d::Rotate | Tool3d::CutBox) => {
+                    v.camera.orbit(-d.x as f64 * 0.008, -d.y as f64 * 0.008);
+                    v.moved = Some(std::time::Instant::now());
+                }
+                (None, Tool3d::Window) => {
+                    v.scale = (v.scale * (d.x * 0.004).exp()).clamp(0.05, 20.0);
+                    v.shift += d.y * (v.gpu.max - v.gpu.min) / 800.0;
+                    v.rebake();
+                }
+                (None, Tool3d::CutPath) => {
+                    if let Some(p) = pointer {
+                        let last = v.cut_path.as_ref().and_then(|c| c.points.last()).copied();
+                        let far = last.is_none_or(|q| v.to_screen(rect, aspect, q).distance(p) >= 4.0);
+                        if far {
+                            let at = to_view(rect, p);
+                            v.add_point([at[0] as f64, at[1] as f64], aspect);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if response.clicked() && v.tool == Tool3d::CutPath {
+            if let Some(p) = pointer {
+                let at = to_view(rect, p);
+                v.add_point([at[0] as f64, at[1] as f64], aspect);
+            }
+        }
+        if response.clicked() && v.tool == Tool3d::RemovePiece {
+            if let (Some(p), Some(volume)) = (pointer, volume.as_ref()) {
+                let at = to_view(rect, p);
+                let removed = v.remove_piece(shared, volume, [at[0] as f64, at[1] as f64], aspect);
+                self.status = match removed {
+                    Some(n) => format!("Removed {n} voxels"),
+                    None => "Nothing visible there".to_string(),
+                };
+            }
+        }
+        let Some(v) = self.three_d.as_mut() else { return };
+        if response.hovered() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                v.camera.zoom((-scroll as f64 * 0.002).exp());
+                v.moved = Some(std::time::Instant::now());
+            }
+        }
+        let moving = v.moved.is_some_and(|t| t.elapsed() < REFINE_AFTER);
+        if moving {
+            ui.ctx().request_repaint_after(REFINE_AFTER);
+        }
+        let finest = v.gpu.spacing.iter().copied().fold(f64::MAX, f64::min) as f32;
+        let step_mm = finest * if moving { 2.0 } else { 0.3 };
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.add(egui_wgpu::Callback::new_paint_callback(
+            rect,
+            VolumeCallback {
+                key,
+                volume: v.gpu.clone(),
+                transfer: v.baked.clone(),
+                segments: v.segments.clone(),
+                use_segments: v.cuts > 0 || v.segment_labels.is_some(),
+                placement: v.placement,
+                camera: v.camera,
+                aspect: (rect.width() / rect.height().max(1.0)) as f64,
+                mode: v.mode,
+                step_mm,
+            },
+        ));
+        painter.text(
+            rect.left_top() + Vec2::new(6.0, 6.0),
+            Align2::LEFT_TOP,
+            format!("3D: {}", v.presets[v.preset].name),
+            FontId::proportional(13.0),
+            Color32::from_gray(210),
+        );
+        v.draw_shape(&painter, rect, aspect);
+        painter.text(
+            rect.left_bottom() + Vec2::new(6.0, -6.0),
+            Align2::LEFT_BOTTOM,
+            if assisted {
+                "AI-assisted: fine fractures may not appear. The slices are the reference"
+            } else {
+                "A derived picture: the slices are the reference"
+            },
+            FontId::proportional(11.0),
+            Color32::from_gray(170),
+        );
     }
 
     fn pane(&mut self, ui: &mut Ui, shared: &Shared, volume: &Volume, i: usize, rect: Rect, clut: &Arc<Clut>) {
@@ -744,6 +1776,17 @@ impl MprState {
         let n = plane.normal();
         let key = plane_key(&plane);
         let sig = format!("{key}|{:.2}|{:?}", self.slab_mm, self.slab_mode);
+        let overlay_sig = format!("{key}|{}", self.segments.generation);
+        if self.panes[i].overlay_signature != overlay_sig {
+            self.panes[i].overlay = self.segments.overlay(volume, &plane).map(|rgba| {
+                ui.ctx().load_texture(
+                    format!("mpr-overlay-{}-{i}", self.id),
+                    egui::ColorImage::from_rgba_unmultiplied([plane.width as usize, plane.height as usize], &rgba),
+                    egui::TextureOptions::NEAREST,
+                )
+            });
+            self.panes[i].overlay_signature = overlay_sig;
+        }
         if self.panes[i].signature != sig {
             let frame = Arc::new(reslice(volume, &plane));
             self.panes[i].gpu = Some(Arc::new(GpuImage::upload(
@@ -783,6 +1826,44 @@ impl MprState {
                     interpolation: Interpolation::Bilinear,
                 },
             ));
+        }
+
+        if let Some(overlay) = &self.panes[i].overlay {
+            let (a, b) = (
+                t.image_to_screen(Vec2::ZERO),
+                t.image_to_screen(Vec2::new(plane.width as f32, plane.height as f32)),
+            );
+            painter.image(
+                overlay.id(),
+                Rect::from_two_pos(a, b),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+        // The model's prompt: a click on a slice.
+        #[cfg(feature = "ai")]
+        if self.segments.ai_picking() && response.clicked() {
+            if let Some(p) = response.interact_pointer_pos() {
+                let q = t.screen_to_image(p);
+                if let Some(voxel) = crate::segments::voxel_at(volume, plane.point(q.x as f64, q.y as f64)) {
+                    let [w, h, _] = volume.dims;
+                    self.segments.ai.click(voxel % w, (voxel / w) % h, voxel / (w * h));
+                }
+            }
+        }
+        // Region grow's seed: a click on a slice.
+        if self.segments.picking && response.clicked() {
+            if let Some(p) = response.interact_pointer_pos() {
+                let q = t.screen_to_image(p);
+                match crate::segments::voxel_at(volume, plane.point(q.x as f64, q.y as f64)) {
+                    Some(seed) => {
+                        if let Some(whole) = self.volume.clone() {
+                            self.segments.grow_from(&whole, seed);
+                        }
+                    }
+                    None => self.segments.note = Some("That point is outside the volume".to_string()),
+                }
+            }
         }
 
         // The crosshair: where the other planes cut this one.
@@ -1513,6 +2594,46 @@ mod tests {
     use super::*;
 
     const AXES: [V3; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+    #[test]
+    fn a_box_starts_round_the_volume_and_stays_in_it() {
+        let dims = [10, 20, 30];
+        let mut b = CutBox::around(dims);
+        assert!(b.contains([0, 0, 0]) && b.contains([9, 19, 29]));
+        b.move_face(0, true, -4.0, dims);
+        assert!(b.contains([5, 0, 0]));
+        assert!(!b.contains([6, 0, 0]));
+        // Faces cannot pass each other or leave the volume.
+        b.move_face(0, false, 100.0, dims);
+        assert!(b.high[0] - b.low[0] >= 1.0);
+        b.move_face(2, true, 100.0, dims);
+        assert_eq!(b.high[2], 29.5);
+    }
+
+    #[test]
+    fn a_box_has_its_corners_and_faces_in_place() {
+        let b = CutBox {
+            low: [1.0, 2.0, 3.0],
+            high: [5.0, 6.0, 7.0],
+        };
+        assert_eq!(b.corner(0), [1.0, 2.0, 3.0]);
+        assert_eq!(b.corner(7), [5.0, 6.0, 7.0]);
+        assert_eq!(b.face(1, true), [3.0, 6.0, 5.0]);
+        // Every edge joins corners differing along one axis.
+        for (i, j) in BOX_EDGES {
+            assert_eq!((i ^ j).count_ones(), 1);
+        }
+    }
+
+    #[test]
+    fn a_drag_moves_a_face_along_its_axis_on_screen() {
+        // One voxel covers 2 points to the right.
+        assert_eq!(along_axis(Vec2::new(10.0, 0.0), Vec2::new(2.0, 0.0)), 5.0);
+        // A drag across the axis does nothing.
+        assert_eq!(along_axis(Vec2::new(0.0, 10.0), Vec2::new(2.0, 0.0)), 0.0);
+        // An axis pointing at the viewer cannot be dragged.
+        assert_eq!(along_axis(Vec2::new(10.0, 0.0), Vec2::ZERO), 0.0);
+    }
 
     #[test]
     fn the_three_panes_start_square_and_named() {

@@ -292,7 +292,7 @@ fn decode_jpeg_frame(obj: &dicom_object::DefaultDicomObject, meta: InstanceMeta,
             }
         };
         let mut rgba = Vec::with_capacity(rgb.len() / 3 * 4);
-        for p in rgb.chunks_exact(3) {
+        for p in rgb.as_chunks::<3>().0 {
             rgba.extend_from_slice(&[p[0], p[1], p[2], 255]);
         }
         return Ok(Frame {
@@ -379,7 +379,9 @@ pub fn frame_to_gray8(frame: &Frame, center: f32, width: f32) -> Vec<u8> {
             })
             .collect(),
         FramePixels::Rgba(rgba) => rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| {
                 let luma = (p[0] as f32 * 0.299 + p[1] as f32 * 0.587 + p[2] as f32 * 0.114).round();
                 (window_value(luma, center, width) * 255.0 + 0.5) as u8
@@ -397,7 +399,9 @@ pub fn frame_to_rgb8(frame: &Frame, center: f32, width: f32, clut: &Clut) -> Vec
             gray.iter().flat_map(|&g| clut.table[g as usize]).collect()
         }
         FramePixels::Rgba(rgba) => rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| {
                 [
                     (window_value(p[0] as f32, center, width) * 255.0 + 0.5) as u8,

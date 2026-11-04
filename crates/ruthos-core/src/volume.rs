@@ -252,7 +252,7 @@ impl Volume {
         Volume::from_frames(frames)
     }
 
-    fn voxel(&self, i: usize, j: usize, k: usize) -> f32 {
+    pub fn voxel(&self, i: usize, j: usize, k: usize) -> f32 {
         let idx = (k * self.dims[1] + j) * self.dims[0] + i;
         match &self.data {
             VoxelData::I16(v) => v[idx] as f32,

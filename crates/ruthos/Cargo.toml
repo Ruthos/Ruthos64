@@ -10,6 +10,11 @@ publish = false
 description = "Ruthos DICOM viewer and patient archive"
 build = "build.rs"
 
+[features]
+default = ["ai"]
+# The AI segmentation tool. A build without it carries no ONNX Runtime code.
+ai = ["ruthos-ui/ai"]
+
 [dependencies]
 eframe = { workspace = true }
 egui = { workspace = true }
