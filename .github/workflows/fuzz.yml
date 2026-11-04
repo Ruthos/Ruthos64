@@ -46,7 +46,7 @@ jobs:
       - name: Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev nasm cmake age
+          sudo apt-get install -y clang libclang-dev nasm cmake age pkg-config libdbus-1-dev
           cargo install cargo-fuzz --locked
       - uses: Swatinem/rust-cache@v2
         with:
@@ -161,13 +161,16 @@ jobs:
       - name: Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev llvm nasm cmake
+          sudo apt-get install -y clang libclang-dev llvm nasm cmake pkg-config libdbus-1-dev
           cargo install cargo-fuzz --locked
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz
       - name: Seed corpus
         run: python3 fuzz/seed.py
+      - name: Build decode_frame with the canary
+        working-directory: fuzz
+        run: cargo fuzz build -O --debug-assertions --features canary decode_frame
       - name: decode_frame finds the planted read
         working-directory: fuzz
         run: |
