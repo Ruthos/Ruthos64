@@ -136,13 +136,18 @@ impl<S: Source> Walker<'_, S> {
             }
             let tag = self.tag(pos).ok_or_else(damaged)?;
             if tag == Tag(0xFFFE, 0xE00D) {
-                // Item delimitation: the end of an undefined-length item.
+                // The end of an item. Outside one the parser steps over it
+                // and reads on, so the check must too.
+                if depth == 0 {
+                    pos += 8;
+                    continue;
+                }
                 return Ok(pos + 8);
             }
             if tag.group() == 0xFFFE {
                 return Err(damaged());
             }
-            let (vr, len, header) = self.header(pos, tag)?;
+            let (vr, len, header) = self.header(pos)?;
             let value = pos + header;
             if len == UNDEFINED {
                 pos = if tag == Tag(0x7FE0, 0x0010) {
@@ -167,10 +172,8 @@ impl<S: Source> Walker<'_, S> {
     }
 
     /// The VR (or "??" for implicit), the value length and the header size.
-    fn header(&mut self, pos: u64, tag: Tag) -> Result<([u8; 2], u32, u64)> {
-        // The file meta group is always explicit little-endian.
-        let explicit = self.enc.explicit || tag.group() == 0x0002;
-        if !explicit {
+    fn header(&mut self, pos: u64) -> Result<([u8; 2], u32, u64)> {
+        if !self.enc.explicit {
             let len = self.u32(pos + 4).ok_or_else(damaged)?;
             return Ok((*b"??", len, 8));
         }
@@ -178,15 +181,37 @@ impl<S: Source> Walker<'_, S> {
         if !self.src.read_at(pos + 4, &mut vr) {
             return Err(damaged());
         }
+        // Only these have a 16-bit length: the parser takes anything it does
+        // not know as UN, with a 32-bit one.
         if matches!(
             &vr,
-            b"OB" | b"OD" | b"OF" | b"OL" | b"OV" | b"OW" | b"SQ" | b"UC" | b"UN" | b"UR" | b"UT" | b"SV" | b"UV"
+            b"AE"
+                | b"AS"
+                | b"AT"
+                | b"CS"
+                | b"DA"
+                | b"DS"
+                | b"DT"
+                | b"FL"
+                | b"FD"
+                | b"IS"
+                | b"LO"
+                | b"LT"
+                | b"PN"
+                | b"SH"
+                | b"SL"
+                | b"SS"
+                | b"ST"
+                | b"TM"
+                | b"UI"
+                | b"UL"
+                | b"US"
         ) {
-            let len = self.u32(pos + 8).ok_or_else(damaged)?;
-            Ok((vr, len, 12))
-        } else {
             let len = self.u16(pos + 6).ok_or_else(damaged)? as u32;
             Ok((vr, len, 8))
+        } else {
+            let len = self.u32(pos + 8).ok_or_else(damaged)?;
+            Ok((vr, len, 12))
         }
     }
 
@@ -264,19 +289,38 @@ fn meta_transfer_syntax<S: Source>(src: &mut S, start: u64, end: u64) -> Option<
     };
     let mut pos = start;
     let mut ts = None;
+    // The parser ends the group after the bytes its length gives, whatever
+    // tags it meets, so the data set starts where that puts it. Without a
+    // group length the parser refuses the header, and the tags decide here.
+    let mut stop = None;
+    if pos + 12 <= end && w.tag(pos)? == Tag(0x0002, 0x0000) {
+        let (_, len, header) = w.header(pos).ok()?;
+        if len == 4 {
+            stop = Some(pos + header + 4 + w.u32(pos + header)? as u64);
+            pos += header + 4;
+        }
+    }
     while pos + 8 <= end {
         let tag = w.tag(pos)?;
-        if tag.group() != 0x0002 {
+        let done = match stop {
+            Some(stop) => pos >= stop,
+            None => tag.group() != 0x0002,
+        };
+        if done {
             break;
         }
-        let (_, len, header) = w.header(pos, tag).ok()?;
+        let (_, len, header) = w.header(pos).ok()?;
         if len == UNDEFINED {
             return None;
         }
-        if tag == Tag(0x0002, 0x0010) && len < 128 {
+        if tag == Tag(0x0002, 0x0010) && len < 4096 {
             let mut v = vec![0u8; len as usize];
             if w.src.read_at(pos + header, &mut v) {
-                ts = Some(String::from_utf8_lossy(&v).trim_end_matches(['\0', ' ']).to_string());
+                let text = String::from_utf8_lossy(&v);
+                ts = Some(
+                    text.trim_end_matches(|c: char| c.is_whitespace() || c == '\0')
+                        .to_string(),
+                );
             }
         }
         pos += header + len as u64;
@@ -285,6 +329,18 @@ fn meta_transfer_syntax<S: Source>(src: &mut S, start: u64, end: u64) -> Option<
         }
     }
     Some((ts.unwrap_or_default(), pos))
+}
+
+/// Does a data set with no header hold together in this encoding? The parser
+/// must try only those that do: a sound implicit file read as explicit takes
+/// value bytes for lengths.
+pub fn bare_holds<S: Source>(src: &mut S, explicit: bool) -> bool {
+    let total = src.size();
+    let enc = Encoding {
+        explicit,
+        big_endian: false,
+    };
+    Walker { src, enc }.dataset(0, Some(total), 0).is_ok()
 }
 
 const DEFLATED: &str = "1.2.840.10008.1.2.1.99";
@@ -369,19 +425,8 @@ pub fn check<S: Source>(src: &mut S) -> Result<()> {
         }
         None => {
             // A bare data set: whichever little-endian encoding holds.
-            for enc in [
-                Encoding {
-                    explicit: true,
-                    big_endian: false,
-                },
-                Encoding {
-                    explicit: false,
-                    big_endian: false,
-                },
-            ] {
-                if (Walker { src: &mut *src, enc }).dataset(0, Some(total), 0).is_ok() {
-                    return Ok(());
-                }
+            if bare_holds(src, true) || bare_holds(src, false) {
+                return Ok(());
             }
             // No preamble and no data set that holds together: not DICOM
             // (an import skips it rather than reporting an error).

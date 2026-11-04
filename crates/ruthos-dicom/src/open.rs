@@ -95,11 +95,21 @@ fn open_raw_bytes(bytes: &[u8]) -> Result<DefaultDicomObject> {
     }
 
     let candidates = [
-        dicom_transfer_syntax_registry::entries::EXPLICIT_VR_LITTLE_ENDIAN.erased(),
-        dicom_transfer_syntax_registry::entries::IMPLICIT_VR_LITTLE_ENDIAN.erased(),
+        (
+            true,
+            dicom_transfer_syntax_registry::entries::EXPLICIT_VR_LITTLE_ENDIAN.erased(),
+        ),
+        (
+            false,
+            dicom_transfer_syntax_registry::entries::IMPLICIT_VR_LITTLE_ENDIAN.erased(),
+        ),
     ];
     let mut last_err = None;
-    for ts in candidates {
+    for (explicit, ts) in candidates {
+        let mut source = bytes;
+        if !crate::structure::bare_holds(&mut source, explicit) {
+            continue;
+        }
         match InMemDicomObject::read_dataset_with_ts(Cursor::new(bytes), &ts) {
             Ok(obj) => {
                 let plausible = obj.get(tags::SOP_INSTANCE_UID).is_some()
