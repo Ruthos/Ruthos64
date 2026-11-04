@@ -16,6 +16,9 @@ use crate::{DicomError, Result};
 
 /// Open a DICOM file, reading up to `read_until` when given.
 pub fn open_any(path: &Path, read_until: Option<Tag>) -> Result<DefaultDicomObject> {
+    // No element may claim more bytes than the file holds: dicom-rs
+    // allocates a value's declared length before reading it.
+    crate::structure::check_file(path)?;
     let mut options = OpenFileOptions::new();
     if let Some(tag) = read_until {
         options = options.read_until(tag);
@@ -61,6 +64,7 @@ fn open_raw_dataset(path: &Path) -> Result<DefaultDicomObject> {
 /// anything else that has the bytes already.
 pub fn open_from_bytes(bytes: &[u8]) -> Result<DefaultDicomObject> {
     use dicom_object::file::ReadPreamble;
+    crate::structure::check_bytes(bytes)?;
     let preamble = if bytes.len() >= 132 && &bytes[128..132] == b"DICM" {
         Some(ReadPreamble::Always)
     } else if bytes.starts_with(b"DICM") {
