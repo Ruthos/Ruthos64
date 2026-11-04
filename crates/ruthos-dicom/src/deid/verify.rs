@@ -274,7 +274,7 @@ pub fn verify_file(path: &Path, ctx: &VerifyContext) -> Vec<Finding> {
     out
 }
 
-fn check_dataset(obj: &InMemDicomObject, prefix: &str, file: &str, ctx: &VerifyContext, out: &mut Vec<Finding>) {
+pub fn check_dataset(obj: &InMemDicomObject, prefix: &str, file: &str, ctx: &VerifyContext, out: &mut Vec<Finding>) {
     for e in obj.iter() {
         let tag = e.header().tag;
         let path = format!("{prefix}({:04X},{:04X})", tag.group(), tag.element());

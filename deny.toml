@@ -1,0 +1,63 @@
+# cargo-deny: advisories, licences and sources (Decoder Hardening
+# Specification, section 3). Run in CI on every pull request and nightly.
+
+[graph]
+all-features = false
+
+[advisories]
+# Every RustSec advisory against a crate in Cargo.lock fails the build until
+# the crate is updated or the advisory is accepted below with a dated reason.
+yanked = "deny"
+# "Unmaintained" notices are checked for Ruthos's own direct dependencies;
+# deeper ones are tracked by their parents' maintainers.
+unmaintained = "workspace"
+ignore = [
+    # 2026-11-04: lopdf 0.31 (via printpdf 0.7) can overflow its stack
+    # parsing a deeply nested PDF. Ruthos only writes PDFs (reports) and
+    # never parses one, so the code is not reachable. Remove when printpdf
+    # moves to lopdf 0.42 or later.
+    { id = "RUSTSEC-2026-0187", reason = "lopdf parsing is not used: Ruthos only writes PDFs" },
+]
+
+[licenses]
+# Ruthos is LGPL-3.0-or-later; everything it links must be compatible. The
+# AGPL is not (hence OpenJPEG rather than Grok).
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "BSL-1.0",
+    "MPL-2.0",
+    "LGPL-3.0-only",
+    "LGPL-3.0-or-later",
+    "LGPL-2.1-or-later",
+    "IJG",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "NCSA",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Crates only from crates.io; nothing from unknown registries or git.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

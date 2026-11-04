@@ -92,17 +92,22 @@ impl Frame {
 /// Decode one frame of the file at `path`.
 pub fn decode_frame(path: &Path, frame_index: u32) -> Result<Frame> {
     let obj = crate::open::open_any(path, None)?;
+    decode_object_frame(&obj, frame_index)
+}
+
+/// Decode one frame of an opened object (the fuzz targets come in here).
+pub fn decode_object_frame(obj: &dicom_object::DefaultDicomObject, frame_index: u32) -> Result<Frame> {
     let meta = {
-        let mut m = meta_from_object(&obj);
+        let mut m = meta_from_object(obj);
         m.transfer_syntax = obj.meta().transfer_syntax().trim_end_matches('\0').to_string();
         m
     };
     // Nothing reaches a decoder until its description holds together.
-    crate::guard::check_object(&obj, &meta, &[frame_index])?;
+    crate::guard::check_object(obj, &meta, &[frame_index])?;
     crate::guard::check_series_bytes(crate::guard::decoded_bytes(&meta) / meta.number_of_frames.max(1) as u64)?;
 
     if jpeg::is_jpeg_transfer_syntax(&meta.transfer_syntax) {
-        return decode_jpeg_frame(&obj, meta, frame_index);
+        return decode_jpeg_frame(obj, meta, frame_index);
     }
 
     let decoded = obj

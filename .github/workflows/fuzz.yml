@@ -1,0 +1,147 @@
+# Fuzzing (Decoder Hardening Specification, section 2).
+#
+# Every pull request: each target for 60 seconds. Every night: each target
+# for 30 minutes, with new coverage merged into a minimised corpus on the
+# fuzz-corpus branch. The C codecs (libjpeg-turbo, OpenJPEG, CharLS) are
+# built with AddressSanitizer and libFuzzer instrumentation, and the job
+# fails if they are not.
+#
+# A crashing input is an exploit in the making, and artefacts of a public
+# repository can be downloaded by anyone signed in to GitHub, so a crash is
+# never uploaded in the clear: it is encrypted with age to the maintainer's
+# public key (repository variable FUZZ_AGE_RECIPIENT). Without the key, only
+# its SHA-256 is printed.
+name: Fuzz
+
+on:
+  pull_request:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "60"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CC: clang
+  CXX: clang++
+  CFLAGS: -fsanitize=address -fsanitize=fuzzer-no-link -g
+  CXXFLAGS: -fsanitize=address -fsanitize=fuzzer-no-link -g
+
+jobs:
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev nasm cmake age
+          cargo install cargo-fuzz --locked
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+
+      - name: Seed corpus (the samples and the minimised corpus)
+        run: |
+          if git fetch --depth 1 origin fuzz-corpus 2>/dev/null; then
+            git worktree add /tmp/corpus FETCH_HEAD
+            for d in /tmp/corpus/*/; do
+              t=$(basename "$d"); mkdir -p "fuzz/corpus/$t"; cp -n "$d"* "fuzz/corpus/$t/" 2>/dev/null || true
+            done
+          fi
+          python3 fuzz/seed.py
+
+      - name: Build the targets
+        working-directory: fuzz
+        run: cargo fuzz build -O --debug-assertions
+
+      - name: The C codecs are instrumented
+        run: |
+          missing=0
+          for lib in turbojpeg openjp2 charls; do
+            objs=$(find fuzz/target -path '*/build/*' \( -name "*${lib}*.a" -o -name "*${lib}*.o" \) 2>/dev/null | head -20)
+            if [ -z "$objs" ]; then
+              echo "::error::no build output found for $lib"; missing=1; continue
+            fi
+            if nm -A $objs 2>/dev/null | grep -q '__asan_'; then
+              echo "$lib: AddressSanitizer symbols present"
+            else
+              echo "::error::$lib was built without AddressSanitizer"; missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Run each target
+        id: run
+        working-directory: fuzz
+        env:
+          SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && '1800' || inputs.seconds || '60' }}
+        run: |
+          failed=""
+          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar; do
+            dict=""
+            case $t in
+              open_file|decode_frame|anonymise) dict="-dict=dict/dicom.dict" ;;
+              jpeg_codestream|guard_headers) dict="-dict=dict/codecs.dict" ;;
+            esac
+            echo "::group::$t"
+            if ! cargo fuzz run -O --debug-assertions $t corpus/$t -- -max_total_time=$SECONDS_PER_TARGET -rss_limit_mb=4096 -timeout=30 $dict; then
+              failed="$failed $t"
+            fi
+            echo "::endgroup::"
+          done
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          [ -z "$failed" ]
+
+      - name: Encrypt any crash before it leaves the runner
+        if: failure() && steps.run.outputs.failed != ''
+        working-directory: fuzz
+        env:
+          RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
+        run: |
+          mkdir -p /tmp/crashes
+          for f in $(find artifacts -type f 2>/dev/null); do
+            sha=$(sha256sum "$f" | cut -c1-16)
+            echo "crash in $(dirname "$f"): sha256 $sha"
+            if [ -n "$RECIPIENT" ]; then
+              age -r "$RECIPIENT" -o "/tmp/crashes/$(basename "$(dirname "$f")")-$sha.age" "$f"
+            fi
+            rm -f "$f"
+          done
+          if [ -z "$RECIPIENT" ]; then
+            echo "::warning::FUZZ_AGE_RECIPIENT is not set: crashes are not uploaded. Reproduce them locally."
+          fi
+      - uses: actions/upload-artifact@v4
+        if: failure() && steps.run.outputs.failed != ''
+        with:
+          name: fuzz-crashes-encrypted
+          path: /tmp/crashes
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Merge new coverage into the minimised corpus
+        if: success() && github.event_name == 'schedule'
+        run: |
+          set -e
+          cd fuzz
+          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar; do
+            mkdir -p /tmp/min/$t
+            cargo fuzz run -O $t /tmp/min/$t corpus/$t -- -merge=1 || true
+          done
+          mkdir -p /tmp/push && cd /tmp/push
+          git init -q
+          cp -r /tmp/min/* .
+          git add -A
+          git -c user.name=ruthos-fuzz -c user.email=ruthos-fuzz@users.noreply.github.com commit -qm "Minimised fuzz corpus $(date -u +%F)"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:fuzz-corpus

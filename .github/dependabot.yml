@@ -1,0 +1,12 @@
+# Weekly updates for the Rust crates and the GitHub Actions the workflows use.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

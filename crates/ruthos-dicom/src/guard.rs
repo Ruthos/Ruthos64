@@ -287,13 +287,16 @@ pub fn jpeg_ls_header(data: &[u8]) -> Option<CodecHeader> {
     sof(data, true)
 }
 
-/// The SIZ marker of a JPEG 2000 codestream (SOC then SIZ), also inside a
-/// JP2 file's boxes: image size less its offset, and the component count.
+/// The SIZ marker of a JPEG 2000 codestream: image size less its offset,
+/// and the component count. DICOM carries the bare codestream, which must
+/// start with SOC (FF4F) and SIZ (FF51); a JP2 file wrapper is refused, as
+/// it is not valid in DICOM and its box parser in OpenJPEG 2.5.3 has a
+/// known out-of-bounds write (CVE-2025-54874).
 pub fn jpeg2000_header(data: &[u8]) -> Option<CodecHeader> {
-    // The codestream starts with SOC (FF4F) and SIZ (FF51) straight after;
-    // in a JP2 wrapper it sits in a box, so look for the pair.
-    let start = data.windows(4).take(4096).position(|w| w == [0xFF, 0x4F, 0xFF, 0x51])?;
-    let i = start + 4; // at Lsiz
+    if data.get(0..4)? != [0xFF, 0x4F, 0xFF, 0x51] {
+        return None;
+    }
+    let i = 4; // at Lsiz
     let xsiz = be32(data, i + 4)?;
     let ysiz = be32(data, i + 8)?;
     let xo = be32(data, i + 12)?;
@@ -499,6 +502,10 @@ mod tests {
         let ls = jpeg(0xF7, 300, 200, 1, 16);
         assert!(check_codestream(&m, Codec::JpegLs, &ls).is_ok());
         assert!(check_codestream(&m, Codec::JpegLs, &jpeg(0xF7, 301, 200, 1, 16)).is_err());
+        // A JP2 file wrapper is not DICOM and is refused (CVE-2025-54874).
+        let mut jp2 = vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 13, 10, 0x87, 10];
+        jp2.extend(j2k(300, 200, 0, 0, 1));
+        assert!(check_codestream(&m, Codec::Jpeg2000, &jp2).is_err());
         // Garbage is refused, not trusted.
         assert!(check_codestream(&m, Codec::Jpeg2000, &[1, 2, 3]).is_err());
     }

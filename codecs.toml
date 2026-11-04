@@ -1,0 +1,33 @@
+# The C libraries Ruthos's -sys crates bundle, and where to watch them.
+# The nightly security workflow compares each version with the latest
+# upstream release and with the CVEs the National Vulnerability Database
+# lists for that version, and opens an issue when either needs attention
+# (scripts/check_codecs.py). Update a version here when the bundling crate
+# is updated in Cargo.lock.
+
+[[codec]]
+name = "libjpeg-turbo"
+crate = "turbojpeg-sys"
+crate_version = "1.2.0"
+version = "3.1.0"
+github = "libjpeg-turbo/libjpeg-turbo"
+cpe = "cpe:2.3:a:libjpeg-turbo:libjpeg-turbo"
+advisories = "https://github.com/libjpeg-turbo/libjpeg-turbo/security"
+
+[[codec]]
+name = "OpenJPEG"
+crate = "openjpeg-sys"
+crate_version = "1.0.12"
+version = "2.5.3"
+github = "uclouvain/openjpeg"
+cpe = "cpe:2.3:a:uclouvain:openjpeg"
+advisories = "https://github.com/uclouvain/openjpeg/security"
+
+[[codec]]
+name = "CharLS"
+crate = "charls-sys"
+crate_version = "2.4.6+charls.2.4.5"
+version = "2.4.5"
+github = "team-charls/charls"
+cpe = "cpe:2.3:a:team-charls:charls"
+advisories = "https://github.com/team-charls/charls/security"

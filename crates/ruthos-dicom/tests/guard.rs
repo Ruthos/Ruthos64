@@ -135,3 +135,22 @@ fn every_sample_still_decodes_and_a_loop_over_the_memory_limit_is_refused_whole(
     assert!(e.contains("memory"), "the whole loop is refused with the limit: {e}");
     assert!(single.is_ok(), "one frame still opens: {:?}", single.err());
 }
+
+#[test]
+fn bytes_in_memory_open_and_decode_like_the_file() {
+    for name in ["CT_small.dcm", "JPEG2000.dcm", "ExplVR_LitEndNoMeta.dcm"] {
+        let bytes = std::fs::read(testdata(name)).unwrap();
+        let obj = ruthos_dicom::open::open_from_bytes(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        if name != "ExplVR_LitEndNoMeta.dcm" {
+            let a = ruthos_dicom::pixels::decode_object_frame(&obj, 0).unwrap();
+            let b = decode_frame(&testdata(name), 0).unwrap();
+            assert_eq!(
+                (a.width, a.height, a.min, a.max),
+                (b.width, b.height, b.min, b.max),
+                "{name}"
+            );
+        }
+    }
+    assert!(ruthos_dicom::open::open_from_bytes(b"not dicom at all").is_err());
+    assert!(ruthos_dicom::open::open_from_bytes(&[]).is_err());
+}

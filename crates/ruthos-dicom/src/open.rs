@@ -53,6 +53,31 @@ pub(crate) fn classify_open_error(msg: String) -> DicomError {
 /// Read a bare data set and give it a synthetic meta header.
 fn open_raw_dataset(path: &Path) -> Result<DefaultDicomObject> {
     let bytes = std::fs::read(path)?;
+    open_raw_bytes(&bytes)
+}
+
+/// Open a DICOM object held in memory: a file with its 128-byte preamble,
+/// one starting at "DICM", or a bare data set. For the fuzz targets and
+/// anything else that has the bytes already.
+pub fn open_from_bytes(bytes: &[u8]) -> Result<DefaultDicomObject> {
+    use dicom_object::file::ReadPreamble;
+    let preamble = if bytes.len() >= 132 && &bytes[128..132] == b"DICM" {
+        Some(ReadPreamble::Always)
+    } else if bytes.starts_with(b"DICM") {
+        Some(ReadPreamble::Never)
+    } else {
+        None
+    };
+    match preamble {
+        Some(p) => OpenFileOptions::new()
+            .read_preamble(p)
+            .from_reader(Cursor::new(bytes))
+            .map_err(|e| classify_open_error(e.to_string())),
+        None => open_raw_bytes(bytes),
+    }
+}
+
+fn open_raw_bytes(bytes: &[u8]) -> Result<DefaultDicomObject> {
     if bytes.len() < 16 {
         return Err(DicomError::NotDicom("file too small".into()));
     }
@@ -71,7 +96,7 @@ fn open_raw_dataset(path: &Path) -> Result<DefaultDicomObject> {
     ];
     let mut last_err = None;
     for ts in candidates {
-        match InMemDicomObject::read_dataset_with_ts(Cursor::new(&bytes), &ts) {
+        match InMemDicomObject::read_dataset_with_ts(Cursor::new(bytes), &ts) {
             Ok(obj) => {
                 let plausible = obj.get(tags::SOP_INSTANCE_UID).is_some()
                     || (obj.get(tags::ROWS).is_some() && obj.get(tags::COLUMNS).is_some());
@@ -84,7 +109,7 @@ fn open_raw_dataset(path: &Path) -> Result<DefaultDicomObject> {
                     .get(tags::SOP_INSTANCE_UID)
                     .and_then(|e| e.to_str().ok().map(|s| s.trim_end_matches('\0').trim().to_string()))
                     .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| synthetic_uid(&bytes));
+                    .unwrap_or_else(|| synthetic_uid(bytes));
                 let meta = FileMetaTableBuilder::new()
                     .transfer_syntax(ts.uid())
                     .media_storage_sop_class_uid(sop_class)

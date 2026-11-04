@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+publish = false
 description = "Ruthos DICOM viewer and patient archive"
 build = "build.rs"
 
