@@ -5490,6 +5490,7 @@ dependencies = [
  "dicom-object",
  "dicom-pixeldata",
  "dicom-transfer-syntax-registry",
+ "flate2",
  "hmac",
  "image 0.25.10",
  "libc",

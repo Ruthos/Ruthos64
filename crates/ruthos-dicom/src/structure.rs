@@ -287,23 +287,62 @@ fn meta_transfer_syntax<S: Source>(src: &mut S, start: u64, end: u64) -> Option<
     Some((ts.unwrap_or_default(), pos))
 }
 
-fn encoding_of(ts: &str) -> Option<Encoding> {
+const DEFLATED: &str = "1.2.840.10008.1.2.1.99";
+
+/// Reads a `Source` from a position, for the inflater.
+struct SourceReader<'a, S: Source> {
+    src: &'a mut S,
+    pos: u64,
+}
+
+impl<S: Source> std::io::Read for SourceReader<'_, S> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = (buf.len() as u64).min(self.src.size().saturating_sub(self.pos)) as usize;
+        if n > 0 && !self.src.read_at(self.pos, &mut buf[..n]) {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+/// Deflated data sets hide their lengths, so they are inflated and walked
+/// like any other, in explicit little-endian. The cap also stops a small
+/// file inflating to gigabytes.
+fn check_deflated<S: Source>(src: &mut S, data: u64) -> Result<()> {
+    use std::io::Read;
+    let cap = crate::guard::limits().series_bytes;
+    let mut inflated = Vec::new();
+    flate2::read::DeflateDecoder::new(SourceReader { src, pos: data })
+        .take(cap + 1)
+        .read_to_end(&mut inflated)
+        .map_err(|_| damaged())?;
+    if inflated.len() as u64 > cap {
+        return Err(damaged());
+    }
+    let total = inflated.len() as u64;
+    let enc = Encoding {
+        explicit: true,
+        big_endian: false,
+    };
+    let mut plain: &[u8] = &inflated;
+    Walker { src: &mut plain, enc }.dataset(0, Some(total), 0).map(|_| ())
+}
+
+fn encoding_of(ts: &str) -> Encoding {
     match ts {
-        "1.2.840.10008.1.2" => Some(Encoding {
+        "1.2.840.10008.1.2" => Encoding {
             explicit: false,
             big_endian: false,
-        }),
-        "1.2.840.10008.1.2.2" => Some(Encoding {
+        },
+        "1.2.840.10008.1.2.2" => Encoding {
             explicit: true,
             big_endian: true,
-        }),
-        // Deflated data sets are compressed: their structure cannot be
-        // walked without inflating them.
-        "1.2.840.10008.1.2.1.99" => None,
-        _ => Some(Encoding {
+        },
+        _ => Encoding {
             explicit: true,
             big_endian: false,
-        }),
+        },
     }
 }
 
@@ -322,7 +361,10 @@ pub fn check<S: Source>(src: &mut S) -> Result<()> {
     match start {
         Some(start) => {
             let (ts, data) = meta_transfer_syntax(src, start, total).ok_or_else(damaged)?;
-            let Some(enc) = encoding_of(&ts) else { return Ok(()) };
+            if ts == DEFLATED {
+                return check_deflated(src, data);
+            }
+            let enc = encoding_of(&ts);
             Walker { src, enc }.dataset(data, Some(total), 0).map(|_| ())
         }
         None => {
