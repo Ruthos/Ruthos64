@@ -17,6 +17,9 @@ use crate::loader::FrameLoader;
 /// Status of the DICOM listener, for the source list.
 #[derive(Debug, Clone, Default)]
 pub struct NetStatus {
+    /// Associations refused by the allow list, newest first: AE title,
+    /// address and time.
+    pub refused: std::collections::VecDeque<(String, String, String)>,
     pub running: bool,
     pub ae_title: String,
     pub port: u16,
@@ -76,6 +79,8 @@ pub struct Shared {
     pub open_reports: Mutex<Vec<i64>>,
     /// Series to open in an MPR window: (study, series).
     pub open_mpr: Mutex<Vec<(i64, i64)>>,
+    /// The listener's allow list, shared with the running listener.
+    pub listener_allow: Arc<std::sync::Mutex<Vec<ruthos_net::scp::AllowEntry>>>,
     /// The dial's controllers and events (Windows; nothing elsewhere).
     pub dial: Mutex<crate::dial::DialHost>,
 }
@@ -120,6 +125,7 @@ impl Shared {
             open_reports: Mutex::new(Vec::new()),
             open_mpr: Mutex::new(Vec::new()),
             dial: Mutex::new(Default::default()),
+            listener_allow: Arc::new(std::sync::Mutex::new(Vec::new())),
         })
     }
 

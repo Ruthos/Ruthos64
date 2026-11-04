@@ -18,6 +18,11 @@ pub struct Settings {
     pub listener_enabled: bool,
     pub listener_port: u16,
     pub listener_ae_title: String,
+    /// Devices allowed to send to the listener (Preferences > Listener).
+    /// The PACS in Preferences > PACS are allowed too, so retrieval works.
+    pub listener_allow: Vec<ListenerPeer>,
+    /// Accept SOP classes Ruthos does not recognise; off by default.
+    pub listener_promiscuous: bool,
     /// Poll interval for the incoming folder, in seconds.
     pub incoming_scan_seconds: u64,
     /// Viewer defaults.
@@ -57,6 +62,17 @@ pub struct Settings {
     /// The decode guard's limits (Preferences > Advanced); `None` keeps the
     /// defaults. Held to four times the defaults whatever the file says.
     pub decode_limits: Option<DecodeLimits>,
+}
+
+/// A device allowed to send to the listener.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ListenerPeer {
+    /// "Ultrasound, room 2".
+    pub name: String,
+    pub ae_title: String,
+    /// An address or subnet it must connect from; empty for any.
+    pub address: String,
 }
 
 /// The decode guard's limits as the user sets them, in friendly units.
@@ -239,6 +255,8 @@ impl Default for Settings {
             listener_port: 11112,
             listener_ae_title: "RUTHOS".to_string(),
             incoming_scan_seconds: 2,
+            listener_allow: Vec::new(),
+            listener_promiscuous: false,
             annotations_level: 2,
             default_clut: "No CLUT".to_string(),
             thumbnail_size: 100,

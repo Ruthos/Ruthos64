@@ -184,7 +184,7 @@ impl PrefsState {
                     .auto_shrink([false, false])
                     .show(ui, |ui| match self.section {
                         Section::General => self.general(ui, shared),
-                        Section::Listener => self.listener(ui),
+                        Section::Listener => self.listener(ui, shared),
                         Section::Pacs => self.pacs(ui, shared),
                         Section::Routing => self.routing(ui, shared),
                         Section::Watch => self.watch_folders(ui, shared),
@@ -857,7 +857,7 @@ impl PrefsState {
             });
     }
 
-    fn listener(&mut self, ui: &mut Ui) {
+    fn listener(&mut self, ui: &mut Ui, shared: &Shared) {
         Self::heading(ui, "DICOM listener");
         ui.checkbox(
             &mut self.draft.listener_enabled,
@@ -899,6 +899,99 @@ impl PrefsState {
                 ui.end_row();
             });
         Self::hint(ui, "Point the modality at this computer's address, the AE title and the port. Changes to the listener apply as soon as you save. Windows Firewall must allow Ruthos on the port.");
+        self.listener_allow(ui, shared);
+    }
+
+    /// The devices allowed to send, and those recently refused.
+    fn listener_allow(&mut self, ui: &mut Ui, shared: &Shared) {
+        use ruthos_core::settings::ListenerPeer;
+        ui.add_space(14.0);
+        Self::heading(ui, "Devices allowed to send");
+        Self::hint(
+            ui,
+            "The listener accepts images only from devices listed here, by the AE title they call from and, if you give one, the address or subnet they connect from (192.168.1.20 or 192.168.1.0/24). Anything else is refused before any data is sent. The PACS in the PACS section are allowed too, so retrieving from them works. An AE title is not a password: this closes the open door, it does not authenticate a device.",
+        );
+        ui.add_space(4.0);
+        let mut remove = None;
+        if self.draft.listener_allow.is_empty() {
+            Self::hint(ui, "No devices listed yet: switch the listener on, send a test image from the modality, and add it from the refused list below.");
+        } else {
+            egui::Grid::new("listener-allow")
+                .num_columns(4)
+                .spacing([8.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Name").strong());
+                    ui.label(RichText::new("AE title").strong());
+                    ui.label(RichText::new("Address (optional)").strong());
+                    ui.label("");
+                    ui.end_row();
+                    for (i, p) in self.draft.listener_allow.iter_mut().enumerate() {
+                        ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(170.0));
+                        let mut ae = p.ae_title.clone();
+                        if ui
+                            .add(egui::TextEdit::singleline(&mut ae).desired_width(120.0))
+                            .changed()
+                        {
+                            p.ae_title = ae.chars().filter(|c| c.is_ascii_graphic()).take(16).collect();
+                        }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut p.address)
+                                .desired_width(150.0)
+                                .hint_text("any"),
+                        );
+                        if ui.button("Remove").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+        }
+        if let Some(i) = remove {
+            self.draft.listener_allow.remove(i);
+        }
+        if ui.button("Add a device").clicked() {
+            self.draft.listener_allow.push(ListenerPeer::default());
+        }
+
+        let refused = shared.net_status.lock().refused.clone();
+        if !refused.is_empty() {
+            ui.add_space(10.0);
+            ui.label(RichText::new("Recently refused").strong());
+            for (ae, addr, when) in refused {
+                let listed = self
+                    .draft
+                    .listener_allow
+                    .iter()
+                    .any(|p| p.ae_title.eq_ignore_ascii_case(&ae));
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(&when)
+                            .monospace()
+                            .size(11.5)
+                            .color(Color32::from_gray(120)),
+                    );
+                    ui.label(format!("{ae} from {addr}"));
+                    if ui.add_enabled(!listed, egui::Button::new("Add to list")).clicked() {
+                        self.draft.listener_allow.push(ListenerPeer {
+                            name: ae.clone(),
+                            ae_title: ae.clone(),
+                            address: addr.clone(),
+                        });
+                    }
+                });
+            }
+            Self::hint(ui, "Add to list, then Save: the device can send straight away.");
+        }
+
+        ui.add_space(10.0);
+        ui.checkbox(
+            &mut self.draft.listener_promiscuous,
+            "Advanced: accept kinds of object Ruthos does not recognise",
+        );
+        Self::hint(
+            ui,
+            "Off by default. Only images Ruthos knows how to store are accepted otherwise.",
+        );
     }
 
     fn viewer(&mut self, ui: &mut Ui, shared: &Shared) {

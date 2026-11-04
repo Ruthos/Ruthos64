@@ -28,6 +28,92 @@ pub struct ListenerConfig {
     pub port: u16,
     pub ae_title: String,
     pub out_dir: PathBuf,
+    /// The devices allowed to send, shared so Preferences can change it
+    /// while the listener runs. Empty: nothing is accepted.
+    pub allow: Arc<std::sync::Mutex<Vec<AllowEntry>>>,
+    /// Accept SOP classes Ruthos does not recognise (an advanced option,
+    /// off by default).
+    pub promiscuous: bool,
+}
+
+/// A device allowed to send to the listener: its calling AE title and,
+/// optionally, the address or subnet it must connect from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowEntry {
+    pub name: String,
+    pub ae_title: String,
+    /// `192.168.1.20`, `192.168.1.0/24`, `fe80::1` or empty for any.
+    pub address: String,
+}
+
+/// Whether `ip` matches an address or subnet written as `a.b.c.d`,
+/// `a.b.c.d/n` or the IPv6 equivalents. An empty spec matches anything; a
+/// spec that does not parse matches nothing.
+pub fn address_matches(spec: &str, ip: Option<std::net::IpAddr>) -> bool {
+    use std::net::IpAddr;
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return true;
+    }
+    let Some(ip) = ip else { return false };
+    // An IPv4 peer seen through an IPv6 socket.
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        v4 => v4,
+    };
+    let (addr, bits) = match spec.split_once('/') {
+        Some((a, n)) => match n.trim().parse::<u32>() {
+            Ok(n) => (a.trim(), Some(n)),
+            Err(_) => return false,
+        },
+        None => (spec, None),
+    };
+    let Ok(net) = addr.parse::<IpAddr>() else { return false };
+    match (net, ip) {
+        (IpAddr::V4(n), IpAddr::V4(i)) => {
+            let bits = bits.unwrap_or(32).min(32);
+            let mask = if bits == 0 { 0 } else { u32::MAX << (32 - bits) };
+            (u32::from(n) & mask) == (u32::from(i) & mask)
+        }
+        (IpAddr::V6(n), IpAddr::V6(i)) => {
+            let bits = bits.unwrap_or(128).min(128);
+            let mask = if bits == 0 { 0 } else { u128::MAX << (128 - bits) };
+            (u128::from(n) & mask) == (u128::from(i) & mask)
+        }
+        _ => false,
+    }
+}
+
+/// The access check: a listed calling AE title from its listed address.
+struct Allowlist {
+    entries: Vec<AllowEntry>,
+    peer: Option<std::net::IpAddr>,
+    /// The calling AE title of a refused request, for the log.
+    refused: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl dicom_ul::association::server::AccessControl for Allowlist {
+    fn check_access(
+        &self,
+        _this_ae_title: &str,
+        calling_ae_title: &str,
+        _called_ae_title: &str,
+        _user_identity: Option<&dicom_ul::pdu::UserIdentity>,
+    ) -> Result<(), dicom_ul::pdu::AssociationRJServiceUserReason> {
+        let calling = calling_ae_title.trim();
+        let ok = self
+            .entries
+            .iter()
+            .any(|e| e.ae_title.trim().eq_ignore_ascii_case(calling) && address_matches(&e.address, self.peer));
+        if ok {
+            Ok(())
+        } else {
+            if let Ok(mut r) = self.refused.lock() {
+                *r = Some(calling.to_string());
+            }
+            Err(dicom_ul::pdu::AssociationRJServiceUserReason::CallingAETitleNotRecognized)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +123,11 @@ pub enum NetEvent {
         ae_title: String,
     },
     Association {
+        peer_ae: String,
+        peer_addr: String,
+    },
+    /// A device not on the allow list tried to connect.
+    Refused {
         peer_ae: String,
         peer_addr: String,
     },
@@ -168,12 +259,19 @@ fn accept_loop(listener: TcpListener, config: ListenerConfig, tx: Sender<NetEven
 }
 
 fn handle_association(stream: TcpStream, config: &ListenerConfig, tx: &Sender<NetEvent>) -> anyhow::Result<()> {
-    let peer_addr = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+    let peer = stream.peer_addr().ok();
+    let peer_addr = peer.map(|a| a.ip().to_string()).unwrap_or_default();
+    let refused = Arc::new(std::sync::Mutex::new(None));
+    let allow = Allowlist {
+        entries: config.allow.lock().map(|l| l.clone()).unwrap_or_default(),
+        peer: peer.map(|a| a.ip()),
+        refused: refused.clone(),
+    };
 
     let mut options = ServerAssociationOptions::new()
-        .accept_any()
+        .ae_access_control(allow)
         .ae_title(config.ae_title.clone())
-        .promiscuous(true)
+        .promiscuous(config.promiscuous)
         .max_pdu_length(16384 * 8);
     for ts in TransferSyntaxRegistry.iter() {
         if !ts.is_unsupported() {
@@ -184,7 +282,18 @@ fn handle_association(stream: TcpStream, config: &ListenerConfig, tx: &Sender<Ne
         options = options.with_abstract_syntax(*uid);
     }
 
-    let mut association = options.establish(stream)?;
+    let mut association = match options.establish(stream) {
+        Ok(a) => a,
+        Err(e) => {
+            let who = refused.lock().ok().and_then(|r| r.clone());
+            if let Some(peer_ae) = who {
+                tracing::warn!("refused association from {peer_ae} ({peer_addr}): not on the allow list");
+                let _ = tx.send(NetEvent::Refused { peer_ae, peer_addr });
+                return Ok(());
+            }
+            return Err(e.into());
+        }
+    };
     let peer_ae = association.peer_ae_title().to_string();
     let _ = tx.send(NetEvent::Association {
         peer_ae: peer_ae.clone(),
@@ -429,6 +538,32 @@ fn create_cecho_response(message_id: u16) -> InMemDicomObject<StandardDataDictio
         DataElement::new(tags::COMMAND_DATA_SET_TYPE, VR::US, dicom_value!(U16, [0x0101])),
         DataElement::new(tags::STATUS, VR::US, dicom_value!(U16, [0x0000])),
     ])
+}
+
+#[cfg(test)]
+mod allow_tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn ip(s: &str) -> Option<IpAddr> {
+        s.parse().ok()
+    }
+
+    #[test]
+    fn addresses_and_subnets_match() {
+        assert!(address_matches("", ip("10.0.0.1")));
+        assert!(address_matches("192.168.1.20", ip("192.168.1.20")));
+        assert!(!address_matches("192.168.1.20", ip("192.168.1.21")));
+        assert!(address_matches("192.168.1.0/24", ip("192.168.1.200")));
+        assert!(!address_matches("192.168.1.0/24", ip("192.168.2.1")));
+        assert!(
+            address_matches("192.168.1.20", ip("::ffff:192.168.1.20")),
+            "IPv4 through IPv6"
+        );
+        assert!(address_matches("fe80::/16", ip("fe80::1")));
+        assert!(!address_matches("not an address", ip("10.0.0.1")));
+        assert!(!address_matches("10.0.0.1", None));
+    }
 }
 
 #[cfg(test)]

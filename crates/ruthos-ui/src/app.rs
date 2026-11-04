@@ -391,12 +391,16 @@ impl RuthosApp {
             let st = self.shared.net_status.lock();
             (st.port, st.ae_title.clone())
         };
+        // The allow list changes without a restart.
+        update_allow_list(&self.shared, settings);
+        let running_promiscuous = self.scp.as_ref().map(|s| s.config.promiscuous).unwrap_or(false);
         let wanted = (
             settings.listener_enabled,
             settings.listener_port,
             settings.listener_ae_title.clone(),
+            settings.listener_enabled && settings.listener_promiscuous,
         );
-        let current = (self.scp.is_some(), running_port, running_ae);
+        let current = (self.scp.is_some(), running_port, running_ae, running_promiscuous);
         if wanted != current {
             if let Some(mut scp) = self.scp.take() {
                 scp.stop();
@@ -482,6 +486,12 @@ impl RuthosApp {
                 NetEvent::Stored { .. } => status.received += 1,
                 NetEvent::Echo { peer_ae } => status.last_peer = Some(format!("{peer_ae} (echo)")),
                 NetEvent::Released { .. } => {}
+                NetEvent::Refused { peer_ae, peer_addr } => {
+                    let when = chrono::Local::now().format("%H:%M:%S").to_string();
+                    status.refused.retain(|(a, d, _)| !(a == &peer_ae && d == &peer_addr));
+                    status.refused.push_front((peer_ae, peer_addr, when));
+                    status.refused.truncate(10);
+                }
                 NetEvent::Error(e) => status.last_error = Some(e),
                 NetEvent::Stopped => status.running = false,
             }
@@ -701,14 +711,50 @@ impl eframe::App for RuthosApp {
 }
 
 /// Start the DICOM listener from the settings, recording its state.
+/// The devices the listener accepts: those listed in Preferences >
+/// Listener, and the PACS in Preferences > PACS (by AE title, and by host
+/// when it is an address), so their C-MOVE deliveries get in.
+fn update_allow_list(shared: &Shared, settings: &ruthos_core::Settings) {
+    let mut list: Vec<ruthos_net::scp::AllowEntry> = settings
+        .listener_allow
+        .iter()
+        .filter(|p| !p.ae_title.trim().is_empty())
+        .map(|p| ruthos_net::scp::AllowEntry {
+            name: p.name.clone(),
+            ae_title: p.ae_title.trim().to_string(),
+            address: p.address.trim().to_string(),
+        })
+        .collect();
+    for n in &settings.pacs_nodes {
+        let host = n.host.trim();
+        list.push(ruthos_net::scp::AllowEntry {
+            name: n.name.clone(),
+            ae_title: n.ae_title.trim().to_string(),
+            address: if host.parse::<std::net::IpAddr>().is_ok() {
+                host.to_string()
+            } else {
+                String::new()
+            },
+        });
+    }
+    if let Ok(mut current) = shared.listener_allow.lock() {
+        if *current != list {
+            *current = list;
+        }
+    }
+}
+
 fn start_listener(shared: &Shared, settings: &ruthos_core::Settings) -> Option<StoreScp> {
     if !settings.listener_enabled {
         return None;
     }
+    update_allow_list(shared, settings);
     let cfg = ListenerConfig {
         port: settings.listener_port,
         ae_title: settings.listener_ae_title.clone(),
         out_dir: shared.paths.incoming_dir(),
+        allow: shared.listener_allow.clone(),
+        promiscuous: settings.listener_promiscuous,
     };
     match StoreScp::start(cfg) {
         Ok(s) => {

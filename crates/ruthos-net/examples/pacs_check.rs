@@ -85,6 +85,12 @@ fn main() {
         port: 11121,
         ae_title: "RUTHOS".into(),
         out_dir: inbox.clone(),
+        allow: std::sync::Arc::new(std::sync::Mutex::new(vec![ruthos_net::scp::AllowEntry {
+            name: "Test PACS".into(),
+            ae_title: "QRSCP".into(),
+            address: String::new(),
+        }])),
+        promiscuous: false,
     })
     .unwrap();
     std::thread::sleep(Duration::from_millis(300));
