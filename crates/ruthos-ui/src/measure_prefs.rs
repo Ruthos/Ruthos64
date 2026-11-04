@@ -347,6 +347,7 @@ impl LibraryEditor {
                 user.sets.push(Set {
                     name: name.clone(),
                     keys: Vec::new(),
+                    ..Default::default()
                 });
                 self.sel_set = Some(name);
             }
@@ -365,6 +366,7 @@ impl LibraryEditor {
                     user.sets.push(Set {
                         name: name.clone(),
                         keys: s.keys,
+                        regions: s.regions,
                     });
                     self.sel_set = Some(name);
                 }
@@ -400,6 +402,27 @@ impl LibraryEditor {
                     self.sel_set = Some(new_name);
                 }
             });
+            // Which kinds of study offer this set when naming.
+            ui.horizontal(|ui| {
+                ui.label("Offered for");
+                let mut regions = user.sets[i].regions();
+                for r in [
+                    measure::Region::Cardiac,
+                    measure::Region::Abdominal,
+                    measure::Region::Musculoskeletal,
+                ] {
+                    let mut on = regions.contains(&r);
+                    if ui.checkbox(&mut on, r.label()).changed() {
+                        if on {
+                            regions.push(r);
+                        } else {
+                            regions.retain(|x| *x != r);
+                        }
+                        user.sets[i].regions = regions.clone();
+                    }
+                }
+            });
+            ui.label(grey("With none ticked, the set is offered for every kind of study."));
             ui.label("Keys, one per line");
             ui.add(
                 egui::TextEdit::multiline(text)

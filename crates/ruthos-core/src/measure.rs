@@ -63,6 +63,104 @@ impl Default for Definition {
 pub struct Set {
     pub name: String,
     pub keys: Vec<String>,
+    /// The kinds of study it is for. Empty: inferred from the name (sets
+    /// saved before regions existed), and a set with no region at all is
+    /// offered everywhere.
+    pub regions: Vec<Region>,
+}
+
+impl Set {
+    /// The regions this set is for, given or inferred from its name.
+    pub fn regions(&self) -> Vec<Region> {
+        if !self.regions.is_empty() {
+            return self.regions.clone();
+        }
+        let n = self.name.to_ascii_lowercase();
+        let mut out = Vec::new();
+        if ["echo", "cardi", "heart", "vhs", "doppler"]
+            .iter()
+            .any(|w| n.contains(w))
+        {
+            out.push(Region::Cardiac);
+        }
+        if ["abdom", "kidney", "renal", "liver", "spleen", "bladder"]
+            .iter()
+            .any(|w| n.contains(w))
+        {
+            out.push(Region::Abdominal);
+        }
+        if ["ortho", "tendon", "ligament", "joint", "limb", "msk", "musculo"]
+            .iter()
+            .any(|w| n.contains(w))
+        {
+            out.push(Region::Musculoskeletal);
+        }
+        if n.contains("radiograph") && out.is_empty() {
+            out.extend([Region::Cardiac, Region::Abdominal]);
+        }
+        out
+    }
+
+    /// Whether the set is offered in `region`: always for All, and for a
+    /// set with no region.
+    pub fn applies_to(&self, region: Region) -> bool {
+        if region == Region::All {
+            return true;
+        }
+        let r = self.regions();
+        r.is_empty() || r.contains(&region)
+    }
+}
+
+/// The kind of study a measurement belongs to, which decides the sets the
+/// naming menus offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Region {
+    Cardiac,
+    Abdominal,
+    Musculoskeletal,
+    /// Every set.
+    All,
+}
+
+impl Region {
+    pub const ALL: [Region; 4] = [Region::Cardiac, Region::Abdominal, Region::Musculoskeletal, Region::All];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Region::Cardiac => "Cardiac",
+            Region::Abdominal => "Abdominal",
+            Region::Musculoskeletal => "Musculoskeletal",
+            Region::All => "All sets",
+        }
+    }
+}
+
+/// The kind of study, from its modality and what its descriptions and
+/// body part say. Ultrasound with nothing else to go on is cardiac (an
+/// echo); a radiograph or CT with nothing to go on offers every set.
+pub fn infer_region(modality: &str, texts: &[&str]) -> Region {
+    let t = texts.join(" ").to_ascii_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| t.contains(w));
+    if has(&["echo", "cardiac", "heart", "thorax", "chest", "lv ", "mitral", "aort"]) {
+        return Region::Cardiac;
+    }
+    if has(&[
+        "abdom", "kidney", "renal", "liver", "spleen", "bladder", "bowel", "intestin", "gastr", "adrenal", "uter",
+        "prostat",
+    ]) {
+        return Region::Abdominal;
+    }
+    if has(&[
+        "tendon", "ligament", "limb", "fetlock", "carpus", "tarsus", "hock", "stifle", "elbow", "shoulder", "hip",
+        "pelvis", "joint", "digit", "hoof", "foot", "metacarp", "metatars", "spine", "msk", "ortho", "knee", "pastern",
+    ]) {
+        return Region::Musculoskeletal;
+    }
+    match modality.to_ascii_uppercase().as_str() {
+        "US" => Region::Cardiac,
+        _ => Region::All,
+    }
 }
 
 /// A number derived from definitions.
@@ -254,9 +352,16 @@ pub fn builtin() -> Library {
         decimals,
         scope: scope.map(String::from),
     };
+    #[allow(unused_variables)]
     let set = |name: &str, keys: &[&str]| Set {
         name: name.into(),
         keys: keys.iter().map(|k| k.to_string()).collect(),
+        regions: Vec::new(),
+    };
+    let set_in = |name: &str, regions: &[Region], keys: &[&str]| Set {
+        name: name.into(),
+        keys: keys.iter().map(|k| k.to_string()).collect(),
+        regions: regions.to_vec(),
     };
     Library {
         definitions: vec![
@@ -298,15 +403,31 @@ pub fn builtin() -> Library {
             def("ortho.tpa", "Tibial plateau angle", "angle", "angle", "deg", 1, None),
             def("ortho.patellar_ligament", "Patellar ligament length", "caliper", "length", "mm", 1, None),
             def("ortho.patella", "Patella length", "caliper", "length", "mm", 1, None),
+            // Abdomen (ultrasound)
+            def("abd.adrenal_left", "Adrenal thickness (L)", "caliper", "length", "mm", 1, None),
+            def("abd.adrenal_right", "Adrenal thickness (R)", "caliper", "length", "mm", 1, None),
+            def("abd.bladder_wall", "Bladder wall", "caliper", "length", "mm", 1, None),
+            def("abd.gastric_wall", "Gastric wall", "caliper", "length", "mm", 1, None),
+            def("abd.si_wall", "Small intestinal wall", "caliper", "length", "mm", 1, None),
+            def("abd.spleen", "Spleen thickness", "caliper", "length", "mm", 1, None),
+            def("abd.ln", "Lymph node", "caliper", "length", "mm", 1, None),
+            // Tendons and ligaments (equine), cross-sectional areas
+            def("tendon.sdft", "SDFT CSA", "area", "area", "mm2", 0, None),
+            def("tendon.ddft", "DDFT CSA", "area", "area", "mm2", 0, None),
+            def("tendon.icl", "ICL (accessory ligament of the DDFT) CSA", "area", "area", "mm2", 0, None),
+            def("tendon.sl", "Suspensory ligament CSA", "area", "area", "mm2", 0, None),
+            def("tendon.sdft_thickness", "SDFT thickness", "caliper", "length", "mm", 1, None),
         ],
         sets: vec![
-            set(
+            set_in(
                 "Echo: LV M-mode",
+                &[Region::Cardiac],
                 &["lv.ivsd", "lv.lvidd", "lv.lvfwd", "lv.ivss", "lv.lvids", "lv.lvfws", "ecg.rr"],
             ),
-            set("Echo: 2D", &["echo.ao", "echo.la", "echo.rvidd", "echo.epss", "echo.pa"]),
-            set(
+            set_in("Echo: 2D", &[Region::Cardiac], &["echo.ao", "echo.la", "echo.rvidd", "echo.epss", "echo.pa"]),
+            set_in(
                 "Echo: Doppler",
+                &[Region::Cardiac],
                 &[
                     "echo.mv_e",
                     "echo.mv_a",
@@ -322,8 +443,36 @@ pub fn builtin() -> Library {
                     "ecg.rr",
                 ],
             ),
-            set("Radiography", &["vhs.long", "vhs.short", "vhs.t4", "kidney.left", "kidney.right"]),
-            set("Orthopaedic", &["ortho.norberg", "ortho.tpa", "ortho.patellar_ligament", "ortho.patella"]),
+            set_in(
+                "Radiography",
+                &[Region::Cardiac, Region::Abdominal],
+                &["vhs.long", "vhs.short", "vhs.t4", "kidney.left", "kidney.right"],
+            ),
+            set_in(
+                "Orthopaedic",
+                &[Region::Musculoskeletal],
+                &["ortho.norberg", "ortho.tpa", "ortho.patellar_ligament", "ortho.patella"],
+            ),
+            set_in(
+                "Abdomen",
+                &[Region::Abdominal],
+                &[
+                    "kidney.left",
+                    "kidney.right",
+                    "abd.adrenal_left",
+                    "abd.adrenal_right",
+                    "abd.bladder_wall",
+                    "abd.gastric_wall",
+                    "abd.si_wall",
+                    "abd.spleen",
+                    "abd.ln",
+                ],
+            ),
+            set_in(
+                "Tendons (equine)",
+                &[Region::Musculoskeletal],
+                &["tendon.sdft", "tendon.ddft", "tendon.icl", "tendon.sl", "tendon.sdft_thickness"],
+            ),
         ],
         calculations: vec![
             calc("lv.fs", "Fractional shortening", "(lv.lvidd - lv.lvids) / lv.lvidd * 100", "cm", "%", 1, Some("echo")),
@@ -977,6 +1126,7 @@ pub fn migrate_label_sets(sets: &[(String, Vec<String>)]) -> Library {
         lib.sets.push(Set {
             name: name.clone(),
             keys,
+            ..Default::default()
         });
     }
     lib
@@ -1011,6 +1161,52 @@ pub fn label_keys(lib: &Library) -> Vec<(String, String)> {
         .iter()
         .map(|d| (d.label.clone(), d.key.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+
+    #[test]
+    fn sets_belong_to_regions() {
+        let lib = builtin();
+        let names = |r: Region| -> Vec<String> {
+            lib.sets
+                .iter()
+                .filter(|s| s.applies_to(r))
+                .map(|s| s.name.clone())
+                .collect()
+        };
+        assert!(names(Region::Cardiac)
+            .iter()
+            .all(|n| n.starts_with("Echo") || n == "Radiography"));
+        assert_eq!(names(Region::Musculoskeletal), ["Orthopaedic", "Tendons (equine)"]);
+        assert!(names(Region::Abdominal).contains(&"Abdomen".to_string()));
+        assert_eq!(names(Region::All).len(), lib.sets.len());
+        // A set saved before regions existed is placed by its name; one with
+        // no clue is offered everywhere.
+        let old = Set {
+            name: "My echo extras".into(),
+            ..Default::default()
+        };
+        assert_eq!(old.regions(), [Region::Cardiac]);
+        let mine = Set {
+            name: "Mine".into(),
+            ..Default::default()
+        };
+        assert!(mine.applies_to(Region::Abdominal) && mine.applies_to(Region::Cardiac));
+    }
+
+    #[test]
+    fn studies_are_placed_by_what_they_say() {
+        assert_eq!(infer_region("US", &["Echo", ""]), Region::Cardiac);
+        assert_eq!(infer_region("US", &["ABDOMEN", "Left kidney"]), Region::Abdominal);
+        assert_eq!(infer_region("US", &["L fore fetlock", ""]), Region::Musculoskeletal);
+        assert_eq!(infer_region("US", &["", ""]), Region::Cardiac);
+        assert_eq!(infer_region("DX", &["Thorax LAT"]), Region::Cardiac);
+        assert_eq!(infer_region("DX", &["Stifle"]), Region::Musculoskeletal);
+        assert_eq!(infer_region("CT", &[""]), Region::All);
+    }
 }
 
 #[cfg(test)]
@@ -1207,6 +1403,7 @@ mod tests {
         lib.sets.push(Set {
             name: "S".into(),
             keys: vec!["lv.nope".into()],
+            ..Default::default()
         });
         let problems = validate(&lib);
         assert!(problems.iter().any(|p| p.contains("not lower-case")));
@@ -1230,11 +1427,7 @@ mod tests {
             ),
             (
                 "Mine".to_string(),
-                vec![
-                    "LVIDd".to_string(),
-                    "Kidney length (L)".into(),
-                    "Spleen thickness".into(),
-                ],
+                vec!["LVIDd".to_string(), "Kidney length (L)".into(), "Spleen width".into()],
             ),
         ];
         let lib = migrate_label_sets(&old);
@@ -1242,11 +1435,8 @@ mod tests {
         let echo = lib.set("Echo: LV M-mode").unwrap();
         assert_eq!(echo.keys, vec!["lv.ivsd", "lv.lvidd", "custom.lvpwd"]);
         let mine = lib.set("Mine").unwrap();
-        assert_eq!(mine.keys, vec!["lv.lvidd", "kidney.left", "custom.spleen_thickness"]);
-        assert_eq!(
-            lib.definition("custom.spleen_thickness").unwrap().label,
-            "Spleen thickness"
-        );
+        assert_eq!(mine.keys, vec!["lv.lvidd", "kidney.left", "custom.spleen_width"]);
+        assert_eq!(lib.definition("custom.spleen_width").unwrap().label, "Spleen width");
         assert_eq!(slug_key("Kidney length (L)"), "custom.kidney_length_l");
         // A set equal to the built-in one is dropped.
         let same = vec![(

@@ -68,21 +68,26 @@ impl Tool {
     pub const NAVIGATE: [Tool; 4] = [Tool::WindowLevel, Tool::Move, Tool::Zoom, Tool::Rotate];
 
     /// What Measure draws, chosen in the Measurements menu, in its order.
-    pub const MEASURE: [Tool; 15] = [
+    /// What the Measure tool can be, chosen in the Measurements menu.
+    pub const MEASURE: [Tool; 6] = [
         Tool::Length,
         Tool::LvMmode,
         Tool::OpenPolygon,
         Tool::Angle,
         Tool::Cobb,
         Tool::DynamicAngle,
+    ];
+
+    /// Drawing and annotation tools, in the Tools menu itself.
+    pub const DRAW: [Tool; 9] = [
+        Tool::Arrow,
+        Tool::Text,
+        Tool::Point,
         Tool::Rectangle,
         Tool::Oval,
         Tool::Polygon,
         Tool::Pencil,
         Tool::Brush,
-        Tool::Point,
-        Tool::Arrow,
-        Tool::Text,
         Tool::Repulsor,
     ];
 
@@ -579,6 +584,9 @@ pub struct ViewerState {
     text_prompt: Option<TextPrompt>,
     /// Where the pointer is over the image, for the brush outline.
     tool_hover: Option<Pos2>,
+    /// The kind of study the naming menus offer sets for; `None` follows
+    /// the study.
+    region_override: Option<ruthos_core::measure::Region>,
     /// The ROI Manager and ROI Info windows.
     pub show_roi_manager: bool,
     pub show_roi_info: bool,
@@ -736,6 +744,7 @@ pub enum MenuAction {
     SetTool(Tool),
     SetPhase(MmodePhase),
     SetSet(usize),
+    SetRegion(Option<ruthos_core::measure::Region>),
     /// Label and, when it comes from a definition, its key.
     Name(String, Option<String>),
     NamePopup,
@@ -839,6 +848,7 @@ impl ViewerState {
             brush_stroke: None,
             text_prompt: None,
             tool_hover: None,
+            region_override: None,
             // Developer option: `RUTHOS_ROI_WINDOWS=1` opens ROI Manager and ROI Info.
             show_roi_manager: std::env::var_os("RUTHOS_ROI_WINDOWS").is_some(),
             show_roi_info: std::env::var_os("RUTHOS_ROI_WINDOWS").is_some(),
@@ -1515,6 +1525,29 @@ impl ViewerState {
                 self.playing = true;
             }
         }
+        // `RUTHOS_MENU_PREVIEW=1` draws the Measurements menu in a window, and
+        // with a measurement selected opens the naming popup beside it.
+        if std::env::var_os("RUTHOS_MENU_PREVIEW").is_some() && self.current_key().is_some() {
+            let ctx = ui.ctx().clone();
+            egui::Window::new("Measurements menu (preview)")
+                .id(egui::Id::unique(("menu-preview", self.id)))
+                .default_pos([260.0, 140.0])
+                .resizable(false)
+                .show(&ctx, |ui| {
+                    ui.set_width(240.0);
+                    self.measurements_menu(ui, false);
+                });
+            if self.assign.is_none() && self.selected_roi.is_some() && !self.dev_shot_done {
+                if let (Some(key), Some(index)) = (self.current_key(), self.selected_roi) {
+                    self.assign = Some(AssignPopup {
+                        key,
+                        index,
+                        pos: Pos2::new(620.0, 140.0),
+                        custom: String::new(),
+                    });
+                }
+            }
+        }
         if !self.dev_shot_done && self.opened_at.elapsed() > std::time::Duration::from_secs(4) {
             if let Some(path) = std::env::var_os("RUTHOS_VIEWER_SCREENSHOT") {
                 self.dev_shot_done = true;
@@ -1840,6 +1873,31 @@ impl ViewerState {
             Color32::from_white_alpha((255.0 * fade) as u8),
         );
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+    }
+
+    /// The kind of study: chosen in the Measurements menu, or read from the
+    /// series and study (cardiac for an echo, abdominal, musculoskeletal).
+    fn region(&self) -> ruthos_core::measure::Region {
+        if let Some(r) = self.region_override {
+            return r;
+        }
+        let s = self.current_series();
+        ruthos_core::measure::infer_region(
+            &s.modality,
+            &[
+                &s.series_description,
+                &s.body_part_examined,
+                &self.study.study_description,
+            ],
+        )
+    }
+
+    /// The sets offered in the current context, by index into the library.
+    fn sets_in_context(&self) -> Vec<usize> {
+        let region = self.region();
+        (0..self.library.sets.len())
+            .filter(|i| self.library.sets[*i].applies_to(region))
+            .collect()
     }
 
     /// Whether there is anything to make a movie of: a loop, or a series
@@ -2421,37 +2479,43 @@ impl ViewerState {
             ui.close();
         };
 
-        // The picker: what the Measure tool draws.
-        let mut group = "";
-        for t in Tool::MEASURE {
-            if t.group() != group {
-                group = t.group();
-                menu_heading(ui, group);
+        // The context: which sets the naming menus offer.
+        let region = self.region();
+        let followed = self.region_override.is_none();
+        ui.menu_button(format!("For: {}", region.label()), |ui| {
+            if menu_item(ui, "Follow the study", followed).clicked() {
+                pick(ui, MenuAction::SetRegion(None));
             }
+            ui.separator();
+            for r in ruthos_core::measure::Region::ALL {
+                if menu_item(ui, r.label(), !followed && region == r).clicked() {
+                    pick(ui, MenuAction::SetRegion(Some(r)));
+                }
+            }
+        });
+        ui.separator();
+
+        // What the Measure tool draws.
+        menu_heading(ui, "Measure with");
+        for t in Tool::MEASURE {
             if menu_item_shortcut(ui, t.picker_label(), t.shortcut(), self.measure_tool == t, true).clicked() {
                 pick(ui, MenuAction::SetTool(t));
             }
         }
         ui.separator();
-        if !self.library.sets.is_empty() {
-            let names: Vec<String> = self.library.sets.iter().map(|s| s.name.clone()).collect();
-            ui.menu_button("Measurement set", |ui| {
-                for (i, name) in names.iter().enumerate() {
-                    if menu_item(ui, name.as_str(), self.current_set == i).clicked() {
-                        pick(ui, MenuAction::SetSet(i));
-                    }
-                }
-            });
-        }
+
+        // Naming the selected measurement: the context's sets, one submenu each.
         let selected_phase = match selected.map(|r| &r.kind) {
             Some(RoiKind::Lv { phase, .. }) => Some(*phase),
             _ => None,
         };
+        let in_context = self.sets_in_context();
         ui.add_enabled_ui(has_selected && !locked, |ui| {
-            ui.menu_button("Name selected measurement", |ui| {
+            ui.menu_button("Name selected", |ui| {
                 let current = selected.and_then(|r| r.name.clone());
+                let current_key = selected.and_then(|r| r.def_key.clone());
                 if let Some(cur) = selected_phase {
-                    menu_heading(ui, "LV M-mode phase");
+                    menu_heading(ui, "LV phase");
                     for phase in [MmodePhase::Diastole, MmodePhase::Systole] {
                         if menu_item(ui, phase.label(), cur == phase).clicked() {
                             pick(ui, MenuAction::SetPhase(phase));
@@ -2459,43 +2523,44 @@ impl ViewerState {
                     }
                     ui.separator();
                 }
-                let current_key = selected.and_then(|r| r.def_key.clone());
-                if let Some(set) = self.library.sets.get(self.current_set) {
-                    menu_heading(ui, &set.name);
-                    for key in &set.keys {
-                        let label = self.library.label(key);
-                        let is_current = current_key.as_deref() == Some(key.as_str())
-                            || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
-                        if menu_item(ui, label.as_str(), is_current).clicked() {
-                            pick(ui, MenuAction::Name(label.clone(), Some(key.clone())));
+                for &i in &in_context {
+                    let set = &self.library.sets[i];
+                    ui.menu_button(set.name.as_str(), |ui| {
+                        for key in &set.keys {
+                            let label = self.library.label(key);
+                            let is_current = current_key.as_deref() == Some(key.as_str())
+                                || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
+                            if menu_item(ui, label.as_str(), is_current).clicked() {
+                                pick(ui, MenuAction::Name(label.clone(), Some(key.clone())));
+                            }
                         }
-                    }
-                    ui.separator();
+                    });
                 }
+                ui.separator();
                 if menu_item(ui, "Other name…", false).clicked() {
                     pick(ui, MenuAction::NamePopup);
                 }
             });
         });
-        ui.separator();
-        if menu_item_shortcut(
-            ui,
-            "Undo edit",
-            &crate::platform::shortcut("Ctrl+Z"),
-            false,
-            !self.undo.is_empty() && !locked,
-        )
-        .clicked()
-        {
-            pick(ui, MenuAction::Undo);
-        }
-        if menu_item_shortcut(ui, "Delete selected", "Delete", false, has_selected && !locked).clicked() {
-            pick(ui, MenuAction::DeleteSelected);
-        }
-        if menu_item_enabled(ui, "Delete all on this image", false, any_rois && !locked).clicked() {
-            pick(ui, MenuAction::DeleteAll);
-        }
-        ui.separator();
+        ui.menu_button("Edit", |ui| {
+            if menu_item_shortcut(
+                ui,
+                "Undo edit",
+                &crate::platform::shortcut("Ctrl+Z"),
+                false,
+                !self.undo.is_empty() && !locked,
+            )
+            .clicked()
+            {
+                pick(ui, MenuAction::Undo);
+            }
+            if menu_item_shortcut(ui, "Delete selected", "Delete", false, has_selected && !locked).clicked() {
+                pick(ui, MenuAction::DeleteSelected);
+            }
+            if menu_item_enabled(ui, "Delete all on this image", false, any_rois && !locked).clicked() {
+                pick(ui, MenuAction::DeleteAll);
+            }
+        });
         ui.menu_button("Calibration", |ui| {
             if menu_item_enabled(ui, "Calibrate from selected length…", false, selected_is_length).clicked() {
                 pick(ui, MenuAction::Calibrate);
@@ -2507,33 +2572,36 @@ impl ViewerState {
                 pick(ui, MenuAction::ToggleBasisPanel);
             }
         });
-        ui.separator();
-        if menu_item(ui, "ROI Manager", self.show_roi_manager).clicked() {
-            pick(ui, MenuAction::ToggleRoiManager);
-        }
-        if menu_item(ui, "ROI Info", self.show_roi_info).clicked() {
-            pick(ui, MenuAction::ToggleRoiInfo);
-        }
-        if menu_item(ui, "Histogram and plot", self.histogram.is_some()).clicked() {
-            pick(ui, MenuAction::ToggleHistogram);
-        }
-        ui.separator();
-        if menu_item(ui, "Show measurements", self.show_rois).clicked() {
-            pick(ui, MenuAction::ToggleRois);
-        }
-        if menu_item(ui, "Show labels", self.show_labels).clicked() {
-            pick(ui, MenuAction::ToggleLabels);
-        }
-        ui.separator();
-        if menu_item_shortcut(ui, "Copy values", &crate::platform::shortcut("Ctrl+C"), false, any_rois).clicked() {
-            pick(ui, MenuAction::CopyValues);
-        }
-        if menu_item_enabled(ui, "Add to report", false, has_selected).clicked() {
-            pick(ui, MenuAction::AddToReport);
-        }
-        if menu_item(ui, "Open report", false).clicked() {
-            pick(ui, MenuAction::OpenReport);
-        }
+        ui.menu_button("Windows", |ui| {
+            if menu_item(ui, "ROI Manager", self.show_roi_manager).clicked() {
+                pick(ui, MenuAction::ToggleRoiManager);
+            }
+            if menu_item(ui, "ROI Info", self.show_roi_info).clicked() {
+                pick(ui, MenuAction::ToggleRoiInfo);
+            }
+            if menu_item(ui, "Histogram and plot", self.histogram.is_some()).clicked() {
+                pick(ui, MenuAction::ToggleHistogram);
+            }
+        });
+        ui.menu_button("Show", |ui| {
+            if menu_item(ui, "Measurements", self.show_rois).clicked() {
+                pick(ui, MenuAction::ToggleRois);
+            }
+            if menu_item(ui, "Labels", self.show_labels).clicked() {
+                pick(ui, MenuAction::ToggleLabels);
+            }
+        });
+        ui.menu_button("Report", |ui| {
+            if menu_item_shortcut(ui, "Copy values", &crate::platform::shortcut("Ctrl+C"), false, any_rois).clicked() {
+                pick(ui, MenuAction::CopyValues);
+            }
+            if menu_item_enabled(ui, "Add selected to report", false, has_selected).clicked() {
+                pick(ui, MenuAction::AddToReport);
+            }
+            if menu_item(ui, "Open report", false).clicked() {
+                pick(ui, MenuAction::OpenReport);
+            }
+        });
         if with_view {
             ui.separator();
             if menu_item_shortcut(ui, "Fit image to window", "F", false, true).clicked() {
@@ -2575,6 +2643,10 @@ impl ViewerState {
                         }
                     }
                 }
+            }
+            MenuAction::SetRegion(r) => {
+                self.region_override = r;
+                self.set_status(format!("Measurements for {}", self.region().label().to_lowercase()));
             }
             MenuAction::SetSet(i) => {
                 self.current_set = i;
@@ -2875,6 +2947,8 @@ impl ViewerState {
             .and_then(|r| r.def_key.clone());
         let library = self.library.clone();
         let _ = shared;
+        let region = self.region();
+        let mut new_region: Option<ruthos_core::measure::Region> = None;
         let ctx = ui.ctx().clone();
         // Chosen label and definition key; `Some(None)` removes the name.
         let mut choice: Option<Option<(String, Option<String>)>> = None;
@@ -2884,18 +2958,41 @@ impl ViewerState {
             .fixed_pos(pos)
             .show(&ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(210.0);
-                    ui.label(egui::RichText::new("Assign measurement").strong());
-                    for set in &library.sets {
-                        menu_heading(ui, &set.name);
-                        for k in &set.keys {
-                            let label = library.label(k);
-                            let is_current = current_key.as_deref() == Some(k.as_str())
-                                || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
-                            if menu_item(ui, label.as_str(), is_current).clicked() {
-                                choice = Some(Some((label.clone(), Some(k.clone()))));
+                    ui.set_min_width(230.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Name this measurement").strong());
+                    });
+                    // The context, changeable here too.
+                    ui.horizontal_wrapped(|ui| {
+                        for r in ruthos_core::measure::Region::ALL {
+                            if ui
+                                .selectable_label(region == r, egui::RichText::new(r.label()).size(12.0))
+                                .clicked()
+                            {
+                                new_region = Some(r);
                             }
                         }
+                    });
+                    ui.separator();
+                    // The context's sets, one submenu each, so the list stays short.
+                    for set in library.sets.iter().filter(|s| s.applies_to(region)) {
+                        let holds_current = set.keys.iter().any(|k| current_key.as_deref() == Some(k.as_str()));
+                        let title = if holds_current {
+                            format!("{}  \u{2713}", set.name)
+                        } else {
+                            set.name.clone()
+                        };
+                        ui.menu_button(title, |ui| {
+                            for k in &set.keys {
+                                let label = library.label(k);
+                                let is_current = current_key.as_deref() == Some(k.as_str())
+                                    || (current_key.is_none() && current.as_deref() == Some(label.as_str()));
+                                if menu_item(ui, label.as_str(), is_current).clicked() {
+                                    choice = Some(Some((label.clone(), Some(k.clone()))));
+                                    ui.close();
+                                }
+                            }
+                        });
                     }
                     ui.add_space(4.0);
                     ui.separator();
@@ -2918,6 +3015,7 @@ impl ViewerState {
                     }
                 });
             });
+        let submenu_open = egui::Popup::is_any_open(&ctx);
         if let Some(p) = ui.input(|i| {
             if i.pointer.any_pressed() {
                 i.pointer.interact_pos()
@@ -2925,7 +3023,7 @@ impl ViewerState {
                 None
             }
         }) {
-            if !area.response.rect.contains(p) {
+            if !area.response.rect.contains(p) && !submenu_open && choice.is_none() {
                 close = true;
             }
         }
@@ -2949,6 +3047,10 @@ impl ViewerState {
                 });
             }
             close = true;
+        }
+        if let Some(r) = new_region {
+            self.region_override = Some(r);
+            close = false;
         }
         if close {
             self.assign = None;
@@ -3490,6 +3592,7 @@ impl ViewerState {
                         // button, right-click on the right button; a small mouse
                         // glyph beside the name shows which.
                         let mut changed = false;
+                        menu_heading(ui, "Navigate");
                         for t in Tool::NAVIGATE {
                             let r = tool_menu_row(ui, t.bitmap(), t.label(), self.tool == t, self.right_tool == t);
                             if r.clicked() {
@@ -3502,8 +3605,23 @@ impl ViewerState {
                                 ui.close();
                             }
                         }
-                        // One row for measuring; what it draws is chosen in
+                        // Drawing and annotation.
+                        menu_heading(ui, "Draw");
+                        for t in Tool::DRAW {
+                            let r = tool_menu_row(ui, t.bitmap(), t.label(), self.tool == t, self.right_tool == t);
+                            if r.clicked() {
+                                self.tool = t;
+                                changed = true;
+                                ui.close();
+                            } else if r.secondary_clicked() {
+                                self.right_tool = t;
+                                changed = true;
+                                ui.close();
+                            }
+                        }
+                        // One row for measuring; what it measures is chosen in
                         // the Measurements menu beside this one.
+                        menu_heading(ui, "Measure");
                         let m = self.measure_tool;
                         let label = format!("Measure: {}", m.label());
                         let r = tool_menu_row(
@@ -3799,10 +3917,21 @@ impl ViewerState {
                     toolbar_caption(ui, &format!("Recorded at {:.0} fps", rate));
                 }
                 None => {
-                    ui.add_enabled(
-                        can_play,
-                        egui::Slider::new(&mut self.fps, 1.0..=240.0).show_value(false),
-                    );
+                    // A clear track and fill on the dark toolbar.
+                    ui.scope(|ui| {
+                        let v = ui.visuals_mut();
+                        v.widgets.inactive.bg_fill = Color32::from_gray(120);
+                        v.widgets.hovered.bg_fill = Color32::from_gray(150);
+                        v.widgets.active.bg_fill = Color32::from_gray(170);
+                        v.selection.bg_fill = Color32::from_rgb(70, 140, 230);
+                        v.slider_trailing_fill = true;
+                        ui.add_enabled(
+                            can_play,
+                            egui::Slider::new(&mut self.fps, 1.0..=240.0)
+                                .show_value(false)
+                                .trailing_fill(true),
+                        );
+                    });
                     toolbar_caption(ui, &format!("Speed {} fps", self.fps.round() as i32));
                 }
             }
@@ -5353,7 +5482,10 @@ impl ViewerState {
             Tool::Point => {
                 if response.clicked_by(button) && !self.try_select_roi(t, key, pos) {
                     if let Some(p) = pos.map(|p| t.screen_to_image(p)) {
-                        if frame.value_at(p.x.floor() as i64, p.y.floor() as i64).is_some() {
+                        // Anywhere on the image: a colour image (ultrasound)
+                        // has no single value, but a point still marks it.
+                        let inside = p.x >= 0.0 && p.y >= 0.0 && p.x < frame.width as f32 && p.y < frame.height as f32;
+                        if inside {
                             self.rois.entry(*key).or_default().push(Roi::new(RoiKind::Point { p }));
                             self.dirty_rois.insert(*key);
                         }

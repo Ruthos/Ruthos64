@@ -328,16 +328,14 @@ mod tests {
 
     #[test]
     fn old_settings_files_migrate_their_label_sets() {
-        let old = r#"{"listener_port": 4242, "measurement_sets": [{"name": "Mine", "items": ["LVIDd", "Spleen thickness"]}]}"#;
+        let old =
+            r#"{"listener_port": 4242, "measurement_sets": [{"name": "Mine", "items": ["LVIDd", "Spleen width"]}]}"#;
         let mut s: Settings = serde_json::from_str(old).unwrap();
         assert!(!s.measurements_migrated, "a file without the flag is pre-library");
         assert!(s.migrate_measurement_sets());
         assert!(s.measurement_sets.is_empty());
         let lib = s.library();
-        assert_eq!(
-            lib.set("Mine").unwrap().keys,
-            vec!["lv.lvidd", "custom.spleen_thickness"]
-        );
+        assert_eq!(lib.set("Mine").unwrap().keys, vec!["lv.lvidd", "custom.spleen_width"]);
         assert_eq!(s.listener_port, 4242);
         assert!(!s.migrate_measurement_sets(), "only once");
         // A fresh file carries the flag and nothing to migrate.

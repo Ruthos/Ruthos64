@@ -185,3 +185,9 @@ would replace.
 Measurements named before the library existed are linked to definitions by
 label when the application starts, and an old `settings.json` with label
 sets is migrated once, with the original kept as `settings.json.bak`.
+
+## Menus and context (November 2026)
+
+The Tools menu holds the navigation tools (WL/WW, Move, Zoom, Rotate), the drawing and annotation tools (Arrow, Text, Point, Rectangle, Ellipse, Polygon, Pencil, Brush, Repulsor) and one Measure row. What Measure measures is chosen in the Measurements menu: Caliper, LV dimensions, Open polygon, Angle, Cobb angle or the angle between two lines.
+
+The Measurements menu starts with the context, **For: Cardiac**, Abdominal, Musculoskeletal or All sets. It follows the study (an echo or a thorax is cardiac; an abdomen, kidney or bladder abdominal; a limb, joint or tendon musculoskeletal; ultrasound with nothing else to go on is cardiac; other studies offer every set) and can be changed in the menu or in the naming popup. Naming a measurement then offers only that context's sets, each as a short submenu. In Preferences > Measurements each set says which contexts it is offered for; a set with none ticked is offered everywhere. The built-in library adds an Abdomen set and a Tendons (equine) set of cross-sectional areas.
