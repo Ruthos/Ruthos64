@@ -162,10 +162,10 @@
       first for veterinary practice and teaching, from equine echocardiography to digital radiography.
     </p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.5-alpha/Ruthos-0.1.5-alpha-win64.zip">Download for Windows (64-bit)</a>
+      <a class="btn primary" href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.6-alpha/Ruthos-0.1.6-alpha-win64.zip">Download for Windows (64-bit)</a>
       <a class="btn" href="https://github.com/Ruthos/Ruthos64">Source on GitHub</a>
     </div>
-    <p class="meta">Version 0.1.5-alpha · Windows 10 version 1809 or later, 64-bit (x86-64) · 15 MB zip, nothing to install</p>
+    <p class="meta">Version 0.1.6-alpha · Windows 10 version 1809 or later, 64-bit (x86-64) · 15 MB zip, nothing to install</p>
     <figure class="shot">
       <img src="img/viewer-echo.jpg" width="1920" height="1163"
            alt="The Ruthos 2D viewer with two echocardiography loops side by side: a long-axis view with named Ao and VSD measurements, and a colour Doppler view.">
@@ -185,6 +185,10 @@
         <div class="card"><h3>One caliper for 2D, M-mode and Doppler</h3><p>Distance in 2D, depth and time in M-mode, time, velocity and slope in spectral Doppler, all from the scale the scanner records. Name a measurement RR interval, PHT or VSD and the right quantity is stored.</p></div>
         <div class="card"><h3>Reports</h3><p>A report per study with named measurements, the LV M-mode block, calculations, findings and key images, exported to PDF.</p></div>
         <div class="card"><h3>MPR</h3><p>Axial, coronal, sagittal and oblique planes through a CT, MR or cone-beam series, linked by a crosshair, with thick slabs, measuring tools and saving planes back to the study.</p></div>
+        <div class="card"><h3>3D and cutting</h3><p>GPU volume rendering beside the slices, with presets, MIP and MinIP. Build a box or a path, check it from any side, then cut. Click the table to remove it. A derived picture: the slices remain the reference.</p></div>
+        <div class="card"><h3>Segments and fragments</h3><p>Threshold, region grow, islands and morphology, coloured on the slices and in 3D, each with its volume. Split a fracture into pieces and export each as STL, for planning and education.</p></div>
+        <div class="card"><h3>AI segmentation on your machine</h3><p>Click a structure and SAM 2.1 finds it and follows it through the stack. An optional download on Windows, shown with its licence first. No image leaves the computer. It was not trained on veterinary images, so every result is checked against the slices.</p></div>
+        <div class="card"><h3>Guided review</h3><p>Follow an educator through a teaching case on your own copy of the images, with hand-over of control. Ruthos includes no server: one comes from your educator or institution.</p></div>
         <div class="card"><h3>Dial control</h3><p>On Windows, a Surface Dial or an ASUS ProArt DialPad steps frames and slices and fine-tunes window, level and measurement points, with keyboard shortcuts for everything.</p></div>
         <div class="card"><h3>Moving from Horos</h3><p>Import a whole Horos or OsiriX library with its albums, comments, status and key images. Watch folders bring in new files from modalities automatically.</p></div>
         <div class="card"><h3>Teaching copies</h3><p>Anonymisation by allowlist with derived identifiers, shifted dates and reviewed pixel masks, checked by an independent verification pass before anything is written.</p></div>
@@ -226,7 +230,7 @@
       <table>
         <thead><tr><th>Platform</th><th>Status</th><th>Get it</th></tr></thead>
         <tbody>
-          <tr><td>Windows 10 (1809) and 11, 64-bit (x86-64)</td><td class="ok">0.1.5-alpha available</td><td><a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.5-alpha/Ruthos-0.1.5-alpha-win64.zip"><strong>Ruthos-0.1.5-alpha-win64.zip</strong></a> (15 MB) · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.5-alpha/SHA256SUMS.txt">SHA256SUMS.txt</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">all releases</a></td></tr>
+          <tr><td>Windows 10 (1809) and 11, 64-bit (x86-64)</td><td class="ok">0.1.6-alpha available</td><td><a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.6-alpha/Ruthos-0.1.6-alpha-win64.zip"><strong>Ruthos-0.1.6-alpha-win64.zip</strong></a> (15 MB) · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.6-alpha/SHA256SUMS.txt">SHA256SUMS.txt</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">all releases</a></td></tr>
           <tr><td>macOS 11 and later, Apple Silicon and Intel</td><td class="plan">In preparation; the code already builds and tests on macOS</td><td>Not yet</td></tr>
           <tr><td>Linux, 64-bit</td><td class="plan">Builds and tests in CI; community supported</td><td><a href="https://github.com/Ruthos/Ruthos64#building">Build from source</a></td></tr>
         </tbody>
@@ -236,7 +240,7 @@
         <div>
           <h3>Install</h3>
           <ol class="steps">
-            <li>Download <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.5-alpha/Ruthos-0.1.5-alpha-win64.zip">Ruthos-0.1.5-alpha-win64.zip</a> and unzip it anywhere.</li>
+            <li>Download <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.6-alpha/Ruthos-0.1.6-alpha-win64.zip">Ruthos-0.1.6-alpha-win64.zip</a> and unzip it anywhere.</li>
             <li>Releases are not code-signed yet, so Windows SmartScreen may say it protected your PC: choose <em>More info</em>, then <em>Run anyway</em>. A PC with Smart App Control switched on will refuse it until signed releases begin.</li>
             <li>Run <code>ruthos.exe</code>. Nothing is installed and no administrator rights are needed.</li>
             <li>To receive from a modality, turn the listener on in Preferences &gt; Listener (AE title RUTHOS, port 11112) and allow Ruthos through Windows Firewall.</li>
@@ -254,7 +258,7 @@
 
       <h3 style="margin-top:32px">Verify a download</h3>
       <p class="sub" style="margin-bottom:12px">Every release lists SHA-256 checksums in <code>SHA256SUMS.txt</code>, and each file carries a GitHub build-provenance attestation recording the commit and workflow that built it.</p>
-      <pre>gh attestation verify Ruthos-0.1.5-alpha-win64.zip --repo Ruthos/Ruthos64</pre>
+      <pre>gh attestation verify Ruthos-0.1.6-alpha-win64.zip --repo Ruthos/Ruthos64</pre>
     </div>
   </section>
 
@@ -310,7 +314,7 @@
       </div>
       <div>
         <h2>Privacy</h2>
-        <p>Ruthos does not transmit any data to its developers or to third parties. It makes network connections only when the user configures them: the DICOM listener, which is off by default and receives only what the user's own devices send it, and DICOM connections the user initiates.</p>
+        <p>Ruthos does not transmit any data to its developers or to third parties. It makes network connections only when the user configures them or asks for them: the DICOM listener, which is off by default and accepts only devices the user has listed; DICOM connections the user initiates; a guided review server the user chooses to join, which receives the view state of a teaching copy and the participant's name; and the optional AI model, fetched once on request. AI segmentation runs on the user's own computer, and no image data leaves it.</p>
         <div class="notice" style="margin-top:24px">
           <strong>Not for diagnostic use.</strong> Ruthos is research and teaching software. It is not a certified medical device, and it must not be used as the basis for clinical decisions.
         </div>
@@ -333,7 +337,7 @@
 <footer>
   <div class="wrap">
     <span>Ruthos, by the Ruthos contributors. LGPL-3.0-only.</span>
-    <span><a href="https://github.com/Ruthos/Ruthos64">GitHub</a> · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.5-alpha/Ruthos-0.1.5-alpha-win64.zip">Download (64-bit)</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">Releases</a> · <a href="#signing">Code signing policy</a> · <a href="#signing">Privacy</a></span>
+    <span><a href="https://github.com/Ruthos/Ruthos64">GitHub</a> · <a href="https://github.com/Ruthos/Ruthos64/releases/download/v0.1.6-alpha/Ruthos-0.1.6-alpha-win64.zip">Download (64-bit)</a> · <a href="https://github.com/Ruthos/Ruthos64/releases">Releases</a> · <a href="#signing">Code signing policy</a> · <a href="#signing">Privacy</a></span>
   </div>
 </footer>
 

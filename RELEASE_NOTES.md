@@ -1,16 +1,26 @@
-# Ruthos 0.1.5-alpha
+# Ruthos 0.1.6-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
-## New in 0.1.5-alpha
+## New in 0.1.6-alpha
+
+- **3D in the MPR window.** GPU volume rendering in the fourth pane, with shaded, MIP and MinIP modes and presets. Rotate, window, move and zoom from a tool menu.
+- **Cutting.** Build a box or a path, check it from any side, then cut inside or outside it. Remove piece takes everything connected to a click, such as the table. Undo and restore.
+- **Segments.** A Segments panel with threshold, region grow from a click, keep largest, split into pieces, and morphology. Segments are coloured on the slices and in 3D, each with its volume and statistics. They are not saved with the study yet.
+- **AI segmentation, on your machine.** Click a structure and SAM 2.1 Tiny finds it and follows it through the stack, with include and exclude clicks to correct it. It is an optional download of about 400 MB, shown with its licence and training data first, and no image leaves the computer. It was not trained on veterinary images: check every result against the slices. See `docs/segmentation.md`.
+- **STL export** of a segment, or of each shown segment as its own file, in patient coordinates, for planning and education.
+- **Guided review.** A client for guided teaching sessions, with follow, free view, hand-over of control, invitations and signed profiles. Ruthos includes no server: one comes from your educator or institution. See `docs/guided-review.md`.
+- **Frame rates and speed.** Cine follows the file's rate and the screen's refresh, says when it is skipping frames, and offers slower speeds.
+- **Hardening.** Files are checked before they reach a decoder, with limits you can set in Preferences; decoders are fuzzed continuously; and the listener accepts only devices you have listed. If you use the listener, add your devices under Preferences > Listener. SECURITY.md explains how to report a problem.
+- **A Ruthos toolbar in MPR**, and a database sidebar that scrolls.
+
+## Previously, in 0.1.5-alpha
 
 - **Tools in MPR.** A tool bar as in the 2D viewer: Crosshair, WL/WW, Move and Zoom, and Caliper, Angle, Rectangle, Ellipse, Arrow, Point and Text, with the same letter shortcuts. Measurements are in millimetres and belong to the plane they were drawn on; select one to move its handles, Delete removes it.
 - **Lock planes**, so measuring cannot move or tilt them.
 - **Layouts:** 1×3, 2×2 (the fourth pane is the original slice through the crosshair) or a single pane.
 - **Save to study:** the plane, or a stack of planes across the volume, as a new series in the same study with its measurements; it opens, measures and reports like any other series. **Save image** writes a pane as a picture.
 - **The dial is reliable:** every turn and press reaches the viewer you last used, whatever Windows says has focus, and the dial's own menu shows the same mode as Ruthos.
-
-## Previously, in 0.1.4-alpha
 
 - Orthogonal and oblique MPR with thick slabs, and the dial control (Surface Dial, ASUS Dial and DialPad) with keyboard shortcuts.
 
@@ -31,7 +41,8 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 
 - Query by worklist (Modality Worklist) and storage commitment.
 - Reading Horos report files and Horos's saved measurements (ROIs).
-- Anything 3D.
+- Saving segments and cuts with the study (DICOM SEG), surface rendering in the 3D pane, and Horos's volume rendering opacity presets.
+- macOS and Linux for the AI tool, which runs on Windows only for now.
 - A signed installer. This build is an unsigned zip: Windows SmartScreen will warn on first run, and a PC with Smart App Control in enforce mode will refuse it. Building from source avoids both.
 
 ## Running
@@ -49,7 +60,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.5-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.6-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed yet: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.

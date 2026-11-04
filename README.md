@@ -84,11 +84,12 @@ Work is organised in tiers. Each tier is usable on its own.
 - Measurements and reports exported as data (CSV and JSON) for research, audit and teaching
 - API ready for practice management systems (PMS). Comments, measurements, reports and annotated still images are produced through one documented, versioned interface, so a PMS can be told when a study is reported and receive its findings, values and key images with their annotations. No particular PMS integration is promised yet; the principle is that connecting one needs a small connector, not changes to Ruthos
 
-### Tier 3: volume and surface rendering
+### Tier 3: volume and surface rendering (in progress, see `docs/segmentation.md`)
 
-- GPU volume rendering with the Horos preset library
-- Surface rendering and mesh export (STL and OBJ, for 3D printing and surgical planning)
-- ROI volumes: regions grown across slices, with their volume
+- GPU volume rendering with presets, MIP and MinIP, and cutting by box, path and connected piece (done); the Horos opacity presets and a transfer function editor
+- Segments: threshold, region grow, islands and morphology, on the slices and in 3D, with volumes (done); saving as DICOM SEG
+- AI segmentation on the user's machine with SAM 2.1 (done, Windows)
+- Mesh export to STL (done); surface rendering in the 3D pane, decimation, and OBJ, PLY and 3MF
 
 ### Tier 4: the future
 
@@ -108,7 +109,9 @@ Ruthos is a Cargo workspace. Each crate has a single job and a clear boundary.
 | `ruthos-core` | Data model (Study, Series, Image, Album), SQLite storage, import pipeline, file store, smart-album predicates, Horos database migration |
 | `ruthos-dicom` | Wraps [dicom-rs](https://github.com/Enet4/dicom-rs). Decoding to typed pixel buffers, rescale, geometry, default WL, CLUT and preset loaders |
 | `ruthos-net` | DICOM networking on the dicom-rs upper layer: listener, send, query/retrieve, echo |
-| `ruthos-render` | `wgpu` pipelines. Tier 1: texture upload, WL/CLUT shader, ROI geometry, annotation text. Tier 2: MPR reslicing. Tier 3: volume and surface pipelines |
+| `ruthos-render` | `wgpu` pipelines: texture upload, WL/CLUT shader, ROI geometry, annotation text, and the volume ray marcher |
+| `ruthos-segment` | Segments: label maps, classical tools, surface meshes and export, and the optional AI tool (Cargo feature `ai`) |
+| `ruthos-session` | The client side of guided teaching sessions through a session relay |
 | `ruthos-ui` | The windows, one module per Horos window, built with `egui` |
 | `ruthos` | The application binary, settings, updates |
 
