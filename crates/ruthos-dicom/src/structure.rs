@@ -181,7 +181,7 @@ fn walk<R: Read + Seek>(src: &mut R, ts: &TransferSyntax, total: u64) -> Result<
     let mut reader = LazyDataSetReader::new_with_ts(source, ts).map_err(|_| damaged())?;
     let mut depth = 0u32;
     while let Some(token) = reader.advance() {
-        let (mut decoder, len) = match token.map_err(|_| damaged())? {
+        let (decoder, len) = match token.map_err(|_| damaged())? {
             LazyDataToken::SequenceStart { len, .. } => {
                 depth += 1;
                 if depth > MAX_DEPTH || beyond(len.0, total) {
