@@ -62,6 +62,32 @@ pub struct Settings {
     /// The decode guard's limits (Preferences > Advanced); `None` keeps the
     /// defaults. Held to four times the defaults whatever the file says.
     pub decode_limits: Option<DecodeLimits>,
+    /// The guided review server. Empty until an invitation, a profile, a
+    /// site's `ruthos.ini` or the user sets one.
+    pub session_server: Option<String>,
+    /// The signing key first seen for each session server.
+    pub session_pins: std::collections::BTreeMap<String, SessionPin>,
+    /// Profiles applied, oldest first, with what Revert restores.
+    pub applied_profiles: Vec<AppliedProfile>,
+}
+
+/// A session server's signing key.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionPin {
+    pub kid: String,
+    pub key: String,
+}
+
+/// A profile the user applied.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppliedProfile {
+    pub issuer: String,
+    pub by: String,
+    pub verified: bool,
+    pub applied: String,
+    pub previous: serde_json::Value,
 }
 
 /// A device allowed to send to the listener.
@@ -275,6 +301,9 @@ impl Default for Settings {
             watch_folders: Vec::new(),
             dial: DialSettings::default(),
             decode_limits: None,
+            session_server: None,
+            session_pins: Default::default(),
+            applied_profiles: Vec::new(),
         }
     }
 }

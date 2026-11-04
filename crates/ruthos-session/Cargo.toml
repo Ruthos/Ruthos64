@@ -1,0 +1,39 @@
+[package]
+name = "ruthos-session"
+description = "Guided review: the client side of a teaching session through a session relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+base64 = { workspace = true }
+chrono = { workspace = true }
+crossbeam-channel = { workspace = true }
+ed25519-dalek = { workspace = true }
+futures-util = { workspace = true }
+getrandom = { workspace = true }
+keyring = { workspace = true }
+open = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+walkdir = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }

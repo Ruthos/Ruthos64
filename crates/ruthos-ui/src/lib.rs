@@ -25,6 +25,7 @@ pub mod query;
 pub mod report;
 pub mod roi;
 pub mod routing;
+pub mod session;
 pub mod shared;
 pub mod theme;
 pub mod viewer;

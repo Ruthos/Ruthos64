@@ -24,8 +24,24 @@ fn main() -> eframe::Result {
 
     // Files or folders on the command line are imported and opened. This is
     // what "Open with Ruthos" from Explorer hands us.
-    let startup_paths: Vec<std::path::PathBuf> = std::env::args_os()
-        .skip(1)
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    // Invitation links and profiles, which a running copy takes over.
+    let startup_links: Vec<String> = args
+        .iter()
+        .filter_map(|a| a.to_str())
+        .filter(|a| ruthos_ui::platform::handover::is_session_argument(a))
+        .map(str::to_string)
+        .collect();
+    if !startup_links.is_empty() && ruthos_ui::platform::handover::hand_to_running(&startup_links) {
+        return Ok(());
+    }
+    std::thread::spawn(ruthos_ui::platform::handover::register_links);
+    let startup_paths: Vec<std::path::PathBuf> = args
+        .into_iter()
+        .filter(|a| {
+            !a.to_str()
+                .is_some_and(ruthos_ui::platform::handover::is_session_argument)
+        })
         .map(std::path::PathBuf::from)
         .filter(|p| p.exists())
         .collect();
@@ -33,13 +49,15 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "Ruthos",
         options,
-        Box::new(move |cc| match ruthos_ui::RuthosApp::new(cc, startup_paths) {
-            Ok(app) => Ok(Box::new(app)),
-            Err(e) => {
-                tracing::error!("startup failed: {e:#}");
-                Err(Box::new(std::io::Error::other(e.to_string())))
-            }
-        }),
+        Box::new(
+            move |cc| match ruthos_ui::RuthosApp::new(cc, startup_paths, startup_links) {
+                Ok(app) => Ok(Box::new(app)),
+                Err(e) => {
+                    tracing::error!("startup failed: {e:#}");
+                    Err(Box::new(std::io::Error::other(e.to_string())))
+                }
+            },
+        ),
     );
 
     if let Err(e) = &result {

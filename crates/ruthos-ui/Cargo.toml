@@ -25,6 +25,9 @@ ruthos-core = { workspace = true }
 ruthos-dicom = { workspace = true }
 ruthos-net = { workspace = true }
 ruthos-render = { workspace = true }
+ruthos-session = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
 
 # The native menu bar and Finder open events (platform/macos.rs).
 [target.'cfg(target_os = "macos")'.dependencies]

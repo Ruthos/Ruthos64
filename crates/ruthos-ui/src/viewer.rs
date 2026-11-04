@@ -25,6 +25,9 @@ use crate::loader::FrameKey;
 use crate::roi::{roi_color, MmodePhase, Roi, RoiKind};
 use crate::shared::Shared;
 use crate::theme;
+#[path = "session_view.rs"]
+mod session_view;
+
 use crate::widgets::{
     menu_check, menu_heading, menu_item, menu_item_enabled, menu_item_shortcut, shadow_text, thumbnail_cell,
     tool_menu_row, toolbar_caption, toolbar_separator, ToolbarButton,
@@ -669,6 +672,9 @@ pub struct ViewerState {
     gpu: HashMap<FrameKey, Arc<GpuImage>>,
     gpu_order: VecDeque<FrameKey>,
 
+    /// What this viewer shows and sends in a guided session.
+    session: session_view::SessionView,
+
     pub close_requested: bool,
     /// Teaching copy with an answer key: measurements hidden until revealed.
     pub reveal_answers: bool,
@@ -903,6 +909,7 @@ impl ViewerState {
             frame_order: VecDeque::new(),
             gpu: HashMap::new(),
             gpu_order: VecDeque::new(),
+            session: Default::default(),
             close_requested: false,
             reveal_answers: false,
             mouse_pixel: None,
@@ -3292,8 +3299,11 @@ impl ViewerState {
             self.close_requested = true;
         }
         self.pump_loader(shared);
+        self.session_sync(ui, shared);
         self.tick_cine(ui);
-        self.keyboard(ui, shared);
+        if !self.session.following {
+            self.keyboard(ui, shared);
+        }
         self.draw_dial_indicator(ui, shared);
         self.draw_cine_banner(ui);
         self.draw_status(ui);
@@ -4719,7 +4729,7 @@ impl ViewerState {
         }
 
         let mut transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.panes[k].view);
-        if active {
+        if active && !self.session.following {
             self.handle_input(ui, &response, &mut transform, &frame, &key);
             self.panes[k].view = transform.state;
             // Input may have scrolled this cell to another image (or past the
@@ -4814,6 +4824,12 @@ impl ViewerState {
                 }
             }
         }
+        if let Some(list) = self.session.overlay.get(&key).filter(|_| self.show_rois) {
+            for (roi, colour) in list {
+                roi.draw_opts(&painter, &transform, &frame, *colour, false, self.show_labels);
+            }
+        }
+        self.draw_session(&painter, &transform, k);
         if active {
             if let Some((a, b)) = self.drag_draft {
                 if let Some(kind) = draft_kind(self.tool, a, b) {

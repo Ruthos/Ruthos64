@@ -26,6 +26,7 @@ enum Section {
     Watch,
     Viewer,
     Measurements,
+    GuidedReview,
     Advanced,
 }
 
@@ -65,6 +66,7 @@ impl PrefsState {
             Some("viewer") => Section::Viewer,
             Some("advanced") => Section::Advanced,
             Some("measurements") => Section::Measurements,
+            Some("guided") => Section::GuidedReview,
             _ => Section::General,
         };
         Self {
@@ -132,6 +134,11 @@ impl PrefsState {
                             "Measurements",
                         ),
                         (
+                            Section::GuidedReview,
+                            crate::widgets::Icon::Bitmap(Bitmap::Network),
+                            "Guided Review",
+                        ),
+                        (
                             Section::Advanced,
                             crate::widgets::Icon::Bitmap(Bitmap::Presets),
                             "Advanced",
@@ -191,6 +198,10 @@ impl PrefsState {
                         Section::Viewer => self.viewer(ui, shared),
                         Section::Advanced => self.advanced(ui),
                         Section::Measurements => self.measurements(ui),
+                        Section::GuidedReview => {
+                            let ctx = ui.ctx().clone();
+                            shared.session.lock().tab(ui, shared, &ctx);
+                        }
                     });
             });
     }

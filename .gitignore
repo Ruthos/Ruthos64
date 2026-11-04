@@ -7,3 +7,8 @@
 *.log
 /ruthos-data/
 /dist
+
+# Deployment files: the servers a site or a developer uses stay out of the repository.
+ruthos.ini
+*.local.ini
+policy.json

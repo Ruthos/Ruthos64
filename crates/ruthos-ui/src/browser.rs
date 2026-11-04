@@ -476,6 +476,13 @@ impl BrowserState {
 
         // Files dropped onto the window are imported.
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+        // A dropped profile goes to the review dialog, not the archive.
+        let (profiles, dropped): (Vec<PathBuf>, Vec<PathBuf>) = dropped
+            .into_iter()
+            .partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ruthosprofile")));
+        for p in profiles {
+            shared.session.lock().open_profile(&p, shared, &ctx);
+        }
         if !dropped.is_empty() {
             self.start_import(shared, dropped);
         }
@@ -951,6 +958,12 @@ impl BrowserState {
         }
 
         ui.add_space(8.0);
+        if source_row(ui, icons::SMART_ALBUM, "Guided review…", None, false)
+            .on_hover_text("Teaching sessions: join, host and follow")
+            .clicked()
+        {
+            shared.open_session.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         if source_row(ui, icons::SMART_ALBUM, "Preferences…", None, false)
             .on_hover_text(format!("Settings ({})", crate::platform::shortcut("Ctrl+,")))
             .clicked()

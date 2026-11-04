@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use parking_lot::Mutex;
 
+pub mod handover;
 #[cfg(target_os = "macos")]
 pub mod macos;
 

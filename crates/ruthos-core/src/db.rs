@@ -346,6 +346,18 @@ impl Database {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// The study holding this Study Instance UID, if any.
+    pub fn study_id_by_uid(&self, uid: &str) -> Result<Option<i64>> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                "SELECT id FROM study WHERE study_instance_uid = ?1",
+                params![uid],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     pub fn study(&self, id: i64) -> Result<Option<StudyRow>> {
         let conn = self.conn.lock();
         let row = conn

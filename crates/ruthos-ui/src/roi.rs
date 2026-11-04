@@ -298,7 +298,7 @@ pub fn echo_cm() -> bool {
     ECHO_CM.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Roi {
     pub kind: RoiKind,
     /// The named measurement this ROI stands for, e.g. `LVIDd`.
@@ -310,6 +310,22 @@ pub struct Roi {
     /// What the definition records (`Roi::resolve`); not stored, since it
     /// follows the definition.
     pub quantity: Option<Quantity>,
+    /// This measurement's id in a guided session, once published.
+    pub shared_id: Option<String>,
+    /// Read from the archive, so already on every copy of the study.
+    pub from_archive: bool,
+}
+
+/// Two measurements are equal when they measure the same thing; how a
+/// session has tracked them is beside the point.
+impl PartialEq for Roi {
+    fn eq(&self, o: &Self) -> bool {
+        self.kind == o.kind
+            && self.name == o.name
+            && self.id == o.id
+            && self.def_key == o.def_key
+            && self.quantity == o.quantity
+    }
 }
 
 /// What a named measurement records. One caliper line can give a
@@ -435,6 +451,8 @@ impl Roi {
             id: None,
             def_key: None,
             quantity: None,
+            shared_id: None,
+            from_archive: false,
         }
     }
 
@@ -515,6 +533,8 @@ impl Roi {
             id: if r.id > 0 { Some(r.id) } else { None },
             def_key: r.def_key.clone(),
             quantity: None,
+            shared_id: None,
+            from_archive: true,
         })
     }
 

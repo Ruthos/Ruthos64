@@ -1,0 +1,27 @@
+; ruthos.ini: pointing Ruthos at a session server without that address being
+; in the program or its settings. Copy this to ruthos.ini. It is read from:
+;
+;   1. wherever the RUTHOS_INI environment variable says;
+;   2. the folder holding ruthos.exe, so a training centre can hand students
+;      a zip of Ruthos and this file for their own laptops;
+;   3. %APPDATA%\Ruthos\ruthos.ini (~/.config/ruthos/ruthos.ini elsewhere).
+;
+; It holds no credentials, and Ruthos reads nothing from it but these keys.
+; Sign-in always happens in the browser. Anyone who can edit this file can
+; repoint Ruthos, so a managed lab should use the administrator's policy file
+; instead (see docs/guided-review.md); it is locked and shows a padlock.
+;
+; ruthos.ini and *.local.ini are git-ignored.
+
+[guided-review]
+; The server to use when the user has set none.
+server = https://relay.example.org/teaching
+
+; Optional: when set, the only servers Ruthos may use here, comma separated.
+; allowed_servers = https://relay.example.org/teaching
+
+; Optional: the only issuers whose profiles may be imported.
+; allowed_issuers = https://relay.example.org/teaching
+
+; Optional: for networks that allow web traffic only through a proxy.
+; proxy = http://proxy.example.org:3128

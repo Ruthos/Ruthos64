@@ -5,6 +5,7 @@ members = [
     "crates/ruthos-dicom",
     "crates/ruthos-net",
     "crates/ruthos-render",
+    "crates/ruthos-session",
     "crates/ruthos-ui",
     "crates/ruthos",
 ]
@@ -22,6 +23,7 @@ ruthos-core = { path = "crates/ruthos-core" }
 ruthos-dicom = { path = "crates/ruthos-dicom" }
 ruthos-net = { path = "crates/ruthos-net" }
 ruthos-render = { path = "crates/ruthos-render" }
+ruthos-session = { path = "crates/ruthos-session" }
 ruthos-ui = { path = "crates/ruthos-ui" }
 
 # UI and GPU
@@ -72,6 +74,21 @@ rayon = "1.12"
 crossbeam-channel = "0.5"
 uuid = { version = "1.29", features = ["v4"] }
 parking_lot = "0.12"
+
+# Guided review (ruthos-session). rustls with the operating system's
+# certificate store: networks that inspect TLS install their root there.
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
+ed25519-dalek = "2"
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+url = "2.5"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [profile.dev]
 opt-level = 1

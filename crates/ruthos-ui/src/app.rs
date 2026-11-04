@@ -40,12 +40,20 @@ pub struct RuthosApp {
     prefs: Option<PrefsState>,
     query: Option<QueryState>,
     router: crate::routing::Router,
+    /// `ruthos:` links and profiles from the command line, for the first frame.
+    startup_links: Vec<String>,
+    /// When this copy last said it was running.
+    heartbeat: Option<std::time::Instant>,
 }
 
 impl RuthosApp {
     /// `startup_paths` are files or folders given on the command line; they
     /// are imported and the first resulting study is opened in a viewer.
-    pub fn new(cc: &eframe::CreationContext<'_>, startup_paths: Vec<std::path::PathBuf>) -> anyhow::Result<Self> {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        startup_paths: Vec<std::path::PathBuf>,
+        startup_links: Vec<String>,
+    ) -> anyhow::Result<Self> {
         let render_state = cc
             .wgpu_render_state
             .clone()
@@ -240,6 +248,8 @@ impl RuthosApp {
             prefs: None,
             query: None,
             router: Default::default(),
+            startup_links,
+            heartbeat: None,
         })
     }
 
@@ -361,8 +371,8 @@ impl RuthosApp {
             ViewportBuilder::default()
                 .with_title("Ruthos Preferences")
                 // Wide enough for the eight section buttons.
-                .with_inner_size([800.0, 560.0])
-                .with_min_inner_size([780.0, 420.0])
+                .with_inner_size([900.0, 560.0])
+                .with_min_inner_size([880.0, 420.0])
                 .with_resizable(true),
             |ctx, _class| {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
@@ -383,6 +393,61 @@ impl RuthosApp {
         if close {
             self.prefs = None;
         }
+    }
+
+    /// Links and profiles handed in, the session's events, and the study a
+    /// follower should be looking at.
+    fn guided_review(&mut self, ctx: &egui::Context) {
+        let due = self.heartbeat.is_none_or(|t| t.elapsed() >= Duration::from_secs(2));
+        if due {
+            self.heartbeat = Some(std::time::Instant::now());
+            crate::platform::handover::beat();
+            self.startup_links.extend(crate::platform::handover::take());
+        }
+        let links = std::mem::take(&mut self.startup_links);
+        let shared = self.shared.clone();
+        {
+            let mut hub = shared.session.lock();
+            for link in &links {
+                crate::session::route_argument(link, &mut hub, &shared, ctx);
+            }
+            hub.pump(ctx);
+        }
+        let wanted = {
+            let hub = shared.session.lock();
+            match hub.role() {
+                crate::session::Role::Follower => hub
+                    .model
+                    .as_ref()
+                    .and_then(|m| m.layout.get("study"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                _ => None,
+            }
+        };
+        if let Some(uid) = wanted {
+            let id = shared.db.study_id_by_uid(&uid).ok().flatten();
+            let showing = self
+                .viewers
+                .iter()
+                .find(|v| v.lock().study.study_instance_uid == uid)
+                .map(|v| v.lock().id);
+            let mut hub = shared.session.lock();
+            hub.missing = id.is_none().then(|| {
+                hub.model
+                    .as_ref()
+                    .and_then(|m| m.layout.get("case"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string()
+            });
+            hub.viewer = showing;
+            drop(hub);
+            if let (Some(id), None) = (id, showing) {
+                self.open_viewer(id, None);
+            }
+        }
+        crate::session::window(ctx, &shared);
     }
 
     /// Apply saved preferences to the running application.
@@ -613,6 +678,7 @@ impl eframe::App for RuthosApp {
             );
         }
 
+        self.guided_review(&ctx);
         self.preferences(&ctx);
         self.query_window(&ctx);
         self.router.pump(&ctx, &self.shared);

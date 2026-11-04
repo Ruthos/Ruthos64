@@ -83,6 +83,10 @@ pub struct Shared {
     pub listener_allow: Arc<std::sync::Mutex<Vec<ruthos_net::scp::AllowEntry>>>,
     /// The dial's controllers and events (Windows; nothing elsewhere).
     pub dial: Mutex<crate::dial::DialHost>,
+    /// Guided review: the session as the windows see it.
+    pub session: Mutex<crate::session::Hub>,
+    /// Open the Guided review window.
+    pub open_session: AtomicBool,
 }
 
 impl Shared {
@@ -98,6 +102,8 @@ impl Shared {
             db,
             paths,
             library: Mutex::new(Arc::new(settings.library())),
+            session: Mutex::new(crate::session::Hub::new(&settings)),
+            open_session: AtomicBool::new(false),
             settings: Mutex::new(settings),
             render_state,
             loader: FrameLoader::new(),
