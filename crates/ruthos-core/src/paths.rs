@@ -2,7 +2,8 @@
 //!
 //! Mirrors the Horos data folder: a `DATABASE.noindex` tree of imported files,
 //! an `INCOMING.noindex` drop folder that the DICOM listener and the import
-//! scanner share, a thumbnail cache, and the SQLite database itself.
+//! scanner share, a `NOT READABLE` folder for incoming files that could not
+//! be imported, a thumbnail cache, and the SQLite database itself.
 
 use std::path::{Path, PathBuf};
 
@@ -42,6 +43,13 @@ impl DataPaths {
 
     pub fn temp_dir(&self) -> PathBuf {
         self.root.join("TEMP.noindex")
+    }
+
+    /// Where incoming files that cannot be imported are set aside. Horos
+    /// uses the same name, beside `INCOMING.noindex` rather than inside it,
+    /// so the incoming scanner never sees them again.
+    pub fn not_readable_dir(&self) -> PathBuf {
+        self.root.join("NOT READABLE")
     }
 
     /// Create every folder that does not exist yet.
