@@ -35,4 +35,9 @@ seeds = {
 }
 for name, text in seeds.items():
     (corpus / "profile_and_link" / name).write_text(text)
+# The canary runs these once: a 12-bit and a lossless JPEG, each decoded by
+# libjpeg-turbo.
+(root / "canary").mkdir(exist_ok=True)
+for name in ("JPEG-lossy.dcm", "JPEG-LL.dcm"):
+    shutil.copy(samples / name, root / "canary" / name)
 print("seeded", sum(1 for _ in corpus.rglob("*") if _.is_file()), "files")

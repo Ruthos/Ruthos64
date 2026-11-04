@@ -148,13 +148,14 @@ jobs:
 
   # The proof that a clean night means something: a planted out-of-bounds
   # read in the JPEG path (crates/ruthos-dicom/src/jpeg.rs, feature
-  # fuzz-canary) must be found inside libjpeg-turbo. The bug is ours and its
-  # input is one of the samples, so its crash file is thrown away.
+  # fuzz-canary) must be found inside libjpeg-turbo. The two JPEG samples run
+  # once each, so the result does not depend on what mutation turns up. The
+  # bug is ours and its input is a public sample, so the crash is thrown away.
   canary:
     name: Canary (planted bug is found in the C decoder)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -166,7 +167,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz
-      - name: Seed corpus
+      - name: The JPEG samples
         run: python3 fuzz/seed.py
       - name: Build decode_frame with the canary
         working-directory: fuzz
@@ -174,19 +175,20 @@ jobs:
       - name: decode_frame finds the planted read
         working-directory: fuzz
         run: |
-          if cargo fuzz run -O --debug-assertions --features canary decode_frame corpus/decode_frame -- \
-              -max_total_time=900 -rss_limit_mb=4096 -timeout=30 > /tmp/canary.log 2>&1; then
-            tail -20 /tmp/canary.log
+          set +e
+          cargo fuzz run -O --debug-assertions --features canary decode_frame canary -- -runs=0 > /tmp/canary.log 2>&1
+          status=$?
+          set -e
+          grep -E "ERROR: AddressSanitizer|^ +#[0-9]+ |SUMMARY" /tmp/canary.log | head -24
+          if [ "$status" -eq 0 ]; then
             echo "::error::the planted out-of-bounds read was not found"; exit 1
           fi
-          grep -E "ERROR: AddressSanitizer|SUMMARY" /tmp/canary.log | head
           if ! grep -q "heap-buffer-overflow" /tmp/canary.log; then
-            tail -40 /tmp/canary.log
+            tail -60 /tmp/canary.log
             echo "::error::the run stopped, but not on the planted read"; exit 1
           fi
           # Inside the instrumented C library, not somewhere in Rust.
-          if ! grep -qE "#[0-9]+ .* in [a-z_0-9]+ .*/jd[a-z0-9]+\.c" /tmp/canary.log; then
-            grep -E "^ +#[0-9]+ " /tmp/canary.log | head -20
+          if ! grep -qE "^ +#[0-9]+ .* in [a-zA-Z_0-9]+ .*/j[a-z0-9]+\.c" /tmp/canary.log; then
             echo "::error::the read was not reported from libjpeg-turbo's C code"; exit 1
           fi
           echo "The planted read was found inside libjpeg-turbo."

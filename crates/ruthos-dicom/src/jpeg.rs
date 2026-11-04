@@ -193,7 +193,7 @@ fn decode_inner(data: &[u8]) -> Result<JpegImage> {
                 let mut buf = crate::guard::try_zeroed::<i16>(n)?;
                 if tj::tj3Decompress12(
                     handle.0,
-                    data.as_ptr(),
+                    scan.as_ptr(),
                     data.len() as _,
                     buf.as_mut_ptr(),
                     0,
@@ -210,7 +210,7 @@ fn decode_inner(data: &[u8]) -> Result<JpegImage> {
                 let mut buf = crate::guard::try_zeroed::<u16>(n)?;
                 if tj::tj3Decompress16(
                     handle.0,
-                    data.as_ptr(),
+                    scan.as_ptr(),
                     data.len() as _,
                     buf.as_mut_ptr(),
                     0,
