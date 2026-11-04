@@ -65,6 +65,7 @@ impl RuthosApp {
         }
 
         let settings = Settings::load();
+        crate::platform::apply_decode_limits(&settings);
         let paths = DataPaths::new(settings.data_root());
         paths.ensure()?;
         let db = Database::open(&paths)?;
@@ -359,9 +360,9 @@ impl RuthosApp {
             id,
             ViewportBuilder::default()
                 .with_title("Ruthos Preferences")
-                // Wide enough for the seven section buttons.
-                .with_inner_size([720.0, 540.0])
-                .with_min_inner_size([680.0, 420.0])
+                // Wide enough for the eight section buttons.
+                .with_inner_size([800.0, 560.0])
+                .with_min_inner_size([780.0, 420.0])
                 .with_resizable(true),
             |ctx, _class| {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {

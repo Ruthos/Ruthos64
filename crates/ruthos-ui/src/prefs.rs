@@ -26,6 +26,7 @@ enum Section {
     Watch,
     Viewer,
     Measurements,
+    Advanced,
 }
 
 pub struct PrefsState {
@@ -62,6 +63,7 @@ impl PrefsState {
             Some("routing") => Section::Routing,
             Some("watch") => Section::Watch,
             Some("viewer") => Section::Viewer,
+            Some("advanced") => Section::Advanced,
             Some("measurements") => Section::Measurements,
             _ => Section::General,
         };
@@ -129,6 +131,11 @@ impl PrefsState {
                             crate::widgets::Icon::Bitmap(Bitmap::Length),
                             "Measurements",
                         ),
+                        (
+                            Section::Advanced,
+                            crate::widgets::Icon::Bitmap(Bitmap::Presets),
+                            "Advanced",
+                        ),
                     ] {
                         if ToolbarButton::new(icon, label)
                             .selected(self.section == section)
@@ -182,6 +189,7 @@ impl PrefsState {
                         Section::Routing => self.routing(ui, shared),
                         Section::Watch => self.watch_folders(ui, shared),
                         Section::Viewer => self.viewer(ui, shared),
+                        Section::Advanced => self.advanced(ui),
                         Section::Measurements => self.measurements(ui),
                     });
             });
@@ -645,6 +653,75 @@ impl PrefsState {
         }
     }
 
+    /// Limits on the images Ruthos will decode: guards against damaged or
+    /// crafted files. Up to four times the defaults.
+    fn advanced(&mut self, ui: &mut Ui) {
+        use ruthos_core::settings::DecodeLimits;
+        use ruthos_dicom::guard::Limits;
+        Self::heading(ui, "Image limits");
+        Self::hint(
+            ui,
+            "Ruthos refuses an image whose size or description is out of all proportion, before any decoder sees it: a damaged or deliberately crafted file cannot then make it run out of memory or misread its data. The defaults sit well above real studies (a large DR plate is about 4,300 by 3,500 pixels; an echo loop a few hundred frames). Raise a limit only for a genuine study that needs it; nothing in a file can raise them, and each stops at four times its default.",
+        );
+        ui.add_space(8.0);
+        let ceiling = DecodeLimits::from_limits(Limits::ceiling());
+        let mut l = self.draft.decode_limits.unwrap_or_default();
+        let before = l;
+        egui::Grid::new("prefs-limits")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("Largest side");
+                ui.add(
+                    egui::DragValue::new(&mut l.side)
+                        .range(1024..=ceiling.side)
+                        .suffix(" pixels"),
+                );
+                ui.end_row();
+                ui.label("Largest frame");
+                ui.add(
+                    egui::DragValue::new(&mut l.megapixels)
+                        .range(8..=ceiling.megapixels)
+                        .suffix(" megapixels"),
+                );
+                ui.end_row();
+                ui.label("Most frames in one image");
+                ui.add(egui::DragValue::new(&mut l.frames).range(100..=ceiling.frames));
+                ui.end_row();
+                ui.label("Largest compressed frame");
+                ui.add(
+                    egui::DragValue::new(&mut l.fragment_mb)
+                        .range(16..=ceiling.fragment_mb)
+                        .suffix(" MB"),
+                );
+                ui.end_row();
+                ui.label("Memory for one loop or series");
+                ui.add(
+                    egui::DragValue::new(&mut l.series_mb)
+                        .range(256..=ceiling.series_mb)
+                        .suffix(" MB"),
+                );
+                ui.end_row();
+            });
+        if l != before {
+            self.draft.decode_limits = Some(l);
+        }
+        ui.add_space(6.0);
+        if ui
+            .add_enabled(
+                self.draft.decode_limits.is_some(),
+                egui::Button::new("Restore the defaults"),
+            )
+            .clicked()
+        {
+            self.draft.decode_limits = None;
+        }
+        Self::hint(
+            ui,
+            "By default the memory limit is the smaller of 2 GB and half this computer's memory. A loop larger than it is shown a frame at a time. Changes take effect when you press Save.",
+        );
+    }
+
     fn routing(&mut self, ui: &mut Ui, shared: &Shared) {
         use ruthos_core::routing::{RouteRule, RouteSource};
         Self::heading(ui, "Routing");
@@ -925,6 +1002,7 @@ impl PrefsState {
                 let previous = shared.settings.lock().clone();
                 *shared.settings.lock() = self.draft.clone();
                 *shared.library.lock() = std::sync::Arc::new(self.draft.library());
+                crate::platform::apply_decode_limits(&self.draft);
                 let mut notes = Vec::new();
                 if previous.data_root != self.draft.data_root {
                     notes.push("the database folder");

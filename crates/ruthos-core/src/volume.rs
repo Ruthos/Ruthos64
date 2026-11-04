@@ -230,6 +230,12 @@ impl Volume {
     /// Decode the files of a series and build its volume. `progress` gets
     /// slices done and the total; `cancel` stops between slices.
     pub fn load(files: &[PathBuf], progress: &(dyn Fn(usize, usize) + Sync), cancel: &AtomicBool) -> Result<Volume> {
+        // The whole series, decoded, must fit the memory Ruthos allows.
+        if let Some(first) = files.first() {
+            let meta = ruthos_dicom::read_meta(first)?;
+            let per = ruthos_dicom::guard::decoded_bytes(&meta);
+            ruthos_dicom::guard::check_series_bytes(per.saturating_mul(files.len() as u64))?;
+        }
         let done = AtomicUsize::new(0);
         let frames: Vec<Result<Frame>> = files
             .par_iter()

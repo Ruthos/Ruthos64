@@ -97,6 +97,9 @@ pub fn decode_frame(path: &Path, frame_index: u32) -> Result<Frame> {
         m.transfer_syntax = obj.meta().transfer_syntax().trim_end_matches('\0').to_string();
         m
     };
+    // Nothing reaches a decoder until its description holds together.
+    crate::guard::check_object(&obj, &meta, &[frame_index])?;
+    crate::guard::check_series_bytes(crate::guard::decoded_bytes(&meta) / meta.number_of_frames.max(1) as u64)?;
 
     if jpeg::is_jpeg_transfer_syntax(&meta.transfer_syntax) {
         return decode_jpeg_frame(&obj, meta, frame_index);
@@ -152,6 +155,11 @@ pub fn decode_all_frames(path: &Path) -> Result<Vec<Frame>> {
         m
     };
     let frames = meta.number_of_frames.max(1);
+    // Every frame's description must hold together, and the whole loop must
+    // fit the memory Ruthos allows; a loop that does not is opened a frame
+    // at a time by the caller instead.
+    crate::guard::check_object(&obj, &meta, &[])?;
+    crate::guard::check_series_bytes(crate::guard::decoded_bytes(&meta))?;
 
     if jpeg::is_jpeg_transfer_syntax(&meta.transfer_syntax) {
         return (0..frames).map(|k| decode_jpeg_frame(&obj, meta.clone(), k)).collect();
@@ -251,14 +259,13 @@ fn decode_jpeg_frame(obj: &dicom_object::DefaultDicomObject, meta: InstanceMeta,
         )));
     };
 
+    crate::guard::check_codestream(&meta, crate::guard::Codec::Jpeg, &codestream)?;
     let img = jpeg::decode(&codestream)?;
     let (width, height) = (img.width, img.height);
-    if meta.rows != 0 && meta.columns != 0 && (meta.rows != height || meta.columns != width) {
-        tracing::warn!(
-            "JPEG size {width}x{height} differs from header {}x{}; using the JPEG",
-            meta.columns,
-            meta.rows
-        );
+    if meta.rows != height || meta.columns != width {
+        // The guard compared the frame header; a stream that decodes to
+        // another size still does not match its description.
+        return Err(DicomError::Unsupported(crate::guard::MISMATCH.into()));
     }
 
     if img.components == 3 {

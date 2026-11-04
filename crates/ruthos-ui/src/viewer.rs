@@ -3068,6 +3068,9 @@ impl ViewerState {
     // ------------------------------------------------------------ caches
 
     fn pump_loader(&mut self, shared: &Shared) {
+        for notice in shared.loader.take_notices() {
+            self.set_status(notice);
+        }
         for loaded in shared.loader.poll() {
             match loaded.result {
                 Ok(frame) => {
@@ -3118,7 +3121,9 @@ impl ViewerState {
             }
             if frames > 1 {
                 // A loop is decoded in one pass and kept whole.
-                shared.loader.request_all(img.id, shared.resolve(&img.path), frames);
+                shared
+                    .loader
+                    .request_all(img.id, shared.resolve(&img.path), frames, frame);
             } else {
                 shared.loader.request(key, shared.resolve(&img.path));
             }

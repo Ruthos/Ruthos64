@@ -55,6 +55,50 @@ pub fn shortcut_for(canonical: &str, mac: bool) -> String {
 
 /// Open a file or folder with the program the system uses for it: the
 /// shell's `start` on Windows, `open` on macOS, `xdg-open` on Linux.
+/// Physical memory in bytes, where the platform says.
+pub fn physical_memory() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let mut status = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: a plain query into a struct we own, sized as required.
+        if unsafe { GlobalMemoryStatusEx(&mut status) }.is_ok() {
+            return Some(status.ullTotalPhys);
+        }
+        None
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let line = text.lines().find(|l| l.starts_with("MemTotal:"))?;
+        let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+        Some(kb * 1024)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        None
+    }
+}
+
+/// The decode guard's limits for these settings: the user's, or the
+/// defaults with the series limit the smaller of 2 GB and half of memory.
+pub fn apply_decode_limits(settings: &ruthos_core::Settings) {
+    let limits = match settings.decode_limits {
+        Some(l) => l.to_limits(),
+        None => {
+            let mut l = ruthos_dicom::guard::Limits::default();
+            if let Some(mem) = physical_memory() {
+                l.series_bytes = l.series_bytes.min(mem / 2);
+            }
+            l
+        }
+    };
+    ruthos_dicom::guard::set_limits(limits);
+}
+
 pub fn open_path(path: &std::path::Path) {
     if let Err(e) = open::that_detached(path) {
         tracing::warn!("could not open {}: {e}", path.display());

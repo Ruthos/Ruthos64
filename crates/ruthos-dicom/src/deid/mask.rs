@@ -123,6 +123,10 @@ pub struct MaskedPixels {
 
 /// Decode a dataset's pixel data and apply the plan to every frame.
 pub fn apply_mask(obj: &dicom_object::DefaultDicomObject, plan: &MaskPlan) -> Result<MaskedPixels> {
+    let mut meta = crate::meta::meta_from_object(obj);
+    meta.transfer_syntax = obj.meta().transfer_syntax().trim_end_matches('\0').to_string();
+    crate::guard::check_object(obj, &meta, &[])?;
+    crate::guard::check_series_bytes(crate::guard::decoded_bytes(&meta))?;
     let decoded = obj
         .decode_pixel_data()
         .map_err(|e| DicomError::Pixels(crate::pixels::error_chain(&e)))?;

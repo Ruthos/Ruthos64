@@ -157,7 +157,7 @@ fn decode_inner(data: &[u8]) -> Result<JpegImage> {
 
         let samples = match precision {
             8 => {
-                let mut buf = vec![0u8; n];
+                let mut buf = crate::guard::try_zeroed::<u8>(n)?;
                 if tj::tj3Decompress8(
                     handle.0,
                     data.as_ptr(),
@@ -172,7 +172,7 @@ fn decode_inner(data: &[u8]) -> Result<JpegImage> {
                 JpegSamples::U8(buf)
             }
             12 => {
-                let mut buf = vec![0i16; n];
+                let mut buf = crate::guard::try_zeroed::<i16>(n)?;
                 if tj::tj3Decompress12(
                     handle.0,
                     data.as_ptr(),
@@ -189,7 +189,7 @@ fn decode_inner(data: &[u8]) -> Result<JpegImage> {
                 JpegSamples::U16(buf.into_iter().map(|v| v as u16).collect())
             }
             16 => {
-                let mut buf = vec![0u16; n];
+                let mut buf = crate::guard::try_zeroed::<u16>(n)?;
                 if tj::tj3Decompress16(
                     handle.0,
                     data.as_ptr(),

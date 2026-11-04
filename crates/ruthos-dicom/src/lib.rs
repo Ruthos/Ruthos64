@@ -10,6 +10,7 @@
 
 pub mod clut;
 pub mod deid;
+pub mod guard;
 pub mod jpeg;
 pub mod meta;
 pub mod open;

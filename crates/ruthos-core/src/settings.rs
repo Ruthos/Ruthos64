@@ -54,6 +54,50 @@ pub struct Settings {
     pub watch_folders: Vec<crate::watch::WatchFolder>,
     /// The rotary dial (Surface Dial, ASUS Dial and DialPad); Windows only.
     pub dial: DialSettings,
+    /// The decode guard's limits (Preferences > Advanced); `None` keeps the
+    /// defaults. Held to four times the defaults whatever the file says.
+    pub decode_limits: Option<DecodeLimits>,
+}
+
+/// The decode guard's limits as the user sets them, in friendly units.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DecodeLimits {
+    pub side: u32,
+    pub megapixels: u32,
+    pub frames: u32,
+    pub fragment_mb: u32,
+    pub series_mb: u32,
+}
+
+impl Default for DecodeLimits {
+    fn default() -> Self {
+        let d = ruthos_dicom::guard::Limits::default();
+        Self::from_limits(d)
+    }
+}
+
+impl DecodeLimits {
+    pub fn from_limits(l: ruthos_dicom::guard::Limits) -> Self {
+        Self {
+            side: l.side,
+            megapixels: (l.pixels / (1024 * 1024)) as u32,
+            frames: l.frames,
+            fragment_mb: (l.fragment_bytes / (1024 * 1024)) as u32,
+            series_mb: (l.series_bytes / (1024 * 1024)) as u32,
+        }
+    }
+
+    pub fn to_limits(self) -> ruthos_dicom::guard::Limits {
+        ruthos_dicom::guard::Limits {
+            side: self.side,
+            pixels: self.megapixels as u64 * 1024 * 1024,
+            frames: self.frames,
+            fragment_bytes: self.fragment_mb as u64 * 1024 * 1024,
+            series_bytes: self.series_mb as u64 * 1024 * 1024,
+        }
+        .clamped()
+    }
 }
 
 /// What a turn of the dial adjusts.
@@ -212,6 +256,7 @@ impl Default for Settings {
             routing_rules: Vec::new(),
             watch_folders: Vec::new(),
             dial: DialSettings::default(),
+            decode_limits: None,
         }
     }
 }
