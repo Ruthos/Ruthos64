@@ -3,14 +3,17 @@
 //! the result. Every tool is an assistant: nothing is segmented unless the
 //! user asks, and each result is an ordinary segment that can be edited.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use egui::{Color32, RichText, Ui};
 use rayon::prelude::*;
 
+use ruthos_core::seg::Saved;
 use ruthos_core::volume::{Plane, Volume};
+use ruthos_dicom::seg::{SegmentData, Term, TERMS};
 use ruthos_segment::mesh::{passes, surface_nets, Smoothing};
+use ruthos_segment::store::{self, Unrefined};
 use ruthos_segment::tools::{self, Grow};
 use ruthos_segment::{Field, Mask, Provenance, Segmentation, Statistics};
 
@@ -26,9 +29,33 @@ const COLOURS: [[u8; 3]; 8] = [
     [230, 120, 180],
 ];
 
+/// A segment's label, name, colour, whether it is shown, its AI mark, and whether
+/// it has been edited.
+type Row = (u8, String, [u8; 3], bool, Option<String>, bool);
+
 /// At most this many pieces become segments in one split; the rest stay in
 /// the segment being split.
 const MOST_PIECES: usize = 40;
+
+/// What is kept of a model's work beside the segment: its own mask, slice by
+/// slice as voxels in the slice, and the slices refinement wants looked at.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelMask {
+    pub slices: BTreeMap<usize, Vec<u32>>,
+    pub flagged: Vec<usize>,
+}
+
+impl ModelMask {
+    fn voxels(&self) -> usize {
+        self.slices.values().map(Vec::len).sum()
+    }
+
+    fn holds(&self, x: usize, y: usize, z: usize, width: usize) -> bool {
+        self.slices
+            .get(&z)
+            .is_some_and(|on| on.binary_search(&((x + width * y) as u32)).is_ok())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Morphology {
@@ -123,6 +150,19 @@ pub struct SegmentPanel {
     smoothing: Smoothing,
     /// Exports running, each reporting when it is done.
     exports: Vec<crossbeam_channel::Receiver<Result<String, String>>>,
+    /// The model's own masks, by label.
+    pub model_masks: HashMap<u8, ModelMask>,
+    /// A slice the user asked to go to.
+    pub jump: Option<usize>,
+    /// Changes not yet saved to the study.
+    pub dirty: bool,
+    /// The user asked for these, which the window acts on.
+    pub save_requested: bool,
+    pub load_requested: bool,
+    /// A save is running.
+    pub saving: bool,
+    /// What is saved for this series, newest first.
+    pub saved: Vec<Saved>,
     #[cfg(feature = "ai")]
     pub ai: crate::segments_ai::AiPanel,
     #[cfg(feature = "ai")]
@@ -149,6 +189,13 @@ impl Default for SegmentPanel {
             note: None,
             smoothing: Smoothing::Medium,
             exports: Vec::new(),
+            model_masks: HashMap::new(),
+            jump: None,
+            dirty: false,
+            save_requested: false,
+            load_requested: false,
+            saving: false,
+            saved: Vec::new(),
             #[cfg(feature = "ai")]
             ai: Default::default(),
             #[cfg(feature = "ai")]
@@ -159,6 +206,7 @@ impl Default for SegmentPanel {
 
 impl SegmentPanel {
     fn changed(&mut self, volume: &Volume) {
+        self.dirty = true;
         self.generation += 1;
         self.stats.clear();
         if let Some(seg) = &self.seg {
@@ -168,6 +216,47 @@ impl SegmentPanel {
                 }
             }
         }
+    }
+
+    /// Segments to write, with each model's own mask if asked.
+    pub fn to_save(&self, unrefined: bool) -> Vec<SegmentData> {
+        let Some(seg) = self.seg.as_ref() else {
+            return Vec::new();
+        };
+        let raw: Vec<Unrefined<'_>> = if unrefined {
+            self.model_masks
+                .iter()
+                .map(|(label, m)| Unrefined {
+                    label: *label,
+                    slices: &m.slices,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        store::to_seg(seg, &raw)
+    }
+
+    /// Saved. The model's own masks were kept until now.
+    pub fn saved_to_study(&mut self) {
+        self.dirty = false;
+        self.saving = false;
+        for m in self.model_masks.values_mut() {
+            m.slices.clear();
+        }
+        self.generation += 1;
+    }
+
+    /// Put segments read from the study on the panel.
+    pub fn load(&mut self, volume: &Volume, seg: Segmentation) {
+        self.remember();
+        self.active = seg.segments.first().map(|s| s.label);
+        self.made = self.made.max(seg.segments.len() as u32);
+        self.seg = Some(seg);
+        self.model_masks.clear();
+        self.open = true;
+        self.changed(volume);
+        self.dirty = false;
     }
 
     fn remember(&mut self) {
@@ -217,6 +306,7 @@ impl SegmentPanel {
         let everything = seg.mask(label);
         seg.erase(label, &everything);
         seg.paint(label, &mask);
+        seg.mark_edited(label);
         self.changed(volume);
     }
 
@@ -254,7 +344,7 @@ impl SegmentPanel {
             let tool = match &s.provenance {
                 Provenance::Manual => "manual".to_string(),
                 Provenance::SemiAutomatic { tool } => tool.clone(),
-                Provenance::Automatic { model, version } => format!("AI-assisted, {model} {version}"),
+                Provenance::Automatic { model, version, .. } => format!("AI-assisted, {model} {version}"),
             };
             let note = format!("{}, {}, {tool}. Planning and education only", self.source, s.name);
             let path = match &to {
@@ -355,6 +445,9 @@ impl SegmentPanel {
         }
         self.dev_followed = true;
         self.ai.follow();
+        if std::env::var_os("RUTHOS_MPR_AI_OUTLINE").is_some() {
+            self.ai.show_outline = true;
+        }
         true
     }
 
@@ -372,21 +465,50 @@ impl SegmentPanel {
         if std::mem::take(&mut self.ai.restart) {
             if let (Some(label), Some(seg)) = (self.ai.label, self.seg.as_mut()) {
                 seg.labels.iter_mut().filter(|l| **l == label).for_each(|l| *l = 0);
+                self.model_masks.remove(&label);
             }
         }
         for reply in self.ai.take_replies() {
             match reply {
-                Reply::Mask { z, mask, .. } => self.write_slice(volume, z, &mask),
-                Reply::Finished(_) => self.changed(volume),
+                Reply::Mask { z, mask, raw, .. } => {
+                    self.write_slice(volume, z, &mask, raw.is_some());
+                    if let (Some(label), Some(raw)) = (self.ai.label, raw) {
+                        let on = (0..raw.len() as u32).filter(|i| raw[*i as usize]).collect();
+                        self.model_masks.entry(label).or_default().slices.insert(z, on);
+                    }
+                }
+                Reply::Finished(_) => {
+                    self.check_slices(volume);
+                    self.changed(volume);
+                }
                 Reply::Failed(e) => self.note = Some(e),
                 _ => {}
             }
         }
     }
 
+    /// After following: mark the slices unlike their neighbours, for review.
+    /// Nothing is changed.
+    #[cfg(feature = "ai")]
+    fn check_slices(&mut self, volume: &Volume) {
+        let (Some(label), Some(seg)) = (self.ai.label, self.seg.as_ref()) else {
+            return;
+        };
+        let plane = volume.dims[0] * volume.dims[1];
+        let areas: Vec<(usize, usize)> = seg
+            .labels
+            .chunks_exact(plane)
+            .enumerate()
+            .map(|(z, slice)| (z, slice.iter().filter(|l| **l == label).count()))
+            .filter(|(_, area)| *area > 0)
+            .collect();
+        let flagged = ruthos_segment::refine::flag_slices(&areas);
+        self.model_masks.entry(label).or_default().flagged = flagged;
+    }
+
     /// One slice of the model's object, in its segment.
     #[cfg(feature = "ai")]
-    fn write_slice(&mut self, volume: &Volume, z: usize, mask: &[bool]) {
+    fn write_slice(&mut self, volume: &Volume, z: usize, mask: &[bool], refined: bool) {
         let [w, h, _] = volume.dims;
         let grid = ruthos_segment::Grid {
             dims: volume.dims,
@@ -403,11 +525,17 @@ impl SegmentPanel {
             let provenance = Provenance::Automatic {
                 model: manifest.name.to_string(),
                 version: manifest.version.to_string(),
+                refined,
+                edited: false,
             };
             let name = format!("{} {}", manifest.name, self.made);
+            let term = Term::by_label(self.ai.term());
             let seg = self.seg.get_or_insert_with(|| Segmentation::new(grid));
             self.ai.label = seg.add(&name, colour, provenance, &Mask::empty(grid));
             self.active = self.ai.label;
+            if let (Some(t), Some(s)) = (term, seg.segments.iter_mut().find(|s| Some(s.label) == self.ai.label)) {
+                s.coding = Some((t.category(), t.kind()));
+            }
         }
         let (Some(label), Some(seg)) = (self.ai.label, self.seg.as_mut()) else {
             return;
@@ -421,6 +549,7 @@ impl SegmentPanel {
             }
         }
         self.generation += 1;
+        self.dirty = true;
     }
 
     /// The panel, which scrolls as the list grows. A change bumps `generation`.
@@ -444,6 +573,15 @@ impl SegmentPanel {
             #[cfg(feature = "ai")]
             {
                 self.ai.ui(ui, root, volume);
+                let any = self.model_masks.values().any(|m| !m.slices.is_empty());
+                if any
+                    && ui
+                        .checkbox(&mut self.ai.show_outline, "Show SAM outline")
+                        .on_hover_text("The model's own edge, dashed, to see what refinement changed")
+                        .changed()
+                {
+                    self.generation += 1;
+                }
                 ui.separator();
             }
             #[cfg(not(feature = "ai"))]
@@ -515,16 +653,29 @@ impl SegmentPanel {
         };
         let mut remove = None;
         let mut touched = false;
-        let rows: Vec<(u8, String, [u8; 3], bool, bool)> = seg
+        // Showing or hiding is not a change to what would be saved.
+        let mut looked = false;
+        let voxel_ml = seg.grid.voxel_mm3() / 1000.0;
+        let rows: Vec<Row> = seg
             .segments
             .iter()
             .map(|s| {
-                let assisted = matches!(s.provenance, Provenance::Automatic { .. });
-                (s.label, s.name.clone(), s.colour, s.visible, assisted)
+                let (mark, edited) = match s.provenance {
+                    Provenance::Automatic { refined, edited, .. } => {
+                        let words = [
+                            "AI",
+                            if refined { ", refined" } else { "" },
+                            if edited { ", edited" } else { "" },
+                        ];
+                        (Some(words.concat()), edited)
+                    }
+                    _ => (None, false),
+                };
+                (s.label, s.name.clone(), s.colour, s.visible, mark, edited)
             })
             .collect();
         {
-            for (label, name, colour, visible, assisted) in rows {
+            for (label, name, colour, visible, mark, edited) in rows {
                 ui.horizontal(|ui| {
                     let mut shown = visible;
                     if ui.checkbox(&mut shown, "").on_hover_text("Show this segment").changed() {
@@ -535,7 +686,7 @@ impl SegmentPanel {
                         {
                             s.visible = shown;
                         }
-                        touched = true;
+                        looked = true;
                     }
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                     ui.painter()
@@ -543,9 +694,9 @@ impl SegmentPanel {
                     if ui.selectable_label(self.active == Some(label), name).clicked() {
                         self.active = Some(label);
                     }
-                    if assisted {
+                    if let Some(mark) = mark {
                         ui.label(
-                            RichText::new("AI")
+                            RichText::new(mark)
                                 .small()
                                 .strong()
                                 .color(Color32::from_rgb(240, 190, 90)),
@@ -569,6 +720,34 @@ impl SegmentPanel {
                         .small()
                         .color(Color32::from_gray(160)),
                     );
+                    if let Some(own) = self.model_masks.get(&label).filter(|m| !edited && !m.slices.is_empty()) {
+                        ui.label(
+                            RichText::new(format!(
+                                "    refined {:.2} ml, model alone {:.2} ml",
+                                s.millilitres(),
+                                own.voxels() as f64 * voxel_ml
+                            ))
+                            .small()
+                            .color(Color32::from_gray(160)),
+                        );
+                    }
+                }
+                if let Some(flagged) = self.model_masks.get(&label).map(|m| m.flagged.clone()) {
+                    if !flagged.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new("    Check slices")
+                                    .small()
+                                    .color(Color32::from_rgb(240, 190, 90)),
+                            )
+                            .on_hover_text("The area here differs by more than 40% from the slices either side");
+                            for z in flagged {
+                                if ui.small_button((z + 1).to_string()).clicked() {
+                                    self.jump = Some(z);
+                                }
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -577,6 +756,7 @@ impl SegmentPanel {
             if let Some(seg) = self.seg.as_mut() {
                 seg.remove(label);
             }
+            self.model_masks.remove(&label);
             if self.active == Some(label) {
                 self.active = None;
             }
@@ -584,10 +764,15 @@ impl SegmentPanel {
         }
         if touched {
             self.changed(volume);
+        } else if looked {
+            let was = self.dirty;
+            self.changed(volume);
+            self.dirty = was;
         }
         ui.separator();
         ui.add_enabled_ui(self.active.is_some(), |ui| {
             ui.label(RichText::new("Selected segment").strong());
+            self.term_ui(ui);
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .button("Keep largest")
@@ -630,6 +815,36 @@ impl SegmentPanel {
                     }
                 }
             });
+        });
+        ui.separator();
+        ui.label(RichText::new("In the study").strong());
+        ui.horizontal_wrapped(|ui| {
+            let any = self.seg.as_ref().is_some_and(|s| !s.segments.is_empty());
+            let label = if self.saving {
+                "Saving\u{2026}"
+            } else {
+                "Save segments to study"
+            };
+            if ui
+                .add_enabled(any && !self.saving, egui::Button::new(label))
+                .on_hover_text(
+                    "Saves every segment here as a DICOM SEG in this study. Saving again adds a new version, \
+                     and earlier ones stay",
+                )
+                .clicked()
+            {
+                self.save_requested = true;
+            }
+            if !self.saved.is_empty() {
+                let list = self.saved.iter().map(Saved::describe).collect::<Vec<_>>().join("\n");
+                if ui
+                    .button("Load newest")
+                    .on_hover_text(format!("Saved for this series:\n{list}"))
+                    .clicked()
+                {
+                    self.load_requested = true;
+                }
+            }
         });
         ui.separator();
         ui.label(RichText::new("Export").strong());
@@ -699,6 +914,40 @@ impl SegmentPanel {
         }
     }
 
+    /// What the selected segment is. The name above is always kept; this is the
+    /// code other programs read.
+    fn term_ui(&mut self, ui: &mut Ui) {
+        let active = self.active;
+        let Some(segment) = self
+            .seg
+            .as_mut()
+            .and_then(|g| g.segments.iter_mut().find(|s| Some(s.label) == active))
+        else {
+            return;
+        };
+        let current = match &segment.coding {
+            Some((_, kind)) => Term::of(kind).map_or(kind.meaning.clone(), |t| t.label.to_string()),
+            None => "Not chosen".to_string(),
+        };
+        let mut picked = None;
+        ui.horizontal(|ui| {
+            ui.label("What it is");
+            egui::ComboBox::from_id_salt("segment-term")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for t in &TERMS {
+                        if ui.selectable_label(false, t.label).clicked() {
+                            picked = Some(t);
+                        }
+                    }
+                });
+        });
+        if let Some(t) = picked {
+            segment.coding = Some((t.category(), t.kind()));
+            self.dirty = true;
+        }
+    }
+
     fn active_mask(&self) -> Option<Mask> {
         Some(self.seg.as_ref()?.mask(self.active?))
     }
@@ -735,7 +984,48 @@ impl SegmentPanel {
                 }
             }
         });
+        if self.outline_shown() {
+            self.draw_outlines(volume, plane, &mut out);
+        }
         Some(out)
+    }
+
+    fn outline_shown(&self) -> bool {
+        #[cfg(feature = "ai")]
+        return self.ai.show_outline;
+        #[cfg(not(feature = "ai"))]
+        false
+    }
+
+    /// The model's own outline, dashed, over each shown segment that has one.
+    fn draw_outlines(&self, volume: &Volume, plane: &Plane, out: &mut [u8]) {
+        const DASH: usize = 6;
+        let (w, h) = (plane.width as usize, plane.height as usize);
+        let [width, height, _] = volume.dims;
+        let Some(seg) = self.seg.as_ref() else { return };
+        let shown = seg.segments.iter().filter(|s| s.visible);
+        let masks: Vec<&ModelMask> = shown.filter_map(|s| self.model_masks.get(&s.label)).collect();
+        if masks.is_empty() {
+            return;
+        }
+        let inside: Vec<bool> = (0..w * h)
+            .into_par_iter()
+            .map(|p| {
+                voxel_at(volume, plane.point((p % w) as f64, (p / w) as f64)).is_some_and(|i| {
+                    let (x, y, z) = (i % width, (i / width) % height, i / (width * height));
+                    masks.iter().any(|m| m.holds(x, y, z, width))
+                })
+            })
+            .collect();
+        for y in 0..h.saturating_sub(1) {
+            for x in 0..w.saturating_sub(1) {
+                let p = x + w * y;
+                let edge = inside[p] != inside[p + 1] || inside[p] != inside[p + w];
+                if edge && (x + y) % (2 * DASH) < DASH {
+                    out[p * 4..p * 4 + 4].copy_from_slice(&[255, 255, 255, 230]);
+                }
+            }
+        }
     }
 }
 

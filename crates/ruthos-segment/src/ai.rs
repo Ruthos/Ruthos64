@@ -22,7 +22,10 @@ use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use sha2::{Digest, Sha256};
 
-const SIZE: usize = 1024;
+use crate::refine::{refine_slice, resample, Edge};
+
+/// The side of the map the decoder's logits come in.
+pub const SIZE: usize = 1024;
 const FEATURES: usize = 64 * 64;
 /// Tokens in a memory block.
 const MEMORY_DIM: usize = 64;
@@ -460,6 +463,25 @@ pub fn to_slice(mask: &[f32], width: usize, height: usize) -> Vec<bool> {
         }
     }
     out
+}
+
+/// The model's logits for part of a slice as a mask of it, refined on `values` if
+/// asked. Then the second result is the model's own, kept to compare. Without
+/// refinement this is exactly `to_slice`.
+pub fn masks(
+    logits: &[f32],
+    values: impl FnOnce() -> Vec<f32>,
+    width: usize,
+    height: usize,
+    refine: Option<(Edge, usize)>,
+) -> (Vec<bool>, Option<Vec<bool>>) {
+    let own = to_slice(logits, width, height);
+    let Some((edge, band)) = refine else {
+        return (own, None);
+    };
+    let fine: Vec<bool> = resample(logits, SIZE, width, height).iter().map(|v| *v > 0.0).collect();
+    let refined = refine_slice(&values(), &fine, width, height, edge, band);
+    (refined.mask, Some(own))
 }
 
 /// `[C, 64, 64]` to the `[4096, 1, C]` sequence the attention graph takes.
@@ -916,6 +938,43 @@ mod tests {
         }
         let s = to_slice(&mask, 4, 2);
         assert_eq!(s, [true, true, false, false, false, false, false, false]);
+    }
+
+    /// Acceptance 6: turning refinement off gives exactly what 0.1.8 gave.
+    #[test]
+    fn without_refinement_the_mask_is_the_models_own() {
+        let mut logits = vec![-3.0; SIZE * SIZE];
+        for y in 300..700 {
+            for x in 200..500 {
+                logits[x + SIZE * y] = 2.0 + (x ^ y) as f32 * 0.001;
+            }
+        }
+        let (mask, own) = masks(&logits, || panic!("no values are read"), 77, 53, None);
+        assert_eq!(mask, to_slice(&logits, 77, 53));
+        assert_eq!(own, None);
+    }
+
+    #[test]
+    fn refinement_reports_the_models_own_mask_beside_its_own() {
+        let mut logits = vec![-3.0; SIZE * SIZE];
+        for y in 256..768 {
+            for x in 256..768 {
+                logits[x + SIZE * y] = 3.0;
+            }
+        }
+        let (w, h) = (40, 40);
+        let mut values = vec![40.0; w * h];
+        for y in 12..28 {
+            for x in 12..28 {
+                values[x + w * y] = 1200.0;
+            }
+        }
+        let (mask, own) = masks(&logits, move || values, w, h, Some((Edge::Bone, 3)));
+        let own = own.expect("kept");
+        assert_eq!(own, to_slice(&logits, w, h));
+        assert_ne!(mask, own, "the edge moved to the image's");
+        assert!(mask[20 + w * 20]);
+        assert!(!mask[11 + w * 20] && !mask[10 + w * 20], "and no further");
     }
 
     #[test]

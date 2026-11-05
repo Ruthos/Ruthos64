@@ -28,6 +28,11 @@ pub const OTHER_PATIENT_IDS: Tag = Tag(0x0010, 0x1000);
 /// Other Patient IDs Sequence (0010,1002).
 pub const OTHER_PATIENT_IDS_SEQUENCE: Tag = Tag(0x0010, 0x1002);
 
+const SEGMENT_ALGORITHM_NAME: Tag = Tag(0x0062, 0x0009);
+const RECOMMENDED_DISPLAY_CIELAB: Tag = Tag(0x0062, 0x000D);
+const SEGMENT_IDENTIFICATION_SEQUENCE: Tag = Tag(0x0062, 0x000A);
+const REFERENCED_SEGMENT_NUMBER: Tag = Tag(0x0062, 0x000B);
+
 /// De-identification Method Code Sequence entries (DCM scheme).
 pub const DEID_METHOD_CODES: [(&str, &str); 5] = [
     ("113100", "Basic Application Confidentiality Profile"),
@@ -193,6 +198,41 @@ const ALLOWED: &[Tag] = &[
     tags::CODING_SCHEME_DESIGNATOR,
     CODING_SCHEME_VERSION,
     tags::CODE_MEANING,
+    // Segmentation: its segments, frames and references to the images they
+    // were drawn on, all of whose UIDs are derived. Free text beyond the
+    // segment's label stays behind.
+    tags::SEGMENTATION_TYPE,
+    tags::SEGMENT_SEQUENCE,
+    tags::SEGMENT_NUMBER,
+    tags::SEGMENT_LABEL,
+    tags::SEGMENT_ALGORITHM_TYPE,
+    SEGMENT_ALGORITHM_NAME,
+    tags::SEGMENTED_PROPERTY_CATEGORY_CODE_SEQUENCE,
+    tags::SEGMENTED_PROPERTY_TYPE_CODE_SEQUENCE,
+    RECOMMENDED_DISPLAY_CIELAB,
+    SEGMENT_IDENTIFICATION_SEQUENCE,
+    REFERENCED_SEGMENT_NUMBER,
+    tags::CONTENT_LABEL,
+    tags::LOSSY_IMAGE_COMPRESSION,
+    tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE,
+    tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE,
+    tags::PIXEL_MEASURES_SEQUENCE,
+    tags::PLANE_ORIENTATION_SEQUENCE,
+    tags::PLANE_POSITION_SEQUENCE,
+    tags::FRAME_CONTENT_SEQUENCE,
+    tags::DERIVATION_IMAGE_SEQUENCE,
+    tags::DERIVATION_CODE_SEQUENCE,
+    tags::SOURCE_IMAGE_SEQUENCE,
+    tags::PURPOSE_OF_REFERENCE_CODE_SEQUENCE,
+    tags::DIMENSION_INDEX_VALUES,
+    tags::DIMENSION_ORGANIZATION_SEQUENCE,
+    tags::DIMENSION_ORGANIZATION_UID,
+    tags::DIMENSION_INDEX_SEQUENCE,
+    tags::DIMENSION_INDEX_POINTER,
+    tags::FUNCTIONAL_GROUP_POINTER,
+    tags::DIMENSION_DESCRIPTION_LABEL,
+    tags::REFERENCED_SERIES_SEQUENCE,
+    tags::REFERENCED_INSTANCE_SEQUENCE,
 ];
 
 /// Attributes whose value is replaced rather than copied.
@@ -202,6 +242,16 @@ const REPLACED: &[Tag] = &[
     tags::STUDY_DESCRIPTION,
     tags::ACCESSION_NUMBER,
     tags::STUDY_ID,
+];
+
+/// Attributes a Segmentation must carry. They are never copied: the writer sets
+/// them on a SEG alone, blank or fixed, so a scanner's own values stay behind.
+const SEGMENTATION_ONLY: &[Tag] = &[
+    tags::CONTENT_CREATOR_NAME,
+    tags::CONTENT_DESCRIPTION,
+    tags::DEVICE_SERIAL_NUMBER,
+    tags::MANUFACTURER_MODEL_NAME,
+    tags::SOFTWARE_VERSIONS,
 ];
 
 /// UIDs that name a type rather than a thing, and so are copied as they are.
@@ -229,7 +279,7 @@ pub fn is_allowed(tag: Tag) -> bool {
     if tag.group() == 0x0018 && (0x6011..=0x60FF).contains(&tag.element()) {
         return true; // ultrasound region attributes
     }
-    ALLOWED.contains(&tag) || REPLACED.contains(&tag)
+    ALLOWED.contains(&tag) || REPLACED.contains(&tag) || SEGMENTATION_ONLY.contains(&tag)
 }
 
 /// What the writer needs to know about the case.
@@ -253,7 +303,7 @@ pub fn build_teaching_dataset(src: &InMemDicomObject, p: &DeidParams<'_>) -> InM
     let mut out = InMemDicomObject::new_empty();
     for elt in src.iter() {
         let tag = elt.header().tag;
-        if !is_allowed(tag) {
+        if !is_allowed(tag) || SEGMENTATION_ONLY.contains(&tag) {
             continue;
         }
         if let Some(new) = transform(elt, p) {
@@ -271,6 +321,17 @@ pub fn build_teaching_dataset(src: &InMemDicomObject, p: &DeidParams<'_>) -> InM
     put_str(&mut out, tags::STUDY_ID, VR::SH, "");
     if let Some(title) = p.title.filter(|t| !t.trim().is_empty()) {
         put_str(&mut out, tags::STUDY_DESCRIPTION, VR::LO, title.trim());
+    }
+
+    // A Segmentation must have these, but who made it goes, and a serial number
+    // or description could say where.
+    let class = src.get(tags::SOP_CLASS_UID).and_then(|e| e.value().to_str().ok());
+    if class.is_some_and(|c| c.trim_end_matches('\0') == crate::seg::SOP_CLASS) {
+        put_str(&mut out, tags::CONTENT_CREATOR_NAME, VR::PN, "");
+        put_str(&mut out, tags::CONTENT_DESCRIPTION, VR::LO, "");
+        put_str(&mut out, tags::DEVICE_SERIAL_NUMBER, VR::LO, "1");
+        put_str(&mut out, tags::MANUFACTURER_MODEL_NAME, VR::LO, "Ruthos");
+        put_str(&mut out, tags::SOFTWARE_VERSIONS, VR::LO, p.software);
     }
 
     // Age is written explicitly, from the true dates, when the source has none.

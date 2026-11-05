@@ -99,7 +99,11 @@ impl AnonymizeState {
         // Tokens from every series' representative image, for live checks.
         let mut ctx = VerifyContext::default();
         let mut series = Vec::new();
-        for s in series_rows {
+        // A SEG has no burned-in text to review; it follows its source series.
+        for s in series_rows
+            .into_iter()
+            .filter(|s| s.modality != ruthos_core::seg::MODALITY)
+        {
             let mut st = SeriesState {
                 class: teaching::classify_series(&shared.db, &shared.paths, &s),
                 series: s,

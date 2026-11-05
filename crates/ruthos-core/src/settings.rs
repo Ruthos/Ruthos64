@@ -11,6 +11,15 @@ use crate::measure::{self, Library};
 pub struct Settings {
     /// Smart folders hidden from the database sidebar.
     pub hidden_smart_albums: Vec<String>,
+    /// How far from a model's edge refinement may move it, in voxels.
+    pub refine_band: u8,
+    /// Developer option: write each AI segment's unrefined mask into its SEG too,
+    /// so a case can be scored both ways without rerunning the model.
+    pub save_unrefined_masks: bool,
+    /// Load the newest saved segments on opening MPR, without asking.
+    pub load_newest_segments: bool,
+    /// Written as Content Creator's Name in what Ruthos saves to a study.
+    pub user_name: String,
     /// Root of the data folder. `None` means the platform default.
     pub data_root: Option<PathBuf>,
     /// Copy imported files into the database folder (true) or link to them
@@ -276,6 +285,10 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             hidden_smart_albums: Vec::new(),
+            refine_band: 3,
+            save_unrefined_masks: false,
+            load_newest_segments: false,
+            user_name: String::new(),
             data_root: None,
             copy_files_on_import: true,
             // Off until the user turns it on: Ruthos makes no network

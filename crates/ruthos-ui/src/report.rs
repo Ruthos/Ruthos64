@@ -27,6 +27,8 @@ pub struct ReportState {
     mmode: Vec<ReportMeasurement>,
     /// Library calculations whose inputs were all present.
     calculations: Vec<ReportMeasurement>,
+    /// What the study's saved segments hold, and how each was made.
+    segments: Vec<ReportMeasurement>,
     key_images: Vec<ImageRow>,
     findings: String,
     conclusion: String,
@@ -48,6 +50,7 @@ impl ReportState {
             measurements: Vec::new(),
             mmode: Vec::new(),
             calculations: Vec::new(),
+            segments: Vec::new(),
             key_images: Vec::new(),
             saved: (findings.clone(), conclusion.clone()),
             findings,
@@ -111,6 +114,7 @@ impl ReportState {
         self.measurements = measurements;
         self.mmode = self.mmode_block(shared);
         self.calculations = self.calculations_block(shared);
+        self.segments = ruthos_core::seg::report_rows(&shared.db, &shared.paths, self.study.id);
         self.key_images = shared.db.key_images_for_study(self.study.id).unwrap_or_default();
         self.last_refresh = Instant::now();
     }
@@ -524,6 +528,29 @@ impl ReportState {
             ui.add_space(14.0);
         }
 
+        if !self.segments.is_empty() {
+            ui.label(RichText::new("Segments").size(15.0).strong());
+            ui.add_space(4.0);
+            egui::Grid::new(("report-segments", self.id))
+                .num_columns(3)
+                .striped(true)
+                .spacing([18.0, 4.0])
+                .min_col_width(90.0)
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Segment").strong());
+                    ui.label(RichText::new("Volume").strong());
+                    ui.label(RichText::new("Made by").strong());
+                    ui.end_row();
+                    for m in &self.segments {
+                        ui.label(&m.name);
+                        ui.label(&m.value);
+                        ui.label(RichText::new(&m.location).color(Color32::from_gray(90)));
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(14.0);
+        }
+
         ui.label(RichText::new("Findings").size(15.0).strong());
         ui.add_space(4.0);
         ui.add(
@@ -646,6 +673,7 @@ impl ReportState {
                 .collect(),
             mmode: self.mmode.clone(),
             calculations: self.calculations.clone(),
+            segments: self.segments.clone(),
             findings: self.findings.clone(),
             conclusion: self.conclusion.clone(),
             images,

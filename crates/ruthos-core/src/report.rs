@@ -45,6 +45,8 @@ pub struct ReportDocument {
     pub mmode: Vec<ReportMeasurement>,
     /// Calculations from the measurement library whose inputs were present.
     pub calculations: Vec<ReportMeasurement>,
+    /// Saved segments, each with its volume and the tool that made it.
+    pub segments: Vec<ReportMeasurement>,
     pub findings: String,
     pub conclusion: String,
     pub images: Vec<ReportImage>,
@@ -343,6 +345,27 @@ pub fn write_pdf(report: &ReportDocument, path: &Path) -> std::io::Result<()> {
         }
     }
 
+    if !report.segments.is_empty() {
+        w.heading("Segments");
+        w.columns(
+            &[("Segment", 56.0), ("Volume", 36.0), ("Made by", TEXT_W - 92.0)],
+            9.5,
+            true,
+        );
+        w.gap(0.5);
+        for m in &report.segments {
+            w.columns(
+                &[
+                    (m.name.as_str(), 56.0),
+                    (m.value.as_str(), 36.0),
+                    (m.location.as_str(), TEXT_W - 92.0),
+                ],
+                10.0,
+                false,
+            );
+        }
+    }
+
     if !report.calculations.is_empty() {
         w.heading("Calculations");
         w.columns(
@@ -470,6 +493,13 @@ mod tests {
                 name: "Vertebral heart score".into(),
                 value: "10.2 v".into(),
                 location: "VHS long axis, VHS short axis, T4 vertebral length".into(),
+                basis: String::new(),
+                patient_scale: true,
+            }],
+            segments: vec![ReportMeasurement {
+                name: "Maxilla".into(),
+                value: "12.40 ml".into(),
+                location: "SAM 2.1 Tiny with Ruthos edge refinement".into(),
                 basis: String::new(),
                 patient_scale: true,
             }],

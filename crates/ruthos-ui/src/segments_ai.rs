@@ -10,7 +10,8 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::{Color32, RichText, Ui};
 
 use ruthos_core::volume::Volume;
-use ruthos_segment::ai::{self, to_slice, Click, Region, Sam2, SAM2_TINY};
+use ruthos_segment::ai::{self, Click, Region, Sam2, SAM2_TINY};
+use ruthos_segment::refine::Edge;
 use ruthos_segment::Field;
 
 /// Slices without the object before following stops in that direction.
@@ -33,6 +34,23 @@ impl Target {
             Target::Bone => "Bone",
             Target::SoftTissue => "Soft tissue",
             Target::Contrast => "Contrast",
+        }
+    }
+
+    /// The term a new segment starts with, from the list in `ruthos_dicom::seg`.
+    fn term(self) -> &'static str {
+        match self {
+            Target::Bone => "Bone",
+            Target::SoftTissue => "Soft tissue",
+            Target::Contrast => "Other tissue",
+        }
+    }
+
+    fn edge(self) -> Edge {
+        match self {
+            Target::Bone => Edge::Bone,
+            Target::SoftTissue => Edge::SoftTissue,
+            Target::Contrast => Edge::Contrast,
         }
     }
 
@@ -81,12 +99,14 @@ enum Request {
         clicks: Vec<Click>,
         window: (f32, f32),
         limits: Limits,
+        refine: Option<(Edge, usize)>,
     },
     Follow {
         z: usize,
         clicks: Vec<Click>,
         window: (f32, f32),
         limits: Limits,
+        refine: Option<(Edge, usize)>,
     },
 }
 
@@ -98,6 +118,8 @@ pub enum Reply {
     Mask {
         z: usize,
         mask: Vec<bool>,
+        /// The model's own mask, when `mask` has been refined from it.
+        raw: Option<Vec<bool>>,
         /// The object ran into a side of the box.
         edge: bool,
         /// The share of the box it spans.
@@ -140,19 +162,21 @@ fn serve(
     // Encoding is the expensive step, and clicks refine one slice repeatedly.
     let mut cached: Option<(SliceKey, ai::Features)> = None;
     while let Ok(request) = requests.recv() {
-        let (z, clicks, window, limits, follow) = match request {
+        let (z, clicks, window, limits, refine, follow) = match request {
             Request::Click {
                 z,
                 clicks,
                 window,
                 limits,
-            } => (z, clicks, window, limits, false),
+                refine,
+            } => (z, clicks, window, limits, refine, false),
             Request::Follow {
                 z,
                 clicks,
                 window,
                 limits,
-            } => (z, clicks, window, limits, true),
+                refine,
+            } => (z, clicks, window, limits, refine, true),
         };
         let region = limits.region;
         let (rw, rh) = (region.width, region.height);
@@ -160,12 +184,18 @@ fn serve(
         let cut = |slice: usize| region.take(&gray_slice(&volume, slice, window), w);
         // Back into the whole slice, with what the panel warns about.
         let reply = |z: usize, decoded: &ai::Decoded| {
-            let inner = to_slice(&decoded.mask, rw, rh);
+            let values = || {
+                let slice: Vec<f32> = (0..w * h).map(|i| volume.at(i + w * h * z)).collect();
+                region.take(&slice, w)
+            };
+            let (inner, own) = ai::masks(&decoded.mask, values, rw, rh, refine);
+            let judged = own.as_ref().unwrap_or(&inner);
             Reply::Mask {
                 z,
                 mask: region.place(&inner, w, h),
-                edge: region.reaches_edge(&inner, w, h),
-                extent: region.extent(&inner),
+                raw: own.as_ref().map(|m| region.place(m, w, h)),
+                edge: region.reaches_edge(judged, w, h),
+                extent: region.extent(judged),
             }
         };
         let run = (|| -> Result<(), ai::AiError> {
@@ -255,6 +285,12 @@ pub struct AiPanel {
     extent: f32,
     /// How empty the box is, and what that was worked out for.
     emptiness: Option<(Region, usize, Target, f32)>,
+    /// Replace the model's edge with one read from the image.
+    pub refine: bool,
+    /// Band width in voxels, from Preferences.
+    pub band: usize,
+    /// Draw the model's own outline over refined segments.
+    pub show_outline: bool,
 }
 
 impl Default for AiPanel {
@@ -280,6 +316,9 @@ impl Default for AiPanel {
             edge: false,
             extent: 0.0,
             emptiness: None,
+            refine: false,
+            band: ruthos_segment::refine::BAND,
+            show_outline: false,
         }
     }
 }
@@ -356,6 +395,15 @@ impl AiPanel {
         })
     }
 
+    /// What the segment being made is, as far as the panel knows.
+    pub fn term(&self) -> &'static str {
+        self.target.term()
+    }
+
+    fn refinement(&self) -> Option<(Edge, usize)> {
+        self.refine.then_some((self.target.edge(), self.band))
+    }
+
     /// A click on a slice, at voxel `(x, y, z)`.
     pub fn click(&mut self, x: usize, y: usize, z: usize) {
         let Some(limits) = self.limits() else { return };
@@ -382,6 +430,7 @@ impl AiPanel {
                 clicks: self.clicks.clone(),
                 window: self.target.window(),
                 limits,
+                refine: self.refinement(),
             });
         }
     }
@@ -404,6 +453,7 @@ impl AiPanel {
             clicks: self.clicks.clone(),
             window: self.target.window(),
             limits,
+            refine: self.refinement(),
         });
     }
 
@@ -480,11 +530,14 @@ impl AiPanel {
             );
         if !boxed {
             if cell > FINE {
+                let what = if self.refine {
+                    "A fracture line can be filled in"
+                } else {
+                    "Thin bone can come out thicker and a fracture line can be filled in"
+                };
                 warn(
                     ui,
-                    "Thin bone can come out thicker and a fracture line can be filled in. For detail, draw a \
-                     Cut box around the object in the 3D pane"
-                        .to_string(),
+                    format!("{what}. For detail, draw a Cut box around the object in the 3D pane"),
                 );
             }
             return;
@@ -602,6 +655,10 @@ impl AiPanel {
             return;
         }
         self.detail_ui(ui, volume);
+        ui.checkbox(&mut self.refine, "Refine edges").on_hover_text(
+            "Keeps the object the model chose and reads its edge from the image's own values. \
+             Applies to the next click or follow",
+        );
         ui.horizontal(|ui| {
             ui.label("Finding");
             egui::ComboBox::from_id_salt("ai-target")

@@ -183,7 +183,8 @@ impl Database {
         // Series. A multi-frame file (an echo loop, a fluoroscopy run) gets a
         // series of its own, as Horos does, so each loop opens as a stack of
         // frames instead of the loops stacking as images.
-        let multiframe = meta.number_of_frames > 1;
+        // A SEG's frames are not a loop, and its versions share one series.
+        let multiframe = meta.number_of_frames > 1 && meta.modality != crate::seg::MODALITY;
         let series_uid = if multiframe {
             format!("{}#{}", meta.series_instance_uid, meta.sop_instance_uid)
         } else {

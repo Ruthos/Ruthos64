@@ -285,6 +285,15 @@ pub struct MprState {
     /// The 3D pane, in the fourth place of the 2x2 layout.
     three_d: Option<View3d>,
     segments: SegmentPanel,
+    /// A save of the segments under way.
+    seg_save: Option<crossbeam_channel::Receiver<Result<ruthos_dicom::seg::SegWritten, String>>>,
+    /// The saved segments on offer when the window opened.
+    seg_offer: bool,
+    /// Asking whether to save before closing.
+    close_prompt: bool,
+    close_after_save: bool,
+    /// The developer option has saved.
+    dev_saved: bool,
 }
 
 /// What the left button does in the 3D pane. The middle button always moves
@@ -950,6 +959,11 @@ impl MprState {
             frames_shown: 0,
             three_d: None,
             segments: SegmentPanel::default(),
+            seg_save: None,
+            seg_offer: false,
+            close_prompt: false,
+            close_after_save: false,
+            dev_saved: false,
         }
     }
 
@@ -1041,6 +1055,7 @@ impl MprState {
                         }
                         self.volume = Some(Arc::new(v));
                         self.reset();
+                        self.find_saved_segments(shared);
                         // Developer option: `RUTHOS_MPR_TILT=<degrees>` tilts the
                         // planes in the first pane, as a handle drag would.
                         if let Some(deg) = std::env::var("RUTHOS_MPR_TILT")
@@ -1104,15 +1119,192 @@ impl MprState {
         }
     }
 
+    /// Offer what is saved for this series, or load it if that is the setting.
+    fn find_saved_segments(&mut self, shared: &Shared) {
+        self.segments.saved = ruthos_core::seg::saved_for_series(
+            &shared.db,
+            &shared.paths,
+            self.study.id,
+            &self.series.series_instance_uid,
+        )
+        .unwrap_or_default();
+        if self.segments.saved.is_empty() {
+            return;
+        }
+        if shared.settings.lock().load_newest_segments {
+            self.load_newest_segments();
+        } else {
+            self.seg_offer = true;
+        }
+    }
+
+    /// Put the newest saved segments on the panel, or say why they cannot be.
+    fn load_newest_segments(&mut self) {
+        let (Some(saved), Some(volume)) = (self.segments.saved.first().cloned(), self.volume.clone()) else {
+            return;
+        };
+        let grid = ruthos_segment::Grid {
+            dims: volume.dims,
+            spacing: volume.spacing,
+        };
+        let geometry = ruthos_dicom::seg::Geometry {
+            dims: volume.dims,
+            spacing: volume.spacing,
+            origin: volume.origin,
+            axes: volume.axes,
+        };
+        self.segments.open = true;
+        let placed = ruthos_dicom::seg::read_seg(&saved.path).and_then(|f| f.place(&geometry));
+        match placed {
+            Ok(placed) => {
+                let (seg, overlapping, left_out) = ruthos_segment::store::from_placed(grid, placed);
+                let count = seg.segments.len();
+                self.segments.load(&volume, seg);
+                let plural = if count == 1 { "" } else { "s" };
+                let mut note = format!("Loaded {count} saved segment{plural}");
+                if overlapping > 0 {
+                    note.push_str(&format!(
+                        ". {overlapping} voxels were in two segments and went to the later one"
+                    ));
+                }
+                if left_out > 0 {
+                    note.push_str(&format!(". {left_out} segments did not fit"));
+                }
+                self.segments.note = Some(note);
+            }
+            Err(e) => self.segments.note = Some(e.to_string()),
+        }
+    }
+
+    /// Save the panel's segments to the study, apart from the window.
+    fn save_segments(&mut self, shared: &Shared) {
+        let Some(volume) = self.volume.as_ref() else {
+            return;
+        };
+        let (creator, unrefined) = {
+            let s = shared.settings.lock();
+            (s.user_name.clone(), s.save_unrefined_masks)
+        };
+        let data = self.segments.to_save(unrefined);
+        if data.is_empty() {
+            self.segments.note = Some("Every segment is empty, so there is nothing to save".to_string());
+            self.close_after_save = false;
+            return;
+        }
+        self.segments.saving = true;
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        self.seg_save = Some(rx);
+        let (db, paths, dims) = (shared.db.clone(), shared.paths.clone(), volume.dims);
+        let (study, series) = (self.study.id, self.series.id);
+        std::thread::spawn(move || {
+            let saved = ruthos_core::seg::save_segments(&db, &paths, study, series, dims, &data, &creator);
+            let _ = tx.send(saved.map_err(|e| e.to_string()));
+        });
+    }
+
+    fn pump_seg_save(&mut self, shared: &Shared) {
+        let Some(rx) = &self.seg_save else { return };
+        let Ok(result) = rx.try_recv() else { return };
+        self.seg_save = None;
+        match result {
+            Ok(written) => {
+                self.segments.saved_to_study();
+                self.segments.note = Some(format!("Saved to the study, in {} frames", written.frames));
+                self.segments.saved = ruthos_core::seg::saved_for_series(
+                    &shared.db,
+                    &shared.paths,
+                    self.study.id,
+                    &self.series.series_instance_uid,
+                )
+                .unwrap_or_default();
+                if self.close_after_save {
+                    self.close_requested = true;
+                }
+            }
+            Err(e) => {
+                self.segments.saving = false;
+                self.segments.open = true;
+                self.segments.note = Some(format!("Not saved: {e}"));
+                self.close_after_save = false;
+            }
+        }
+    }
+
+    fn seg_dialogs(&mut self, ctx: &egui::Context, shared: &Shared) {
+        if self.seg_offer {
+            let newest = self.segments.saved.first().map(|s| s.describe()).unwrap_or_default();
+            let mut load = false;
+            let mut close = false;
+            egui::Window::new("Saved segments")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label("This series has saved segments.");
+                    ui.label(egui::RichText::new(newest).small());
+                    ui.horizontal(|ui| {
+                        load = ui.button("Load them").clicked();
+                        close = ui.button("Not now").clicked();
+                    });
+                });
+            if load {
+                self.load_newest_segments();
+            }
+            if load || close {
+                self.seg_offer = false;
+            }
+        }
+        if self.close_prompt {
+            let (mut save, mut discard, mut cancel) = (false, false, false);
+            egui::Window::new("Unsaved segments")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label("Save the segments to the study before closing?");
+                    ui.horizontal(|ui| {
+                        save = ui
+                            .add_enabled(!self.segments.saving, egui::Button::new("Save"))
+                            .clicked();
+                        discard = ui.button("Do not save").clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    });
+                });
+            if save {
+                self.close_after_save = true;
+                self.close_prompt = false;
+                self.save_segments(shared);
+            }
+            if discard {
+                self.close_requested = true;
+            }
+            if cancel {
+                self.close_prompt = false;
+            }
+        }
+    }
+
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("mpr");
         if ui.input(|i| i.viewport().close_requested()) {
-            if let Some((_, _, cancel)) = &self.loading {
-                cancel.store(true, Ordering::Relaxed);
+            if self.segments.dirty && self.segments.seg.is_some() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.close_prompt = true;
+            } else {
+                if let Some((_, _, cancel)) = &self.loading {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+                self.close_requested = true;
             }
-            self.close_requested = true;
         }
         self.pump(shared);
+        self.pump_seg_save(shared);
+        if std::mem::take(&mut self.segments.save_requested) {
+            self.save_segments(shared);
+        }
+        if std::mem::take(&mut self.segments.load_requested) {
+            self.load_newest_segments();
+        }
         #[cfg(feature = "ai")]
         if let Some(dims) = self.volume.as_ref().map(|v| v.dims) {
             let cut_box = self.three_d.as_ref().and_then(|v| v.cut_box);
@@ -1138,7 +1330,15 @@ impl MprState {
         if self.segments.open {
             if let Some(volume) = self.volume.clone() {
                 #[cfg(feature = "ai")]
-                self.segments.pump_ai(&volume);
+                {
+                    self.segments.ai.band = shared.settings.lock().refine_band as usize;
+                    self.segments.pump_ai(&volume);
+                }
+                if let Some(z) = self.segments.jump.take() {
+                    let mut at = volume.to_index(self.centre);
+                    at[2] = z as f64;
+                    self.centre = volume.to_patient(at);
+                }
                 let root = shared.paths.root.clone();
                 let source = format!(
                     "{}, {}",
@@ -1163,6 +1363,7 @@ impl MprState {
         let ctx = ui.ctx().clone();
         self.text_prompt_ui(&ctx);
         self.save_dialog(&ctx, shared);
+        self.seg_dialogs(&ctx, shared);
 
         // Developer option: `RUTHOS_MPR_SCREENSHOT=<file.png>` saves the
         // window as drawn, once the volume has been on screen a moment.
@@ -1224,7 +1425,15 @@ impl MprState {
             };
             #[cfg(not(feature = "ai"))]
             let waiting = false;
-            if waiting {
+            // Developer option: `RUTHOS_MPR_SAVE_SEGMENTS` saves the segments once
+            // the model has finished.
+            let saving = self.seg_save.is_some()
+                || (!waiting && !self.dev_saved && std::env::var_os("RUTHOS_MPR_SAVE_SEGMENTS").is_some());
+            if !waiting && saving && !self.dev_saved {
+                self.dev_saved = true;
+                self.save_segments(shared);
+            }
+            if waiting || saving {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
             } else {
                 self.frames_shown += 1;

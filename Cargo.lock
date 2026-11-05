@@ -5623,6 +5623,7 @@ dependencies = [
  "rayon",
  "reqwest",
  "ruthos-core",
+ "ruthos-dicom",
  "serde",
  "serde_json",
  "sha2",

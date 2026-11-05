@@ -545,8 +545,10 @@ pub fn prepare_cancellable(
     if images.is_empty() {
         return Err(CoreError::Other("the study has no images".into()));
     }
+    // A SEG has no burned-in text to mask.
+    let segmentation = |s: &SeriesRow| s.modality == crate::seg::MODALITY;
     for s in &series_list {
-        if !request.masks.contains_key(&s.id) {
+        if !segmentation(s) && !request.masks.contains_key(&s.id) {
             return Err(CoreError::Other(format!(
                 "series {} has no masking decision",
                 s.display_name()
@@ -662,8 +664,12 @@ pub fn prepare_cancellable(
                     out.remove_element(tag);
                 }
             }
-            let decision = &request.masks[&series.id];
-            let ts = match decision.plan() {
+            let plan = if segmentation(series) {
+                None
+            } else {
+                request.masks[&series.id].plan()
+            };
+            let ts = match plan {
                 Some(plan) => {
                     let masked = apply_mask(&obj, &plan)?;
                     let put_u16 = |out: &mut dicom_object::InMemDicomObject, tag, v: u16| {

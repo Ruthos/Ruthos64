@@ -19,6 +19,7 @@ pub mod presets;
 pub mod quirks;
 pub mod sc;
 pub mod scale;
+pub mod seg;
 pub mod structure;
 
 pub use clut::{Clut, ClutLibrary};

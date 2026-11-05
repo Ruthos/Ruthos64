@@ -17,6 +17,7 @@ pub mod mpr_export;
 pub mod paths;
 pub mod report;
 pub mod routing;
+pub mod seg;
 pub mod settings;
 pub mod teaching;
 pub mod thumbs;

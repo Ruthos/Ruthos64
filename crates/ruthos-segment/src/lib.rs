@@ -10,6 +10,8 @@
 #[cfg(feature = "ai")]
 pub mod ai;
 pub mod mesh;
+pub mod refine;
+pub mod store;
 pub mod tools;
 
 use serde::{Deserialize, Serialize};
@@ -115,8 +117,19 @@ impl Mask {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provenance {
     Manual,
-    SemiAutomatic { tool: String },
-    Automatic { model: String, version: String },
+    SemiAutomatic {
+        tool: String,
+    },
+    Automatic {
+        model: String,
+        version: String,
+        /// The model's edge was replaced by one read from the image.
+        #[serde(default)]
+        refined: bool,
+        /// A tool has changed it since.
+        #[serde(default)]
+        edited: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +140,9 @@ pub struct Segment {
     pub colour: [u8; 3],
     pub visible: bool,
     pub provenance: Provenance,
+    /// Category and type codes, when one has been chosen or came with it.
+    #[serde(default)]
+    pub coding: Option<(ruthos_dicom::seg::Code, ruthos_dicom::seg::Code)>,
 }
 
 /// Up to 254 segments on one label map; 255 is kept for what a cut hides.
@@ -175,6 +191,7 @@ impl Segmentation {
             colour,
             visible: true,
             provenance,
+            coding: None,
         });
         self.paint(label, mask);
         Some(label)
@@ -194,6 +211,15 @@ impl Segmentation {
         for (l, on) in self.labels.iter_mut().zip(&mask.on) {
             if *on && *l == label {
                 *l = 0;
+            }
+        }
+    }
+
+    /// Note that a tool has changed a segment the model made.
+    pub fn mark_edited(&mut self, label: u8) {
+        for s in self.segments.iter_mut().filter(|s| s.label == label) {
+            if let Provenance::Automatic { edited, .. } = &mut s.provenance {
+                *edited = true;
             }
         }
     }

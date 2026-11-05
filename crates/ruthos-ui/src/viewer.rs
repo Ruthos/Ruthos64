@@ -822,7 +822,9 @@ const GPU_CACHE: usize = 8;
 
 impl ViewerState {
     pub fn open(shared: &Shared, study: StudyRow, series_id: Option<i64>) -> anyhow::Result<Self> {
-        let series = shared.db.series_for_study(study.id)?;
+        // A SEG is shown over its images in MPR, not as images of its own.
+        let mut series = shared.db.series_for_study(study.id)?;
+        series.retain(|s| s.modality != ruthos_core::seg::MODALITY);
         if series.is_empty() {
             anyhow::bail!("study has no series");
         }

@@ -216,6 +216,15 @@ impl PrefsState {
     }
 
     fn general(&mut self, ui: &mut Ui, shared: &Shared) {
+        ui.horizontal(|ui| {
+            ui.label("Your name");
+            ui.text_edit_singleline(&mut self.draft.user_name);
+        });
+        Self::hint(
+            ui,
+            "Recorded as the creator of segments you save to a study. Leave it empty to record no name.",
+        );
+        ui.add_space(10.0);
         Self::heading(ui, "Database folder");
         let current = self
             .draft
@@ -1005,7 +1014,35 @@ impl PrefsState {
         );
     }
 
+    fn segmentation(&mut self, ui: &mut Ui) {
+        Self::heading(ui, "Segmentation");
+        ui.horizontal(|ui| {
+            ui.label("Refinement band");
+            let mut band = self.draft.refine_band as u32;
+            let range = ruthos_segment::refine::BAND_RANGE;
+            let bounds = *range.start() as u32..=*range.end() as u32;
+            if ui.add(egui::Slider::new(&mut band, bounds).suffix(" voxels")).changed() {
+                self.draft.refine_band = band as u8;
+            }
+        });
+        Self::hint(
+            ui,
+            "How far from the model's edge the edge read from the image may lie. 3 suits most anatomy;              a wider band reaches further but sees more of what is next to the object.",
+        );
+        ui.checkbox(
+            &mut self.draft.load_newest_segments,
+            "Load the newest saved segments on opening MPR, without asking",
+        );
+        ui.checkbox(&mut self.draft.save_unrefined_masks, "Save unrefined AI masks");
+        Self::hint(
+            ui,
+            "A developer option for benchmarking: each AI segment is saved twice, so a case can be scored              with and without refinement without running the model again. Leave it off in normal use.",
+        );
+        ui.add_space(16.0);
+    }
+
     fn viewer(&mut self, ui: &mut Ui, shared: &Shared) {
+        self.segmentation(ui);
         Self::heading(ui, "Annotations");
         ui.horizontal(|ui| {
             for (v, label) in [(2u8, "Full"), (1, "Partial"), (0, "None")] {
