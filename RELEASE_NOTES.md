@@ -1,21 +1,18 @@
-# Ruthos 0.1.8-alpha
+# Ruthos 0.1.9-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
-## New in 0.1.8-alpha
+## New in 0.1.9-alpha
+
+- **Import Horos Database now works on Windows.** The command was only ever on the macOS menu, so Windows users could not reach it. It is now near the foot of the database sidebar.
+- **Catalogue a drive.** Catalogue Drive, under DRIVES in the sidebar, lists every DICOM study on a drive or folder without copying its images or writing to the drive. Studies stay searchable with the drive unplugged and open when it is connected, and a drive that comes back under another letter is found again. See `docs/catalogue-drive.md`.
+- **Hide smart folders.** Right-click a smart folder to hide it, and Show hidden brings them all back.
+
+## Previously, in 0.1.8-alpha
 
 - **Finer AI segmentation with the cut box.** The model stretches what it is given to a square and makes its mask in 256 by 256 cells, so on a whole slice thin bone can come out too thick and a fine fracture line can be filled in. Draw a Cut box around the object in the 3D pane and the model sees only the box and follows only through its slices, which keeps much more detail. Nothing is cut from the volume. The panel shows the detail you are getting and warns when the box is mostly empty, too loose or long and thin, or when the object reaches its side and may be cut off. Check every result against the slices. See `docs/segmentation.md`.
 - **Hardening.** Two problems the nightly fuzzing found are fixed: a small malformed file could make Ruthos ask for a very large amount of memory, and an unusual date value could stop an anonymisation run.
 - **Acknowledgements** now name Ruthos's author and are on the website as well as in the About window and the README.
-
-## Previously, in 0.1.7-alpha
-
-This release is about licences and decoder safety. Everyone on an earlier alpha should update.
-
-- **Movie export now uses Cisco's own encoder.** H.264 is covered by patents, and Cisco's cover applies only to the copy of OpenH264 it distributes. Earlier alphas compiled the encoder into Ruthos; this one does not contain it. The first time you export a movie, Ruthos shows Cisco's licence and, if you agree, fetches the binary from Cisco and checks it against its published hash. Nothing is fetched unless you agree. OpenH264 Video Codec provided by Cisco Systems, Inc.
-- **Third-party licences.** Every package now carries `THIRD_PARTY_LICENSES` in HTML and text, listing every component's copyright and licence, and CI fails if a dependency is missing from it or its licence is not one we accept.
-- **About Ruthos.** A new window, from the row at the foot of the sidebar, with the version, build, acknowledgements and the licences.
-- **Decoder hardening.** OpenJPEG moves to 2.5.4 with a further upstream fix that is in no release, built from a copy in this repository, as upstream now describes itself as unmaintained. The checks made before a file reaches a decoder now look at exactly what the decoder receives, for every frame, and they also apply when a file is converted to send to a PACS. Upstream changes to the C libraries are now reviewed nightly as well as their CVEs.
 
 ## What works
 
@@ -53,7 +50,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.8-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.9-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed yet: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.

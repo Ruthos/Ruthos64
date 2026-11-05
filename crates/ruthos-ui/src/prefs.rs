@@ -1101,6 +1101,8 @@ impl PrefsState {
         if self.draft.listener_ae_title.trim().is_empty() {
             self.draft.listener_ae_title = "RUTHOS".into();
         }
+        // Set from the sidebar, perhaps while this window was open.
+        self.draft.hidden_smart_albums = shared.settings.lock().hidden_smart_albums.clone();
         match self.draft.save() {
             Ok(()) => {
                 let previous = shared.settings.lock().clone();

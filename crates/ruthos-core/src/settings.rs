@@ -9,6 +9,8 @@ use crate::measure::{self, Library};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default = "Settings::file_defaults")]
 pub struct Settings {
+    /// Smart folders hidden from the database sidebar.
+    pub hidden_smart_albums: Vec<String>,
     /// Root of the data folder. `None` means the platform default.
     pub data_root: Option<PathBuf>,
     /// Copy imported files into the database folder (true) or link to them
@@ -273,6 +275,7 @@ pub fn default_measurement_sets() -> Vec<MeasurementSet> {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            hidden_smart_albums: Vec::new(),
             data_root: None,
             copy_files_on_import: true,
             // Off until the user turns it on: Ruthos makes no network

@@ -203,6 +203,11 @@ impl RuthosApp {
             }
         }
 
+        // Developer option: `RUTHOS_CATALOGUE=<folder>` catalogues that folder.
+        if let Some(v) = std::env::var("RUTHOS_CATALOGUE").ok().filter(|v| !v.is_empty()) {
+            browser.start_catalogue(&shared, std::path::PathBuf::from(v));
+        }
+
         // Developer option: `RUTHOS_IMPORT_HOROS=<folder>` opens the Horos import on that folder.
         if let Some(v) = std::env::var("RUTHOS_IMPORT_HOROS").ok().filter(|v| !v.is_empty()) {
             browser.request_horos_import(Some(std::path::PathBuf::from(v)));
@@ -269,6 +274,19 @@ impl RuthosApp {
             "open viewer: study {study_id}, series {series_id:?}, {} open",
             self.viewers.len()
         );
+        // Pointers can outlive the drive they point at.
+        if let Ok(Some((path, false))) = self.shared.db.first_image(study_id) {
+            if !self.shared.resolve(&path).is_file() {
+                let msg = match self.shared.db.catalogue_of(&path).ok().flatten() {
+                    Some(name) => {
+                        format!("This study is on \"{name}\", which is not connected. Connect the drive and open the study again.")
+                    }
+                    None => format!("This study's files are no longer where they were imported from: {path}"),
+                };
+                self.report_error(msg);
+                return;
+            }
+        }
         // Reuse an existing window for this study: switch series and focus it.
         if let Some(existing) = self.viewers.iter().find(|v| v.lock().study.id == study_id) {
             let mut v = existing.lock();

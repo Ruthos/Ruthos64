@@ -44,12 +44,13 @@ fn notices() -> Option<PathBuf> {
     .find(|p| p.is_file())
 }
 
-/// Developer option: `RUTHOS_ABOUT_SCREENSHOT=<file.png>` opens the window and
-/// saves it as drawn two seconds in.
-fn dev_screenshot(ctx: &egui::Context) {
+/// Developer options: `RUTHOS_ABOUT_SCREENSHOT=<file.png>` opens the window and
+/// saves it as drawn two seconds in; `RUTHOS_BROWSER_SCREENSHOT=<file.png>` does
+/// that with the database window alone.
+fn dev_screenshot(ctx: &egui::Context, option: &str) {
     use std::sync::atomic::AtomicBool;
     static TAKEN: AtomicBool = AtomicBool::new(false);
-    let Some(path) = std::env::var_os("RUTHOS_ABOUT_SCREENSHOT") else {
+    let Some(path) = std::env::var_os(option) else {
         return;
     };
     if ctx.input(|i| i.time) < 2.0 {
@@ -70,10 +71,11 @@ pub fn window(ctx: &egui::Context, shared: &Shared, open: &mut bool) {
     if shared.open_about.swap(false, Ordering::Relaxed) {
         *open = true;
     }
+    dev_screenshot(ctx, "RUTHOS_BROWSER_SCREENSHOT");
     if !*open {
         return;
     }
-    dev_screenshot(ctx);
+    dev_screenshot(ctx, "RUTHOS_ABOUT_SCREENSHOT");
     egui::Window::new("About Ruthos")
         .open(open)
         .collapsible(false)

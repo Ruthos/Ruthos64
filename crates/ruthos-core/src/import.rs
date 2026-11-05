@@ -48,6 +48,8 @@ pub struct ImportSummary {
     /// Received over the network (the listener or a PACS retrieval)
     /// rather than imported from a folder or files.
     pub from_network: bool,
+    /// A drive was catalogued: its images stay where they are.
+    pub catalogued: bool,
 }
 
 impl ImportSummary {
@@ -108,29 +110,7 @@ impl Importer {
                     })
                     .collect();
 
-                let mut summary = ImportSummary::default();
-                for (file, r) in results {
-                    match r {
-                        Ok(FileOutcome::Imported {
-                            study_id,
-                            new_study,
-                            image_id,
-                            ..
-                        }) => {
-                            summary.imported += 1;
-                            summary.image_ids.push(image_id);
-                            if new_study && !summary.new_study_ids.contains(&study_id) {
-                                summary.new_study_ids.push(study_id);
-                            }
-                            if !summary.touched_study_ids.contains(&study_id) {
-                                summary.touched_study_ids.push(study_id);
-                            }
-                        }
-                        Ok(FileOutcome::Duplicate) => summary.duplicates += 1,
-                        Ok(FileOutcome::NotDicom) => summary.not_dicom += 1,
-                        Err(e) => summary.errors.push((file, e.to_string())),
-                    }
-                }
+                let summary = summarise(results);
                 tracing::info!(
                     "import finished: {} imported, {} duplicates, {} non-DICOM, {} errors",
                     summary.imported,
@@ -154,6 +134,34 @@ impl Importer {
     }
 }
 
+/// Add up what happened to each file.
+pub(crate) fn summarise(results: Vec<(PathBuf, std::result::Result<FileOutcome, CoreError>)>) -> ImportSummary {
+    let mut summary = ImportSummary::default();
+    for (file, r) in results {
+        match r {
+            Ok(FileOutcome::Imported {
+                study_id,
+                new_study,
+                image_id,
+                ..
+            }) => {
+                summary.imported += 1;
+                summary.image_ids.push(image_id);
+                if new_study && !summary.new_study_ids.contains(&study_id) {
+                    summary.new_study_ids.push(study_id);
+                }
+                if !summary.touched_study_ids.contains(&study_id) {
+                    summary.touched_study_ids.push(study_id);
+                }
+            }
+            Ok(FileOutcome::Duplicate) => summary.duplicates += 1,
+            Ok(FileOutcome::NotDicom) => summary.not_dicom += 1,
+            Err(e) => summary.errors.push((file, e.to_string())),
+        }
+    }
+    summary
+}
+
 /// Expand files and folders into a flat list of candidate files.
 pub fn collect_files(sources: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -175,7 +183,7 @@ pub fn collect_files(sources: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
-fn is_ignorable(path: &Path) -> bool {
+pub(crate) fn is_ignorable(path: &Path) -> bool {
     let name = path
         .file_name()
         .map(|s| s.to_string_lossy().to_ascii_lowercase())

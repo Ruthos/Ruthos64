@@ -77,6 +77,9 @@ pub struct StudyFilter {
     pub added_within_secs: Option<i64>,
     /// Only studies opened in the last so many seconds ("Just Opened").
     pub opened_within_secs: Option<i64>,
+    /// Only studies with an image on this catalogued drive.
+    #[serde(skip)]
+    pub catalogue_root: Option<String>,
 }
 
 impl Database {
@@ -329,6 +332,14 @@ impl Database {
             clauses.push(format!("s.date_opened >= ?{n}"));
             args.push((now_unix() - secs).into());
         }
+        if let Some(root) = &filter.catalogue_root {
+            let n = args.len() + 1;
+            clauses.push(format!(
+                "s.id IN (SELECT se.study_id FROM series se JOIN image i ON i.series_id = se.id
+                          WHERE i.stored_in_database_folder = 0 AND substr(i.path, 1, length(?{n})) = ?{n})"
+            ));
+            args.push(root.clone().into());
+        }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&clauses.join(" AND "));
@@ -440,6 +451,121 @@ impl Database {
             params![now_unix(), id],
         )?;
         Ok(())
+    }
+
+    /// Record a catalogued drive, or note that it has been scanned again.
+    pub fn add_catalogue(&self, name: &str, root: &str) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT INTO catalogue (name, root, scanned_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(root) DO UPDATE SET scanned_at = excluded.scanned_at",
+            params![name, root, now_unix()],
+        )?;
+        Ok(())
+    }
+
+    pub fn catalogues(&self) -> Result<Vec<crate::catalogue::Catalogue>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.name, c.root, c.scanned_at,
+                    (SELECT COUNT(*) FROM image i WHERE i.stored_in_database_folder = 0
+                       AND substr(i.path, 1, length(c.root)) = c.root)
+             FROM catalogue c ORDER BY c.name COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(crate::catalogue::Catalogue {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                root: r.get(2)?,
+                scanned_at: r.get(3)?,
+                images: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// A few images of a catalogue, with their sizes, to recognise it by.
+    pub fn catalogue_samples(&self, root: &str, count: usize) -> Result<Vec<(String, i64)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT path, file_size FROM image
+             WHERE stored_in_database_folder = 0 AND substr(path, 1, length(?1)) = ?1
+             ORDER BY id LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![root, count as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Point a catalogue's images at where the drive is now. False if another
+    /// catalogue already has that place.
+    pub fn move_catalogue(&self, id: i64, old_root: &str, new_root: &str) -> Result<bool> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        let taken: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM catalogue WHERE root = ?1",
+            params![new_root],
+            |r| r.get(0),
+        )?;
+        if taken > 0 {
+            return Ok(false);
+        }
+        tx.execute(
+            "UPDATE image SET path = ?2 || substr(path, length(?1) + 1)
+             WHERE stored_in_database_folder = 0 AND substr(path, 1, length(?1)) = ?1",
+            params![old_root, new_root],
+        )?;
+        tx.execute("UPDATE catalogue SET root = ?2 WHERE id = ?1", params![id, new_root])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Stop cataloguing a drive: its studies leave the database and no file is
+    /// touched. A study also holding images from elsewhere stays. Returns the
+    /// studies removed.
+    pub fn forget_catalogue(&self, catalogue: &crate::catalogue::Catalogue) -> Result<Vec<i64>> {
+        let studies: Vec<i64> = {
+            let conn = self.conn.lock();
+            let mut stmt = conn.prepare(
+                "SELECT se.study_id FROM series se JOIN image i ON i.series_id = se.id
+                 GROUP BY se.study_id
+                 HAVING SUM(i.stored_in_database_folder = 0 AND substr(i.path, 1, length(?1)) = ?1) = COUNT(*)",
+            )?;
+            let rows = stmt.query_map(params![catalogue.root], |r| r.get(0))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
+        for id in &studies {
+            self.delete_study(*id)?;
+        }
+        self.conn
+            .lock()
+            .execute("DELETE FROM catalogue WHERE id = ?1", params![catalogue.id])?;
+        Ok(studies)
+    }
+
+    /// A study's first image: where it is and whether it is in the database folder.
+    pub fn first_image(&self, study_id: i64) -> Result<Option<(String, bool)>> {
+        let conn = self.conn.lock();
+        let found = conn
+            .query_row(
+                "SELECT i.path, i.stored_in_database_folder FROM image i
+                 JOIN series se ON i.series_id = se.id WHERE se.study_id = ?1 ORDER BY i.id LIMIT 1",
+                params![study_id],
+                |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)),
+            )
+            .optional()?;
+        Ok(found)
+    }
+
+    /// The name of the catalogued drive a file is on.
+    pub fn catalogue_of(&self, path: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock();
+        let found = conn
+            .query_row(
+                "SELECT name FROM catalogue WHERE substr(?1, 1, length(root)) = root",
+                params![path],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(found)
     }
 
     /// Delete a study and return the files that were stored inside the
@@ -1585,7 +1711,14 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "calibration", "scope_x", "REAL")?;
     add_column_if_missing(conn, "calibration", "scope_y", "REAL")?;
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS watched_file (
+        "CREATE TABLE IF NOT EXISTS catalogue (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            root TEXT NOT NULL UNIQUE,
+            scanned_at INTEGER NOT NULL DEFAULT 0
+         );
+
+         CREATE TABLE IF NOT EXISTS watched_file (
             path TEXT PRIMARY KEY,
             size INTEGER NOT NULL,
             mtime INTEGER NOT NULL

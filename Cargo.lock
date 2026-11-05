@@ -5508,7 +5508,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "ruthos"
-version = "0.1.8-alpha"
+version = "0.1.9-alpha"
 dependencies = [
  "anyhow",
  "eframe",
@@ -5525,7 +5525,7 @@ dependencies = [
 
 [[package]]
 name = "ruthos-core"
-version = "0.1.8-alpha"
+version = "0.1.9-alpha"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5558,7 +5558,7 @@ dependencies = [
 
 [[package]]
 name = "ruthos-dicom"
-version = "0.1.8-alpha"
+version = "0.1.9-alpha"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5586,7 +5586,7 @@ dependencies = [
 
 [[package]]
 name = "ruthos-net"
-version = "0.1.8-alpha"
+version = "0.1.9-alpha"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5604,7 +5604,7 @@ dependencies = [
 
 [[package]]
 name = "ruthos-render"
-version = "0.1.8-alpha"
+version = "0.1.9-alpha"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5617,7 +5617,7 @@ dependencies = [
 
 [[package]]
 name = "ruthos-segment"
-version = "0.1.8-alpha"
+version = "0.1.9-alpha"
 dependencies = [
  "ort",
  "rayon",
@@ -5632,7 +5632,7 @@ dependencies = [
 
 [[package]]
 name = "ruthos-session"
-version = "0.1.8-alpha"
+version = "0.1.9-alpha"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5662,7 +5662,7 @@ dependencies = [
 
 [[package]]
 name = "ruthos-ui"
-version = "0.1.8-alpha"
+version = "0.1.9-alpha"
 dependencies = [
  "anyhow",
  "chrono",

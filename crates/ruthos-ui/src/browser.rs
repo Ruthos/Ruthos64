@@ -108,6 +108,13 @@ pub struct BrowserState {
     pub selected_series: Option<i64>,
     albums: Vec<AlbumRow>,
     selected_album: Option<i64>,
+    selected_catalogue: Option<i64>,
+    /// The catalogued drives, as last checked.
+    catalogues: Vec<ruthos_core::catalogue::Status>,
+    catalogue_check: Option<crate::pacs::Task<Vec<ruthos_core::catalogue::Status>>>,
+    catalogue_checked: Option<Instant>,
+    /// Stops the scan under way.
+    catalogue_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     builtin_albums: Vec<BuiltinAlbum>,
     selected_builtin: Option<usize>,
     /// Studies that have report text, for the Report column.
@@ -147,6 +154,11 @@ impl BrowserState {
             selected_series: None,
             albums: Vec::new(),
             selected_album: None,
+            selected_catalogue: None,
+            catalogues: Vec::new(),
+            catalogue_check: None,
+            catalogue_checked: None,
+            catalogue_cancel: None,
             builtin_albums: Vec::new(),
             selected_builtin: None,
             reports: HashSet::new(),
@@ -314,6 +326,10 @@ impl BrowserState {
                 }
             }
         }
+        filter.catalogue_root = self
+            .selected_catalogue
+            .and_then(|id| self.catalogues.iter().find(|c| c.catalogue.id == id))
+            .map(|c| c.catalogue.root.clone());
         match shared.db.list_studies(&filter) {
             Ok(s) => self.studies = s,
             Err(e) => self.set_status(format!("Database error: {e}")),
@@ -364,6 +380,8 @@ impl BrowserState {
                 ImportEvent::Progress { done, total, current } => self.import_progress = Some((done, total, current)),
                 ImportEvent::Finished(summary) => {
                     self.import_progress = None;
+                    self.catalogue_cancel = None;
+                    self.catalogue_checked = None;
                     if !summary.image_ids.is_empty() && !shared.settings.lock().routing_rules.is_empty() {
                         shared.route_inbox.lock().push(crate::routing::Arrival {
                             from_network: summary.from_network,
@@ -372,7 +390,8 @@ impl BrowserState {
                     }
                     if summary.total_files() > 0 {
                         let msg = format!(
-                            "Imported {} image{}{}{}",
+                            "{} {} image{}{}{}",
+                            if summary.catalogued { "Catalogued" } else { "Imported" },
                             summary.imported,
                             if summary.imported == 1 { "" } else { "s" },
                             if summary.duplicates > 0 {
@@ -460,6 +479,133 @@ impl BrowserState {
         self.import_progress = Some((0, 0, String::new()));
     }
 
+    /// Hide a smart folder, or with `None` show them all again.
+    fn set_hidden(&mut self, shared: &Shared, hide: Option<String>) {
+        let mut settings = shared.settings.lock();
+        match hide {
+            Some(key) => settings.hidden_smart_albums.push(key),
+            None => settings.hidden_smart_albums.clear(),
+        }
+        let saved = settings.save();
+        drop(settings);
+        if let Err(e) = saved {
+            self.set_status(format!("Could not save the settings: {e}"));
+        }
+    }
+
+    /// Scan a drive, recording its images where they are.
+    pub fn start_catalogue(&mut self, shared: &Shared, root: PathBuf) {
+        if self.import_progress.is_some() {
+            self.set_status("Wait for the import under way to finish");
+            return;
+        }
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (db, paths, tx) = (shared.db.clone(), shared.paths.clone(), shared.import_tx.clone());
+        match ruthos_core::catalogue::spawn_scan(db, paths, root, tx, cancel.clone()) {
+            Ok(_) => {
+                self.catalogue_cancel = Some(cancel);
+                self.import_progress = Some((0, 0, "Looking for files".to_string()));
+            }
+            Err(e) => self.set_status(format!("The scan could not start: {e}")),
+        }
+    }
+
+    /// Keep the drives' status current, off the interface thread: a drive can
+    /// take its time to answer.
+    fn poll_catalogues(&mut self, ctx: &egui::Context, shared: &Shared) {
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(15);
+        if let Some(status) = self.catalogue_check.as_ref().and_then(|t| t.take()) {
+            self.catalogue_check = None;
+            if status != self.catalogues {
+                self.catalogues = status;
+                self.dirty = true;
+            }
+        }
+        let due = self.catalogue_checked.is_none_or(|t| t.elapsed() >= EVERY);
+        if due && self.catalogue_check.is_none() {
+            let db = shared.db.clone();
+            self.catalogue_checked = Some(Instant::now());
+            self.catalogue_check = Some(crate::pacs::Task::spawn(ctx, "ruthos-drives", move || {
+                ruthos_core::catalogue::check(&db).unwrap_or_default()
+            }));
+        }
+        if !self.catalogues.is_empty() {
+            ctx.request_repaint_after(EVERY);
+        }
+    }
+
+    fn catalogue_rows(&mut self, ui: &mut Ui, shared: &Shared) {
+        source_header(ui, "DRIVES");
+        for status in self.catalogues.clone() {
+            let c = status.catalogue;
+            let label = if status.online {
+                c.name.clone()
+            } else {
+                format!("{} (not connected)", c.name)
+            };
+            let row = source_row(
+                ui,
+                icons::QUERY,
+                &label,
+                Some(c.images),
+                self.selected_catalogue == Some(c.id),
+            );
+            let row = row.on_hover_text(format!(
+                "{}\nOnly the records are here; the images stay on the drive",
+                c.root
+            ));
+            if row.clicked() {
+                self.selected_catalogue = Some(c.id);
+                self.selected_album = None;
+                self.selected_builtin = None;
+                self.dirty = true;
+            }
+            row.context_menu(|ui| {
+                let idle = status.online && self.import_progress.is_none();
+                if ui.add_enabled(idle, egui::Button::new("Scan again")).clicked() {
+                    self.start_catalogue(shared, PathBuf::from(&c.root));
+                    ui.close();
+                }
+                if menu_item(ui, "Forget this drive", false).clicked() {
+                    let description = format!(
+                        "Remove the {} images catalogued from \"{}\" from the database? Reports and \
+                         measurements on those studies are removed too. Nothing on the drive is changed.",
+                        c.images, c.name
+                    );
+                    let answer = rfd::MessageDialog::new()
+                        .set_title("Forget this drive")
+                        .set_description(description)
+                        .set_buttons(rfd::MessageButtons::YesNo)
+                        .show();
+                    if answer == rfd::MessageDialogResult::Yes {
+                        if let Err(e) = shared.db.forget_catalogue(&c) {
+                            self.set_status(format!("Database error: {e}"));
+                        }
+                        if self.selected_catalogue == Some(c.id) {
+                            self.selected_catalogue = None;
+                        }
+                        self.catalogue_checked = None;
+                        self.dirty = true;
+                    }
+                    ui.close();
+                }
+            });
+        }
+        if source_row(ui, icons::PLUS, "Catalogue Drive\u{2026}", None, false)
+            .on_hover_text(
+                "List every DICOM study on a drive without copying its images. They open when the drive is connected",
+            )
+            .clicked()
+        {
+            if let Some(root) = rfd::FileDialog::new()
+                .set_title("Choose a drive or folder to catalogue")
+                .pick_folder()
+            {
+                self.start_catalogue(shared, root);
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- show
 
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
@@ -469,6 +615,7 @@ impl BrowserState {
         }
         ui.style_mut().visuals = theme::browser_visuals();
         let ctx = ui.ctx().clone();
+        self.poll_catalogues(&ctx, shared);
 
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
             shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -830,27 +977,71 @@ impl BrowserState {
 
     fn source_list(&mut self, ui: &mut Ui, shared: &Shared) {
         source_header(ui, "LOCAL");
-        let all_selected = self.selected_album.is_none() && self.selected_builtin.is_none();
+        let all_selected =
+            self.selected_album.is_none() && self.selected_builtin.is_none() && self.selected_catalogue.is_none();
         if source_row(ui, Bitmap::Database, "Database", Some(self.counts.0), all_selected).clicked() {
             self.selected_album = None;
+            self.selected_catalogue = None;
             self.selected_builtin = None;
             self.dirty = true;
         }
         let builtins = self.builtin_albums.clone();
+        let albums = self.albums.clone();
+        let hidden = shared.settings.lock().hidden_smart_albums.clone();
+        let builtin_key = |name: &str| format!("builtin:{name}");
+        let album_key = |id: i64| format!("album:{id}");
+        // A hidden folder since deleted is not counted.
+        let hidden_count = builtins
+            .iter()
+            .filter(|b| hidden.contains(&builtin_key(&b.name)))
+            .count()
+            + albums.iter().filter(|a| hidden.contains(&album_key(a.id))).count();
         for (i, b) in builtins.iter().enumerate() {
-            if source_row(
+            let key = builtin_key(&b.name);
+            if hidden.contains(&key) {
+                continue;
+            }
+            let row = source_row(
                 ui,
                 Bitmap::SmartAlbum,
                 &b.name,
                 Some(b.count),
                 self.selected_builtin == Some(i),
-            )
-            .clicked()
-            {
+            );
+            if row.clicked() {
                 self.selected_builtin = Some(i);
                 self.selected_album = None;
+                self.selected_catalogue = None;
                 self.dirty = true;
             }
+            row.context_menu(|ui| {
+                if menu_item(ui, "Hide", false).clicked() {
+                    self.set_hidden(shared, Some(key.clone()));
+                    if self.selected_builtin == Some(i) {
+                        self.selected_builtin = None;
+                        self.dirty = true;
+                    }
+                    ui.close();
+                }
+                if hidden_count > 0 && menu_item(ui, "Show all hidden", false).clicked() {
+                    self.set_hidden(shared, None);
+                    ui.close();
+                }
+            });
+        }
+
+        if hidden_count > 0
+            && source_row(
+                ui,
+                icons::SMART_ALBUM,
+                &format!("Show {hidden_count} hidden"),
+                None,
+                false,
+            )
+            .on_hover_text("Show every smart folder you have hidden")
+            .clicked()
+        {
+            self.set_hidden(shared, None);
         }
 
         ui.horizontal(|ui| {
@@ -870,6 +1061,10 @@ impl BrowserState {
             ui.label(RichText::new("No albums yet").size(11.5).color(Color32::from_gray(140)));
         }
         for album in &albums {
+            let key = album_key(album.id);
+            if hidden.contains(&key) {
+                continue;
+            }
             let glyph = if album.is_smart {
                 Bitmap::SmartAlbum
             } else {
@@ -885,9 +1080,22 @@ impl BrowserState {
             if r.clicked() {
                 self.selected_album = Some(album.id);
                 self.selected_builtin = None;
+                self.selected_catalogue = None;
                 self.dirty = true;
             }
             r.context_menu(|ui| {
+                if album.is_smart && menu_item(ui, "Hide", false).clicked() {
+                    self.set_hidden(shared, Some(key.clone()));
+                    if self.selected_album == Some(album.id) {
+                        self.selected_album = None;
+                        self.dirty = true;
+                    }
+                    ui.close();
+                }
+                if hidden_count > 0 && menu_item(ui, "Show all hidden", false).clicked() {
+                    self.set_hidden(shared, None);
+                    ui.close();
+                }
                 if menu_item(ui, "Rename…", false).clicked() {
                     self.modal = Some(Modal::RenameAlbum {
                         id: album.id,
@@ -962,11 +1170,21 @@ impl BrowserState {
         }
 
         ui.add_space(8.0);
+        self.catalogue_rows(ui, shared);
+
+        ui.add_space(8.0);
         if source_row(ui, icons::SMART_ALBUM, "Guided review…", None, false)
             .on_hover_text("Teaching sessions: join, host and follow")
             .clicked()
         {
             shared.open_session.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        // Windows and Linux have no menu bar, so this is the only way in there.
+        if source_row(ui, icons::SMART_ALBUM, "Import Horos Database…", None, false)
+            .on_hover_text("A Horos or OsiriX library, with its albums, comments and key images")
+            .clicked()
+        {
+            self.request_horos_import(None);
         }
         if source_row(ui, icons::SMART_ALBUM, "Preferences…", None, false)
             .on_hover_text(format!("Settings ({})", crate::platform::shortcut("Ctrl+,")))
@@ -1548,11 +1766,22 @@ impl BrowserState {
             if let Some((done, total, current)) = &self.import_progress {
                 ui.separator();
                 let frac = if *total > 0 { *done as f32 / *total as f32 } else { 0.0 };
-                ui.add(
-                    egui::ProgressBar::new(frac)
-                        .desired_width(180.0)
-                        .text(format!("Importing {done}/{total}")),
-                );
+                let scanning = self.catalogue_cancel.is_some();
+                let text = match (scanning, *total) {
+                    (true, 0) => format!("{done} files found"),
+                    (true, _) => format!("Cataloguing {done}/{total}"),
+                    (false, _) => format!("Importing {done}/{total}"),
+                };
+                ui.add(egui::ProgressBar::new(frac).desired_width(180.0).text(text));
+                if let Some(cancel) = &self.catalogue_cancel {
+                    if ui
+                        .small_button("Stop")
+                        .on_hover_text("What has been found so far stays")
+                        .clicked()
+                    {
+                        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
                 ui.label(
                     RichText::new(truncate(current, 40))
                         .size(11.0)

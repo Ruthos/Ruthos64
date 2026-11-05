@@ -4,6 +4,7 @@
 //! images, the import pipeline, thumbnails, albums and application settings.
 //! Nothing in here knows about windows or pixels on screen.
 
+pub mod catalogue;
 pub mod db;
 pub mod horos;
 pub mod import;
