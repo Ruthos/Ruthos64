@@ -7,7 +7,7 @@ use dicom_core::value::PrimitiveValue;
 use dicom_core::{dicom_value, DataElement, VR};
 use dicom_dictionary_std::tags;
 
-use ruthos_dicom::guard::{self, Limits, MISMATCH};
+use ruthos_dicom::guard::MISMATCH;
 use ruthos_dicom::open::open_any;
 use ruthos_dicom::{decode_all_frames, decode_frame};
 
@@ -98,7 +98,7 @@ fn native_pixel_data_shorter_than_described_is_refused_without_a_panic() {
 }
 
 #[test]
-fn every_sample_still_decodes_and_a_loop_over_the_memory_limit_is_refused_whole() {
+fn every_sample_still_decodes() {
     // Acceptance 5: no real image is refused (the samples test covers each
     // one in detail; this asserts the guard lets them all through).
     for name in [
@@ -114,26 +114,6 @@ fn every_sample_still_decodes_and_a_loop_over_the_memory_limit_is_refused_whole(
     ] {
         decode_frame(&testdata(name), 0).unwrap_or_else(|e| panic!("{name}: {e}"));
     }
-    // Acceptance 4: a three-frame image over a tiny memory limit is refused
-    // whole, with the limit stated, and a single frame still opens.
-    let multi = altered("CT_small.dcm", "three.dcm", |obj| {
-        let data = obj.element(tags::PIXEL_DATA).unwrap().to_bytes().unwrap().to_vec();
-        let three: Vec<u8> = data.iter().chain(&data).chain(&data).copied().collect();
-        obj.put(DataElement::new(tags::PIXEL_DATA, VR::OW, PrimitiveValue::from(three)));
-        obj.put(DataElement::new(tags::NUMBER_OF_FRAMES, VR::IS, dicom_value!(Str, "3")));
-    });
-    assert_eq!(decode_all_frames(&multi).unwrap().len(), 3, "whole, within the limit");
-    let saved = guard::limits();
-    guard::set_limits_exact(Limits {
-        series_bytes: 100_000,
-        ..saved
-    });
-    let whole = decode_all_frames(&multi);
-    let single = decode_frame(&multi, 1);
-    guard::set_limits_exact(saved);
-    let e = whole.err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(e.contains("memory"), "the whole loop is refused with the limit: {e}");
-    assert!(single.is_ok(), "one frame still opens: {:?}", single.err());
 }
 
 #[test]

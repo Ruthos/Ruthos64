@@ -98,7 +98,7 @@ jobs:
           name: ${{ needs.windows-sign.result == 'success' && 'windows-signed' || 'windows-unsigned' }}
           path: bin
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install cargo-about --locked --version 0.9.3
+      - run: cargo install cargo-about --locked --version 0.9.3 --features cli
       - name: Third-party notices for this build
         run: python scripts/notices.py build --target x86_64-pc-windows-msvc --out notices
       - name: Zip
@@ -135,7 +135,7 @@ jobs:
             target/aarch64-apple-darwin/release/ruthos target/x86_64-apple-darwin/release/ruthos
           lipo -info target/release/ruthos
       - run: cargo install cargo-packager --locked
-      - run: cargo install cargo-about --locked --version 0.9.3
+      - run: cargo install cargo-about --locked --version 0.9.3 --features cli
       - name: Third-party notices for both halves of the universal binary
         run: python3 scripts/notices.py build --target aarch64-apple-darwin x86_64-apple-darwin --out notices
       - name: Ruthos.app (unsigned; signed below)
@@ -231,7 +231,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p ruthos
       - run: cargo install cargo-packager --locked
-      - run: cargo install cargo-about --locked --version 0.9.3
+      - run: cargo install cargo-about --locked --version 0.9.3 --features cli
       - name: Third-party notices, packaged as resources
         run: python3 scripts/notices.py build --target x86_64-unknown-linux-gnu --out notices
       - run: cargo packager --release --formats appimage
