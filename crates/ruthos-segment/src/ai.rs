@@ -244,9 +244,10 @@ impl Manifest {
         self.model.iter().all(|i| !i.url.is_empty())
     }
 
-    /// Whether the list shows this model, with research mode on or off.
+    /// Whether the list shows this model, with research mode on or off. Research mode
+    /// also holds models still being tested, which cannot be fetched yet.
     pub fn offered(&self, research_mode: bool) -> bool {
-        research_mode || self.research.is_none()
+        research_mode || (self.research.is_none() && self.downloadable())
     }
 
     /// Bytes still to fetch, for what can be fetched.

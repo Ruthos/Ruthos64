@@ -40,5 +40,7 @@ fn only_research_mode_offers_research_models() {
     };
     assert!(!open(false).contains(&NN_INTERACTIVE.id));
     assert!(open(true).contains(&NN_INTERACTIVE.id));
-    assert!(open(false).contains(&VISTA3D.id));
+    assert!(open(false).contains(&SAM2_TINY.id));
+    assert!(!open(false).contains(&VISTA3D.id), "it cannot be fetched yet");
+    assert!(open(true).contains(&VISTA3D.id));
 }

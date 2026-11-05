@@ -70,5 +70,5 @@ developers or third parties.
 1. In SignPath: create the project with the artifact configuration above, a signing policy (release signing) with Mark Bowen as approver, and link the GitHub trusted build system to `Ruthos/Ruthos64`.
 2. In GitHub, environment `release`: add the secret `SIGNPATH_API_TOKEN` (a SignPath CI user's token).
 3. In GitHub, repository variables: `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`.
-4. Bump the version to the next alpha version in `Cargo.toml` and `Packager.toml`, update `RELEASE_NOTES.md`, push, wait for CI, and tag it (for example `v0.1.9-alpha`).
+4. Bump the version to the next alpha version in `Cargo.toml` and `Packager.toml`, update `RELEASE_NOTES.md`, push, wait for CI, and tag it (for example `v0.1.10-alpha`).
 5. Approve the environment run in GitHub Actions and the request in SignPath; the workflow fails unless the signature is Valid, from SignPath Foundation, and timestamped.

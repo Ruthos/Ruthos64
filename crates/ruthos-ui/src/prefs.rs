@@ -1036,8 +1036,9 @@ impl PrefsState {
         ui.checkbox(&mut self.draft.research_mode, "Research mode");
         Self::hint(
             ui,
-            "Offers AI models whose licences allow only research and other non-commercial use. Each shows its \
-             terms before first use. Whether your use is allowed is your responsibility.",
+            "Offers AI models still being tested, and those whose licences allow only research and other \
+             non-commercial use. These are installed from a folder for now. A model with such a licence shows \
+             its terms before first use, and whether your use is allowed is your responsibility.",
         );
         ui.checkbox(&mut self.draft.save_unrefined_masks, "Save unrefined AI masks");
         Self::hint(

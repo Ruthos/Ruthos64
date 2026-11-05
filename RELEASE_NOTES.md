@@ -1,18 +1,20 @@
-# Ruthos 0.1.9-alpha
+# Ruthos 0.1.10-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
-## New in 0.1.9-alpha
+## New in 0.1.10-alpha
+
+- **Save segments to the study.** Save segments to study writes every segment on the panel as a DICOM Segmentation (SEG) in the study, which other programs can read. Saving again adds a version, and opening MPR offers the newest. A SEG from another program loads the same way, and one that does not line up with the series is refused with the reason. Closing MPR with unsaved changes asks first.
+- **Segments travel with the study.** Teaching copies include them with new UIDs and no creator's name, PACS can send and receive them, and reports list each with its volume and how it was made.
+- **Choose a model.** The AI section now has a Model list. SAM 2.1 Tiny remains the model you can download. Research mode, in Preferences under Viewer, offers VISTA3D and nnInteractive, 3D models still being tested. They cannot be downloaded from Ruthos yet: they install from a folder, and nnInteractive's licence is non-commercial, shown before first use.
+- **A progress bar and Stop** while following through slices.
+- **Refine edges** can read a segment's edge from the image's own values. It is off by default: it does well on test objects but can drop thin bone on real anatomy.
+
+## Previously, in 0.1.9-alpha
 
 - **Import Horos Database now works on Windows.** The command was only ever on the macOS menu, so Windows users could not reach it. It is now near the foot of the database sidebar.
 - **Catalogue a drive.** Catalogue Drive, under DRIVES in the sidebar, lists every DICOM study on a drive or folder without copying its images or writing to the drive. Studies stay searchable with the drive unplugged and open when it is connected, and a drive that comes back under another letter is found again. See `docs/catalogue-drive.md`.
 - **Hide smart folders.** Right-click a smart folder to hide it, and Show hidden brings them all back.
-
-## Previously, in 0.1.8-alpha
-
-- **Finer AI segmentation with the cut box.** The model stretches what it is given to a square and makes its mask in 256 by 256 cells, so on a whole slice thin bone can come out too thick and a fine fracture line can be filled in. Draw a Cut box around the object in the 3D pane and the model sees only the box and follows only through its slices, which keeps much more detail. Nothing is cut from the volume. The panel shows the detail you are getting and warns when the box is mostly empty, too loose or long and thin, or when the object reaches its side and may be cut off. Check every result against the slices. See `docs/segmentation.md`.
-- **Hardening.** Two problems the nightly fuzzing found are fixed: a small malformed file could make Ruthos ask for a very large amount of memory, and an unusual date value could stop an anonymisation run.
-- **Acknowledgements** now name Ruthos's author and are on the website as well as in the About window and the README.
 
 ## What works
 
@@ -31,7 +33,8 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 
 - Query by worklist (Modality Worklist) and storage commitment.
 - Reading Horos report files and Horos's saved measurements (ROIs).
-- Saving segments and cuts with the study (DICOM SEG), surface rendering in the 3D pane, and Horos's volume rendering opacity presets.
+- Saving cuts with the study, surface rendering in the 3D pane, and Horos's volume rendering opacity presets.
+- Downloading VISTA3D and nnInteractive from within Ruthos.
 - macOS and Linux for the AI tool, which runs on Windows only for now.
 - A signed installer. This build is an unsigned zip: Windows SmartScreen will warn on first run, and a PC with Smart App Control in enforce mode will refuse it. Building from source avoids both.
 
