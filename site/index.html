@@ -7,7 +7,7 @@
 <meta name="description" content="Ruthos is a free, open-source DICOM viewer and patient archive for Windows, inspired by Horos and written in Rust. Built for veterinary practice and teaching.">
 <meta property="og:title" content="Ruthos: a Horos-style DICOM viewer for Windows">
 <meta property="og:description" content="A free, open-source DICOM viewer and patient archive inspired by Horos. Archive, GPU viewer, calibrated measurements, LV M-mode, reports and teaching anonymisation.">
-<meta property="og:image" content="https://ruthos.github.io/Ruthos64/img/viewer-echo.jpg">
+<meta property="og:image" content="https://ruthos.github.io/Ruthos64/img/colour-doppler.jpg">
 <meta property="og:type" content="website">
 <style>
   :root {
@@ -168,9 +168,9 @@
     </div>
     <p class="meta">Version 0.1.9-alpha · Windows 10 version 1809 or later, 64-bit (x86-64) · 18 MB zip, nothing to install</p>
     <figure class="shot">
-      <img src="img/viewer-echo.jpg" width="1920" height="1163"
-           alt="The Ruthos 2D viewer with two echocardiography loops side by side: a long-axis view with named Ao and VSD measurements, and a colour Doppler view.">
-      <figcaption>Two echo loops tiled side by side, each playing at its recorded frame rate, with named measurements calibrated from the ultrasound regions.</figcaption>
+      <img src="img/colour-doppler.jpg" width="1600" height="998"
+           alt="The Ruthos 2D viewer playing an echocardiography loop with colour Doppler, with the toolbar above it.">
+      <figcaption>A colour Doppler echo loop in the 2D viewer, playing at its recorded frame rate.</figcaption>
     </figure>
   </div>
 
@@ -197,6 +197,29 @@
     </div>
   </section>
 
+  <section id="segmentation">
+    <div class="wrap">
+      <h2>3D segmentation that follows real anatomy</h2>
+      <p class="sub">Coming in the next release, and not in the download below. Click a structure on a slice, correct it there, then follow it through the volume.</p>
+      <div class="two">
+        <figure class="shot" style="margin-top:0">
+          <img src="img/skull-mandible.jpg" width="1092" height="1434" loading="lazy"
+               alt="A 3D view of an equine head CT with the mandible in blue, separated from the skull in cream.">
+          <figcaption>An equine head CT with the mandible separated from the skull, from a few clicks on the slices.</figcaption>
+        </figure>
+        <div>
+          <figure class="shot" style="margin-top:0">
+            <img src="img/skull-segments.jpg" width="1212" height="750" loading="lazy"
+                 alt="A 3D view of an equine skull with the cranium, the mandible and the orbit region each in its own colour.">
+            <figcaption>Each segment has its own colour and volume. This earlier result shows where a model's view of the volume once cut straight across the bone.</figcaption>
+          </figure>
+          <p>Models that see the whole volume pick the structure far more reliably than slice-by-slice tools, and a line from dark to bright keeps the result to bone, soft tissue or contrast by eye, with no numbers to learn. Segments are saved to the study as DICOM SEG, which other programs can read.</p>
+          <p>Every model runs on your machine, and no image leaves it. You choose the model. VISTA3D is licensed for commercial use, though NVIDIA says it is not for clinical use. nnInteractive is licensed for non-commercial use only, so it is offered only in research mode, with its terms shown first. These models were trained mostly on human images, these results are not validated, and every result should be checked against the slices.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="measurements">
     <div class="wrap">
       <h2>Built for echocardiography and radiography</h2>
@@ -213,13 +236,22 @@
       </div>
 
       <div class="split">
-        <img src="img/viewer-ct.png" width="1250" height="780" loading="lazy"
-             alt="The Ruthos viewer showing a head CT slice from the public CQ500 dataset with the Horos-style corner annotations.">
+        <img src="img/mmode-lv.jpg" width="1400" height="1028" loading="lazy"
+             alt="An LV M-mode trace in Ruthos with IVS, LVID and LVFW measured in diastole and systole, and fractional shortening.">
         <div>
           <h3>LV dimensions, areas and editing</h3>
           <p>The LV tool takes four points along one line, in M-mode or 2D, and gives IVS, LVID, LVFW and fractional shortening, for as many cycles as you measure, with the mean in the report. Rectangle, ellipse and polygon areas work on colour images. Every point can be dragged anywhere, nudged a pixel at a time, or undone, with a magnified loupe while you place it.</p>
           <p>Cobb and two-line angles, open polygons, pencil and brush regions, text notes, ROI Manager and ROI Info, histograms and line plots, and movies of a loop for teaching. A library of definitions and calculations (Teichholz volumes, LA/Ao, E/A, peak gradients, heart rate, MVA by pressure half-time, VHS) can be edited, shared as a file and imported by colleagues.</p>
         </div>
+      </div>
+
+      <div class="split">
+        <div>
+          <h3>Every series of a study in view</h3>
+          <p>The strip down the side holds each series of the study, ready to play, with the frame rate, tiling and tools along the top. Choose a measurement and the caliper uses the scale the scanner recorded.</p>
+        </div>
+        <img src="img/ultrasound-viewer.jpg" width="1600" height="922" loading="lazy"
+             alt="The Ruthos viewer showing an ultrasound clip, with a strip of series thumbnails down the left side.">
       </div>
     </div>
   </section>
