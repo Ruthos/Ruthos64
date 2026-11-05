@@ -1033,6 +1033,12 @@ impl PrefsState {
             &mut self.draft.load_newest_segments,
             "Load the newest saved segments on opening MPR, without asking",
         );
+        ui.checkbox(&mut self.draft.research_mode, "Research mode");
+        Self::hint(
+            ui,
+            "Offers AI models whose licences allow only research and other non-commercial use. Each shows its \
+             terms before first use. Whether your use is allowed is your responsibility.",
+        );
         ui.checkbox(&mut self.draft.save_unrefined_masks, "Save unrefined AI masks");
         Self::hint(
             ui,
@@ -1139,7 +1145,13 @@ impl PrefsState {
             self.draft.listener_ae_title = "RUTHOS".into();
         }
         // Set from the sidebar, perhaps while this window was open.
-        self.draft.hidden_smart_albums = shared.settings.lock().hidden_smart_albums.clone();
+        {
+            let now = shared.settings.lock();
+            self.draft.hidden_smart_albums = now.hidden_smart_albums.clone();
+            // Set from the Segments panel.
+            self.draft.research_agreed = now.research_agreed.clone();
+            self.draft.ai_model = now.ai_model.clone();
+        }
         match self.draft.save() {
             Ok(()) => {
                 let previous = shared.settings.lock().clone();

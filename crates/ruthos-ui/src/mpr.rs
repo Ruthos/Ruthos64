@@ -1119,6 +1119,37 @@ impl MprState {
         }
     }
 
+    /// The panel reads Preferences, and what it decides is kept there.
+    #[cfg(feature = "ai")]
+    fn sync_ai(&mut self, shared: &Shared) {
+        let ai = &mut self.segments.ai;
+        let chosen = ai.newly_chosen.take();
+        let agreed = ai.newly_agreed.take();
+        let mut settings = shared.settings.lock();
+        ai.band = settings.refine_band as usize;
+        ai.research_mode = settings.research_mode;
+        ai.agreed = settings.research_agreed.keys().cloned().collect();
+        if let Some(id) = agreed {
+            let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+            settings.research_agreed.insert(id.to_string(), date);
+            ai.agreed.push(id.to_string());
+        }
+        if let Some(id) = chosen {
+            settings.ai_model = id.to_string();
+        }
+        if chosen.is_some() || agreed.is_some() {
+            if let Err(e) = settings.save() {
+                self.segments.note = Some(format!("Could not save the settings: {e}"));
+            }
+        }
+        // Developer option: `RUTHOS_MPR_AI_MODEL=<id>` chooses the model.
+        let id = std::env::var("RUTHOS_MPR_AI_MODEL").unwrap_or_else(|_| settings.ai_model.clone());
+        if !ai.started() && !id.is_empty() {
+            ai.choose(&id);
+        }
+        ai.keep_to_offered();
+    }
+
     /// Offer what is saved for this series, or load it if that is the setting.
     fn find_saved_segments(&mut self, shared: &Shared) {
         self.segments.saved = ruthos_core::seg::saved_for_series(
@@ -1331,7 +1362,7 @@ impl MprState {
             if let Some(volume) = self.volume.clone() {
                 #[cfg(feature = "ai")]
                 {
-                    self.segments.ai.band = shared.settings.lock().refine_band as usize;
+                    self.sync_ai(shared);
                     self.segments.pump_ai(&volume);
                 }
                 if let Some(z) = self.segments.jump.take() {
@@ -1420,7 +1451,10 @@ impl MprState {
             }
             #[cfg(feature = "ai")]
             let waiting = match self.volume.clone() {
-                Some(volume) => self.segments.dev_option(&volume, &shared.paths.root),
+                Some(volume) => {
+                    self.sync_ai(shared);
+                    self.segments.dev_option(&volume, &shared.paths.root)
+                }
                 None => false,
             };
             #[cfg(not(feature = "ai"))]
@@ -2066,6 +2100,16 @@ impl MprState {
                 Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                 Color32::WHITE,
             );
+        }
+        // A handle of the range control: its value from a point on a slice.
+        #[cfg(feature = "ai")]
+        if self.segments.ai.picking_handle() && response.clicked() {
+            if let Some(p) = response.interact_pointer_pos() {
+                let q = t.screen_to_image(p);
+                if let Some(voxel) = crate::segments::voxel_at(volume, plane.point(q.x as f64, q.y as f64)) {
+                    self.segments.ai.pick_handle(ruthos_segment::Field::at(volume, voxel));
+                }
+            }
         }
         // The model's prompt: a click on a slice.
         #[cfg(feature = "ai")]

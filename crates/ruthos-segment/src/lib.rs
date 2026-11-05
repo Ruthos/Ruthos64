@@ -13,6 +13,8 @@ pub mod mesh;
 pub mod refine;
 pub mod store;
 pub mod tools;
+#[cfg(feature = "ai")]
+pub mod volume_ai;
 
 use serde::{Deserialize, Serialize};
 

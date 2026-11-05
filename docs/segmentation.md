@@ -115,6 +115,60 @@ against a fixed SHA-256 before use. The model comes from an ONNX export of Meta'
 weights made by a third party. A machine without internet access can install the
 model from a folder.
 
+### Choosing a model
+
+**Model** in the AI section lists what is available, and is remembered:
+
+| Model | How it works | Licence |
+| --- | --- | --- |
+| SAM 2.1 Tiny | Slice by slice, then follows the object | Apache 2.0 |
+| VISTA3D | The whole object in 3D from one click, at 1.5 mm | NVIDIA Open Model License |
+| nnInteractive | The whole object in 3D from one click, on the series' own voxels | CC BY-NC-SA 4.0, non-commercial |
+
+A 3D model works like the others: click a structure and see it on the slice, correct
+it with **Include** and **Exclude**, then press **Follow through slices**. The whole
+click looks at a window around it, and Follow moves that window along for as long as
+the object carries on, so a long structure takes several steps. A progress bar shows
+how far it has got, with a **Stop** button beside it: what it has found stays, and Follow
+carries on from there. Statistics and the 3D pane wait until Follow. A further click after that goes back to the slice. The cut box is
+not used, and Refine edges does not apply. **Finding** still matters: a 3D model finds an object,
+not a material, and on thin bone a click a few voxels off can come back as bone and
+muscle together. So with **Bone** chosen, a click takes the nearest bone within about
+4 voxels, and the result keeps only what is joined to your clicks, along with anything
+it encloses that the model took, such as marrow.
+
+Below **Finding** is a line from dark to bright, as on the image, with two handles.
+Only what lies between them is kept, for Bone, Soft tissue and Contrast alike. The bars
+show the values in what the model found, so you can see where the bone or tissue is and
+drag a handle to it. Bring the bottom handle down to take in the grey edge of thin bone,
+or up to keep to dense bone. It changes at once, as the model need not run again, and
+values up to 2 voxels past the model's own edge can be taken too. To set a handle from
+the image, press **Pick bottom** or **Pick top** and click a point on a slice: the handle
+goes to that point's value. Hover over the line for the values in HU. Turn off **Keep to bone** to see everything the model found.
+
+The window is about 19 cm for VISTA3D and 192 voxels for nnInteractive. With a range
+set, Follow goes where voxels in that range leave the window, so with Bone it stays with
+the bone. It goes through at most 24 windows.
+
+VISTA3D is trained on human CT, and NVIDIA's model card says it is for research and
+not for clinical use. It works at 1.5 mm and treats everything above about 1050 HU
+alike, so teeth and dense bone can run together.
+
+For now VISTA3D and nnInteractive are installed with **From a folder…**, as they
+are being tested.
+
+### Research mode
+
+**Research mode**, in Preferences under Viewer, offers models whose licences allow
+only research and other non-commercial use. nnInteractive is one: its weights are
+DKFZ's, under CC BY-NC-SA 4.0. It shows its terms before first use. Paid clinical
+work, including work in a practice that charges its clients, is not covered unless
+DKFZ has given you permission. Whether your use is allowed is your responsibility.
+
+nnInteractive needs about 5 GB of GPU memory. Without that it runs on the CPU, at
+about 9 s a click, and gives the same result. If a GPU fails or runs out of memory
+during a click, Ruthos repeats the click on the CPU rather than show a bad result.
+
 ### Refine edges
 
 **Refine edges is off by default.** It does well on phantoms but can make things

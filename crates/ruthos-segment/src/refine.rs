@@ -425,7 +425,7 @@ fn weak_paths(
 
 /// Fill spaces enclosed in the slice, but only a space lying wholly where the
 /// mask could reach: a ring around a sinus does not fill the sinus.
-fn fill_enclosed(on: &[bool], width: usize, height: usize, reachable: impl Fn(usize) -> bool) -> Vec<bool> {
+pub(crate) fn fill_enclosed(on: &[bool], width: usize, height: usize, reachable: impl Fn(usize) -> bool) -> Vec<bool> {
     let mut out = on.to_vec();
     let mut seen = on.to_vec();
     let mut piece = Vec::new();

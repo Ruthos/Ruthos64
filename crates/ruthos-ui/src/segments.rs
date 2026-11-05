@@ -167,6 +167,8 @@ pub struct SegmentPanel {
     pub ai: crate::segments_ai::AiPanel,
     #[cfg(feature = "ai")]
     dev_followed: bool,
+    #[cfg(feature = "ai")]
+    dev_clicked: bool,
 }
 
 impl Default for SegmentPanel {
@@ -200,6 +202,8 @@ impl Default for SegmentPanel {
             ai: Default::default(),
             #[cfg(feature = "ai")]
             dev_followed: false,
+            #[cfg(feature = "ai")]
+            dev_clicked: false,
         }
     }
 }
@@ -410,7 +414,7 @@ impl SegmentPanel {
     /// rather than taking the whole label map after every slice.
     pub fn ai_busy(&self) -> bool {
         #[cfg(feature = "ai")]
-        return self.ai.busy;
+        return self.ai.busy || self.ai.previewing;
         #[cfg(not(feature = "ai"))]
         false
     }
@@ -425,6 +429,11 @@ impl SegmentPanel {
         let v: Vec<usize> = text.split(',').filter_map(|n| n.parse().ok()).collect();
         let [x, y, z] = v[..] else { return false };
         self.open = true;
+        // A research model waits for its terms here as anywhere.
+        let manifest = self.ai.manifest();
+        if manifest.research.is_some() && !self.ai.agreed.iter().any(|id| id == manifest.id) {
+            return false;
+        }
         if !self.ai.started() {
             self.ai.start_worker(volume, root);
             return true;
@@ -432,7 +441,8 @@ impl SegmentPanel {
         if !self.ai.ready {
             return true;
         }
-        if self.ai.clicks.is_empty() {
+        if !self.dev_clicked {
+            self.dev_clicked = true;
             self.ai.include = true;
             self.ai.click(x, y, z);
             return true;
@@ -444,7 +454,10 @@ impl SegmentPanel {
             return false;
         }
         self.dev_followed = true;
-        self.ai.follow();
+        // Developer option: `RUTHOS_MPR_AI_PREVIEW` stays on the clicked slice.
+        if std::env::var_os("RUTHOS_MPR_AI_PREVIEW").is_none() {
+            self.ai.follow();
+        }
         if std::env::var_os("RUTHOS_MPR_AI_OUTLINE").is_some() {
             self.ai.show_outline = true;
         }
@@ -454,7 +467,7 @@ impl SegmentPanel {
     /// Whether a click on a slice belongs to the model.
     #[cfg(feature = "ai")]
     pub fn ai_picking(&self) -> bool {
-        self.ai.picking && self.ai.ready
+        self.ai.picking && self.ai.ready && !self.ai.picking_handle()
     }
 
     /// Write what the model has sent. Overlays follow as it goes; the
@@ -477,7 +490,7 @@ impl SegmentPanel {
                         self.model_masks.entry(label).or_default().slices.insert(z, on);
                     }
                 }
-                Reply::Finished(_) => {
+                Reply::Finished(_) | Reply::Done { .. } => {
                     self.check_slices(volume);
                     self.changed(volume);
                 }
@@ -521,7 +534,7 @@ impl SegmentPanel {
             self.remember();
             let colour = COLOURS[self.made as usize % COLOURS.len()];
             self.made += 1;
-            let manifest = ruthos_segment::ai::SAM2_TINY;
+            let manifest = self.ai.manifest();
             let provenance = Provenance::Automatic {
                 model: manifest.name.to_string(),
                 version: manifest.version.to_string(),

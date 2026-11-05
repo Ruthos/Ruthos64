@@ -56,9 +56,25 @@ pub struct Item {
     pub entry: Option<&'static str>,
 }
 
+/// How a model works.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// Slice by slice, following an object through the stack.
+    Slices,
+    /// A window of the volume at once, one network, on the series' own voxels.
+    NnInteractive,
+    /// A window of the volume at 1.5 mm, an encoder and a decoder for each click.
+    Vista,
+}
+
 /// What the download dialog shows before anything is fetched.
 #[derive(Debug, Clone, Copy)]
 pub struct Manifest {
+    /// Stable, for settings and folders.
+    pub id: &'static str,
+    pub engine: Engine,
+    /// Terms to agree to first, for a model offered only in research mode.
+    pub research: Option<&'static str>,
     pub name: &'static str,
     pub version: &'static str,
     pub licence: &'static str,
@@ -69,6 +85,9 @@ pub struct Manifest {
 }
 
 pub const SAM2_TINY: Manifest = Manifest {
+    id: "sam2.1-tiny",
+    engine: Engine::Slices,
+    research: None,
     name: "SAM 2.1 Tiny",
     version: "2.1",
     licence: "Apache 2.0",
@@ -137,6 +156,67 @@ pub const SAM2_TINY: Manifest = Manifest {
     ],
 };
 
+/// No address yet: these exports are installed from a folder while they are tested.
+const FROM_A_FOLDER: &str = "";
+
+pub const VISTA3D: Manifest = Manifest {
+    id: "vista3d",
+    engine: Engine::Vista,
+    research: None,
+    name: "VISTA3D",
+    version: "NV-Segment-CT",
+    licence: "NVIDIA Open Model License",
+    source: "NVIDIA's NV-Segment-CT, exported to ONNX by Ruthos",
+    training: "Trained on human CT. NVIDIA's model card says it is for research and not for clinical use. \
+               It works at 1.5 mm and treats everything above about 1050 HU alike, so dense bone and teeth \
+               can run together.",
+    model: &[
+        Item {
+            name: "vista3d-encoder-fp16.onnx",
+            url: FROM_A_FOLDER,
+            bytes: 392_255_543,
+            sha256: "68504be099b836784d29f2d1538e97f89dacd9a2c93b8355f6a2c0c4eecf8d17",
+            entry: None,
+        },
+        Item {
+            name: "vista3d-decoder.onnx",
+            url: FROM_A_FOLDER,
+            bytes: 2_807_470,
+            sha256: "a29b650799e83dcc1542b22e05d052c4565c59769878254b11e0b8e9006382eb",
+            entry: None,
+        },
+    ],
+    runtime: SAM2_TINY.runtime,
+};
+
+pub const NN_INTERACTIVE: Manifest = Manifest {
+    id: "nninteractive",
+    engine: Engine::NnInteractive,
+    research: Some(
+        "nnInteractive's weights are licensed by DKFZ under CC BY-NC-SA 4.0, for non-commercial use only. \
+         Paid clinical work, including work in a practice that charges its clients, is not covered unless DKFZ \
+         has given you permission. Whether your use is allowed is your responsibility. Agree only if your use \
+         is non-commercial, such as research, teaching or testing.",
+    ),
+    name: "nnInteractive",
+    version: "1.0",
+    licence: "CC BY-NC-SA 4.0 (non-commercial)",
+    source: "DKFZ's nnInteractive v1.0, exported to ONNX",
+    training: "Trained on over 120 volumetric datasets, mostly human. It works on the series' own voxels and \
+               needs about 5 GB of GPU memory, or about 9 s a click on the CPU.",
+    model: &[Item {
+        name: "nninteractive-fp16.onnx",
+        url: FROM_A_FOLDER,
+        bytes: 204_800_627,
+        sha256: "9d3f2332d396203bdac5fb90469c484ccb9be72fc69c069126e954a1bad566ac",
+        entry: None,
+    }],
+    runtime: SAM2_TINY.runtime,
+};
+
+/// Every model Ruthos can use, default first.
+pub const AVAILABLE: [Manifest; 3] = [SAM2_TINY, VISTA3D, NN_INTERACTIVE];
+
 /// Why the tool cannot run, in words for the user.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
@@ -150,29 +230,43 @@ impl AiError {
 
 type Result<T> = std::result::Result<T, AiError>;
 
-pub fn model_folder(data_root: &Path) -> PathBuf {
-    data_root.join("models").join("sam2.1-tiny")
-}
-
 pub fn runtime_folder(data_root: &Path) -> PathBuf {
     data_root.join("models").join("runtime")
 }
 
 impl Manifest {
-    /// Bytes still to fetch.
+    pub fn folder(&self, data_root: &Path) -> PathBuf {
+        data_root.join("models").join(self.id)
+    }
+
+    /// Whether this model can be fetched, or only installed from a folder.
+    pub fn downloadable(&self) -> bool {
+        self.model.iter().all(|i| !i.url.is_empty())
+    }
+
+    /// Whether the list shows this model, with research mode on or off.
+    pub fn offered(&self, research_mode: bool) -> bool {
+        research_mode || self.research.is_none()
+    }
+
+    /// Bytes still to fetch, for what can be fetched.
     pub fn download_bytes(&self, data_root: &Path) -> u64 {
         let missing = |folder: PathBuf, items: &[Item]| -> u64 {
             items
                 .iter()
-                .filter(|i| !folder.join(i.name).is_file())
+                .filter(|i| !i.url.is_empty() && !folder.join(i.name).is_file())
                 .map(|i| i.bytes)
                 .sum()
         };
-        missing(model_folder(data_root), self.model) + missing(runtime_folder(data_root), self.runtime)
+        missing(self.folder(data_root), self.model) + missing(runtime_folder(data_root), self.runtime)
+    }
+
+    pub fn has_model(&self, data_root: &Path) -> bool {
+        self.model.iter().all(|i| self.folder(data_root).join(i.name).is_file())
     }
 
     pub fn installed(&self, data_root: &Path) -> bool {
-        self.download_bytes(data_root) == 0
+        self.has_model(data_root) && self.download_bytes(data_root) == 0
     }
 }
 
@@ -272,13 +366,13 @@ pub fn install(
     progress: &(dyn Fn(u64, u64) + Sync),
     cancel: &AtomicBool,
 ) -> Result<()> {
-    let (model, runtime) = (model_folder(data_root), runtime_folder(data_root));
+    let (model, runtime) = (manifest.folder(data_root), runtime_folder(data_root));
     for folder in [&model, &runtime] {
         std::fs::create_dir_all(folder).map_err(|e| AiError::from("The model folder", e))?;
     }
     let total = manifest.download_bytes(data_root);
     let mut done = 0;
-    for item in manifest.model {
+    for item in manifest.model.iter().filter(|i| !i.url.is_empty()) {
         fetch(item, &model, &mut done, total, progress, cancel)?;
     }
     for item in manifest.runtime {
@@ -290,7 +384,7 @@ pub fn install(
 /// Install the model from a folder, for a practice without internet access.
 /// Every file is verified before it is copied in.
 pub fn install_from_folder(manifest: &Manifest, from: &Path, data_root: &Path) -> Result<()> {
-    let model = model_folder(data_root);
+    let model = manifest.folder(data_root);
     std::fs::create_dir_all(&model).map_err(|e| AiError::from("The model folder", e))?;
     for item in manifest.model {
         let source = from.join(item.name);
@@ -626,45 +720,50 @@ fn tensor<const N: usize>(shape: [usize; N], data: Vec<f32>) -> Result<Tensor<f3
     Tensor::from_array((shape, data)).map_err(run_error)
 }
 
+/// ONNX Runtime allows one environment in a process, however many times a model is
+/// loaded.
+fn environment(data_root: &Path) -> Result<&'static Environment> {
+    static ENVIRONMENT: OnceLock<std::result::Result<Environment, String>> = OnceLock::new();
+    let library = runtime_folder(data_root).join("onnxruntime.dll");
+    ENVIRONMENT
+        .get_or_init(|| {
+            ort::init_from(&library)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
+        .map_err(|e| AiError::from("ONNX Runtime could not start", e))
+}
+
+/// A session on one graph, on the GPU if asked.
+pub(crate) fn open_session(data_root: &Path, file: &Path, gpu: bool) -> Result<Session> {
+    let mut builder = Session::builder(environment(data_root)?).map_err(run_error)?;
+    builder = builder
+        .with_optimization_level(GraphOptimizationLevel::Level3)
+        .map_err(run_error)?;
+    if gpu {
+        // DirectML wants one thread of work and no memory patterns.
+        builder = builder
+            .with_execution_providers([DirectML::default().build().error_on_failure()])
+            .map_err(run_error)?
+            .with_parallel_execution(false)
+            .map_err(run_error)?
+            .with_memory_pattern(false)
+            .map_err(run_error)?;
+    }
+    builder.commit_from_file(file).map_err(run_error)
+}
+
 impl Sam2 {
     /// Verify and load the model. It takes some seconds, so it belongs on a
     /// background thread.
     pub fn load(manifest: &Manifest, data_root: &Path) -> Result<Self> {
-        let (model, runtime) = (model_folder(data_root), runtime_folder(data_root));
+        let model = manifest.folder(data_root);
         for item in manifest.model {
             verify(&model.join(item.name), item)?;
         }
-        let library = runtime.join("onnxruntime.dll");
-        // ONNX Runtime allows one environment in a process, however many times
-        // the model is loaded.
-        static ENVIRONMENT: OnceLock<std::result::Result<Environment, String>> = OnceLock::new();
-        let environment = ENVIRONMENT
-            .get_or_init(|| {
-                ort::init_from(&library)
-                    .map_err(|e| e.to_string())?
-                    .build()
-                    .map_err(|e| e.to_string())
-            })
-            .as_ref()
-            .map_err(|e| AiError::from("ONNX Runtime could not start", e))?;
-
-        let session = |name: &str, gpu: bool| -> Result<Session> {
-            let mut builder = Session::builder(environment).map_err(run_error)?;
-            builder = builder
-                .with_optimization_level(GraphOptimizationLevel::Level3)
-                .map_err(run_error)?;
-            if gpu {
-                // DirectML wants one thread of work and no memory patterns.
-                builder = builder
-                    .with_execution_providers([DirectML::default().build().error_on_failure()])
-                    .map_err(run_error)?
-                    .with_parallel_execution(false)
-                    .map_err(run_error)?
-                    .with_memory_pattern(false)
-                    .map_err(run_error)?;
-            }
-            builder.commit_from_file(model.join(name)).map_err(run_error)
-        };
+        let session = |name: &str, gpu: bool| open_session(data_root, &model.join(name), gpu);
         let on_gpu = session("pointer_tpos.onnx", true).is_ok();
         let constants: serde_json::Value = serde_json::from_slice(
             &std::fs::read(model.join("constants.json")).map_err(|e| AiError::from("constants.json", e))?,

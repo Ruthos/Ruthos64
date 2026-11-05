@@ -12,8 +12,12 @@ use crate::{Grid, Mask, Provenance, Segment, Segmentation};
 
 /// Marks a Ruthos tool's algorithm name.
 const OURS: &str = "Ruthos ";
-const SAM: &str = "SAM 2.1";
-const SAM_VERSION: &str = "2.1";
+/// Models whose names mark a segment as theirs, with the version each records.
+const MODELS: [(&str, &str); 3] = [
+    ("SAM 2.1", "2.1"),
+    ("VISTA3D", "NV-Segment-CT"),
+    ("nnInteractive", "1.0"),
+];
 const REFINED: &str = " with Ruthos edge refinement";
 const EDITED: &str = ", edited";
 
@@ -45,7 +49,8 @@ pub fn provenance(a: &Algorithm) -> Provenance {
     };
     match a {
         Algorithm::Manual => Provenance::Manual,
-        Algorithm::SemiAutomatic(name) if name.starts_with(SAM) => {
+        Algorithm::SemiAutomatic(name) if MODELS.iter().any(|(m, _)| name.starts_with(m)) => {
+            let version = MODELS.iter().find(|(m, _)| name.starts_with(m)).map_or("", |m| m.1);
             let (name, edited) = match name.strip_suffix(EDITED) {
                 Some(n) => (n, true),
                 None => (name.as_str(), false),
@@ -56,7 +61,7 @@ pub fn provenance(a: &Algorithm) -> Provenance {
             };
             Provenance::Automatic {
                 model: model.to_string(),
-                version: SAM_VERSION.to_string(),
+                version: version.to_string(),
                 refined,
                 edited,
             }

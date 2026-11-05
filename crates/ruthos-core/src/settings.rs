@@ -18,6 +18,12 @@ pub struct Settings {
     pub save_unrefined_masks: bool,
     /// Load the newest saved segments on opening MPR, without asking.
     pub load_newest_segments: bool,
+    /// Offer models whose terms limit them to research and other non-commercial use.
+    pub research_mode: bool,
+    /// Models whose terms the user has agreed to, by id, with the date.
+    pub research_agreed: std::collections::BTreeMap<String, String>,
+    /// The AI model chosen in the Segments panel, by id.
+    pub ai_model: String,
     /// Written as Content Creator's Name in what Ruthos saves to a study.
     pub user_name: String,
     /// Root of the data folder. `None` means the platform default.
@@ -288,6 +294,9 @@ impl Default for Settings {
             refine_band: 3,
             save_unrefined_masks: false,
             load_newest_segments: false,
+            research_mode: false,
+            research_agreed: Default::default(),
+            ai_model: String::new(),
             user_name: String::new(),
             data_root: None,
             copy_files_on_import: true,
