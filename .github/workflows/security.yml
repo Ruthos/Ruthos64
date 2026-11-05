@@ -46,3 +46,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/check_codecs.py --open-issues
+      - name: The vendored C is upstream's, plus only what codecs.toml records
+        run: python scripts/check_codecs.py --verify-vendor

@@ -5,6 +5,7 @@
 //! viewer (ViewerController). `app` wires them into eframe with the viewer
 //! windows as native viewports.
 
+pub mod about;
 pub mod annotations;
 pub mod anonymize;
 pub mod app;

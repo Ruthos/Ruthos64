@@ -154,3 +154,114 @@ fn bytes_in_memory_open_and_decode_like_the_file() {
     assert!(ruthos_dicom::open::open_from_bytes(b"not dicom at all").is_err());
     assert!(ruthos_dicom::open::open_from_bytes(&[]).is_err());
 }
+
+/// A JPEG 2000 sample rewritten with these fragments, offset table and frame count.
+fn split_jpeg_2000(
+    out: &str,
+    frames: u32,
+    offsets: Vec<u32>,
+    fragments: impl FnOnce(Vec<u8>) -> Vec<Vec<u8>>,
+) -> PathBuf {
+    altered("JPEG2000.dcm", out, |obj| {
+        let mut stream = obj.element(tags::PIXEL_DATA).unwrap().fragments().unwrap()[0].to_vec();
+        if stream.len() % 2 == 1 {
+            stream.push(0);
+        }
+        obj.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            dicom_core::value::Value::PixelSequence(dicom_core::value::PixelFragmentSequence::new(
+                offsets,
+                fragments(stream),
+            )),
+        ));
+        obj.put(DataElement::new(
+            tags::NUMBER_OF_FRAMES,
+            VR::IS,
+            dicom_value!(Str, frames.to_string()),
+        ));
+    })
+}
+
+/// Two frames in three fragments, where the offset table sends the second
+/// frame to the third fragment. The guard must see the bytes the decoder gets.
+fn second_frame_in_third_fragment(out: &str, third: Vec<u8>) -> PathBuf {
+    let path = split_jpeg_2000(out, 2, vec![0], |stream| vec![stream, vec![0; 2], third]);
+    let mut obj = open_any(&path, None).unwrap();
+    let e = obj.element(tags::PIXEL_DATA).unwrap();
+    let frags: Vec<Vec<u8>> = e.fragments().unwrap().iter().map(|f| f.to_vec()).collect();
+    let second = (frags[0].len() + 8 + frags[1].len() + 8) as u32;
+    obj.put(DataElement::new(
+        tags::PIXEL_DATA,
+        VR::OB,
+        dicom_core::value::Value::PixelSequence(dicom_core::value::PixelFragmentSequence::new(vec![0, second], frags)),
+    ));
+    obj.write_to_file(&path).unwrap();
+    path
+}
+
+#[test]
+fn a_later_frame_cannot_hide_a_jp2_wrapper_behind_the_offset_table() {
+    let mut jp2 = vec![0u8, 0, 0, 12, b'j', b'P', b' ', b' ', 13, 10, 0x87, 10];
+    jp2.extend([0u8; 8]);
+    let p = second_frame_in_third_fragment("hidden-jp2.dcm", jp2);
+    let e = decode_frame(&p, 1)
+        .expect_err("the wrapped frame must not decode")
+        .to_string();
+    assert!(e.contains(MISMATCH), "reached the decoder: {e}");
+    let e = decode_all_frames(&p).expect_err("nor the whole image").to_string();
+    assert!(e.contains(MISMATCH), "reached the decoder: {e}");
+}
+
+#[test]
+fn a_later_frame_cannot_hide_a_wrong_size_behind_the_offset_table() {
+    let mut other = open_any(&testdata("JPEG2000.dcm"), None)
+        .unwrap()
+        .element(tags::PIXEL_DATA)
+        .unwrap()
+        .fragments()
+        .unwrap()[0]
+        .to_vec();
+    // Patch Xsiz in SIZ, four bytes in at Lsiz.
+    other[8..12].copy_from_slice(&[0, 0, 0xFF, 0xFF]);
+    if other.len() % 2 == 1 {
+        other.push(0);
+    }
+    let p = second_frame_in_third_fragment("hidden-size.dcm", other);
+    let e = decode_frame(&p, 1).expect_err("must be refused").to_string();
+    assert!(e.contains(MISMATCH), "reached the decoder: {e}");
+}
+
+#[test]
+fn one_frame_split_across_fragments_still_opens() {
+    let whole = decode_frame(&testdata("JPEG2000.dcm"), 0).unwrap();
+    let p = split_jpeg_2000("split.dcm", 1, vec![], |stream| {
+        let half = (stream.len() / 2) & !1;
+        vec![stream[..half].to_vec(), stream[half..].to_vec()]
+    });
+    let frame = decode_frame(&p, 0).unwrap();
+    assert_eq!((frame.width, frame.height), (whole.width, whole.height));
+}
+
+#[test]
+fn two_frames_each_in_two_fragments_still_open() {
+    let whole = decode_frame(&testdata("JPEG2000.dcm"), 0).unwrap();
+    let path = split_jpeg_2000("two-by-two.dcm", 2, vec![0], |stream| {
+        let half = (stream.len() / 2) & !1;
+        let (a, b) = stream.split_at(half);
+        vec![a.to_vec(), b.to_vec(), a.to_vec(), b.to_vec()]
+    });
+    let mut obj = open_any(&path, None).unwrap();
+    let e = obj.element(tags::PIXEL_DATA).unwrap();
+    let frags: Vec<Vec<u8>> = e.fragments().unwrap().iter().map(|f| f.to_vec()).collect();
+    let second = (frags[0].len() + 8 + frags[1].len() + 8) as u32;
+    obj.put(DataElement::new(
+        tags::PIXEL_DATA,
+        VR::OB,
+        dicom_core::value::Value::PixelSequence(dicom_core::value::PixelFragmentSequence::new(vec![0, second], frags)),
+    ));
+    obj.write_to_file(&path).unwrap();
+    let frame = decode_frame(&path, 1).unwrap();
+    assert_eq!((frame.width, frame.height), (whole.width, whole.height));
+    assert_eq!(decode_all_frames(&path).unwrap().len(), 2);
+}

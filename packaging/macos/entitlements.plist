@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Hardened-runtime entitlements for Ruthos.app: none. The codecs are
+  Hardened-runtime entitlements for Ruthos.app: one. The decoders are
   statically linked, nothing is compiled at run time and Metal needs no
-  entitlement. Keep this empty; an exception here weakens every release.
+  entitlement. The exception is library validation: movie export loads
+  Cisco's OpenH264 binary, which must come from Cisco and so cannot carry our
+  signature. Ruthos checks its SHA-256 before loading it. Add nothing else; an
+  exception here weakens every release.
   The application is not sandboxed (the listener, arbitrary import folders
   and a Horos database in Documents are incompatible with the App Sandbox,
   and Developer ID distribution does not require it).
 -->
 <plist version="1.0">
-<dict/>
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
 </plist>

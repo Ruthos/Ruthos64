@@ -135,6 +135,7 @@ pub fn take_open_files() -> Vec<PathBuf> {
 /// What a menu item does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
+    About,
     Preferences,
     ImportFolder,
     ImportFiles,
@@ -215,6 +216,7 @@ pub const MENU_BAR: &[MenuDef] = &[
                 Some("Ctrl+,"),
                 AppAction::Preferences,
             ),
+            item("app:about", "About Ruthos…", None, AppAction::About),
         ],
     },
     MenuDef {

@@ -97,12 +97,16 @@ jobs:
         with:
           name: ${{ needs.windows-sign.result == 'success' && 'windows-signed' || 'windows-unsigned' }}
           path: bin
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-about --locked --version 0.9.3
+      - name: Third-party notices for this build
+        run: python scripts/notices.py build --target x86_64-pc-windows-msvc --out notices
       - name: Zip
         shell: pwsh
         run: |
           $name = "Ruthos-$($env:GITHUB_REF_NAME.TrimStart('v'))-win64"
           New-Item -ItemType Directory -Force "dist/$name" | Out-Null
-          Copy-Item bin/ruthos.exe, LICENSE, README.md "dist/$name"
+          Copy-Item bin/ruthos.exe, LICENSE, README.md, notices/THIRD_PARTY_LICENSES.html, notices/THIRD_PARTY_LICENSES.txt "dist/$name"
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
       - uses: actions/upload-artifact@v4
         with:
@@ -131,8 +135,16 @@ jobs:
             target/aarch64-apple-darwin/release/ruthos target/x86_64-apple-darwin/release/ruthos
           lipo -info target/release/ruthos
       - run: cargo install cargo-packager --locked
+      - run: cargo install cargo-about --locked --version 0.9.3
+      - name: Third-party notices for both halves of the universal binary
+        run: python3 scripts/notices.py build --target aarch64-apple-darwin x86_64-apple-darwin --out notices
       - name: Ruthos.app (unsigned; signed below)
         run: cargo packager --release --formats app
+      - name: The notices are inside the bundle, before it is signed
+        run: |
+          cp LICENSE dist/Ruthos.app/Contents/Resources/
+          test -f dist/Ruthos.app/Contents/Resources/THIRD_PARTY_LICENSES.html
+          test -f dist/Ruthos.app/Contents/Resources/THIRD_PARTY_LICENSES.txt
       - name: Temporary keychain with the Developer ID certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -219,6 +231,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p ruthos
       - run: cargo install cargo-packager --locked
+      - run: cargo install cargo-about --locked --version 0.9.3
+      - name: Third-party notices, packaged as resources
+        run: python3 scripts/notices.py build --target x86_64-unknown-linux-gnu --out notices
       - run: cargo packager --release --formats appimage
       - uses: actions/upload-artifact@v4
         with:

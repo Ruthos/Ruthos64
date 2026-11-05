@@ -4,12 +4,25 @@
 # lists for that version, and opens an issue when either needs attention
 # (scripts/check_codecs.py). Update a version here when the bundling crate
 # is updated in Cargo.lock.
+#
+# Many decoder fixes never get a CVE, so it also lists upstream commits since
+# reviewed_commit that look like memory-safety fixes. After reading them, apply
+# what applies and move reviewed_commit forward. reviewed_cves holds CVEs read
+# and found not to apply, or already fixed here, so that they stay quiet.
+#
+# OpenJPEG is built from vendor/openjpeg-sys. `check_codecs.py --verify-vendor`
+# compares it with the upstream tag: every file must match except those in
+# patched, which must match the SHA-256 recorded here.
 
 [[codec]]
 name = "libjpeg-turbo"
 crate = "turbojpeg-sys"
 crate_version = "1.2.0"
 version = "3.1.0"
+reviewed_commit = "29e4d9b0178f08158fc72c6068f086c5ba27b772"
+# tj3LoadImage, which Ruthos does not call; and a bug in Pillow's own use of
+# scaling, which Ruthos does not use.
+reviewed_cves = ["CVE-2026-75466", "CVE-2026-112403"]
 github = "libjpeg-turbo/libjpeg-turbo"
 cpe = "cpe:2.3:a:libjpeg-turbo:libjpeg-turbo"
 advisories = "https://github.com/libjpeg-turbo/libjpeg-turbo/security"
@@ -17,8 +30,15 @@ advisories = "https://github.com/libjpeg-turbo/libjpeg-turbo/security"
 [[codec]]
 name = "OpenJPEG"
 crate = "openjpeg-sys"
-crate_version = "1.0.12"
-version = "2.5.3"
+crate_version = "1.0.13"
+version = "2.5.4"
+tag = "v2.5.4"
+vendored = "vendor/openjpeg-sys/vendor"
+patched = { "src/lib/openjp2/j2k.c" = "3d620476b17cb0a16ef8fab769ed4024eed3212109ad06a2aef8134d279a4e49" }
+reviewed_commit = "8314119b067c0fc77834731168daaebd379fdb12"
+# 2.5.3's JP2 header bug, fixed in 2.5.4; then two in the encoder, as Ruthos never
+# encodes JPEG 2000.
+reviewed_cves = ["CVE-2025-54874", "CVE-2026-6192", "CVE-2026-107080"]
 github = "uclouvain/openjpeg"
 cpe = "cpe:2.3:a:uclouvain:openjpeg"
 advisories = "https://github.com/uclouvain/openjpeg/security"
@@ -28,6 +48,9 @@ name = "CharLS"
 crate = "charls-sys"
 crate_version = "2.4.6+charls.2.4.5"
 version = "2.4.5"
+# Upstream's checked_mul fix (6ee076efe) is not in 2.4.5, but the guard holds a
+# frame's dimensions to Rows and Columns, far below where the product overflows.
+reviewed_commit = "b704c195db1c1f4a9b862cad79cddffc8839399c"
 github = "team-charls/charls"
 cpe = "cpe:2.3:a:team-charls:charls"
 advisories = "https://github.com/team-charls/charls/security"

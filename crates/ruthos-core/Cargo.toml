@@ -12,6 +12,9 @@ publish = false
 printpdf = { workspace = true }
 rusqlite = { workspace = true }
 openh264 = { workspace = true }
+bzip2-rs = { workspace = true }
+sha2 = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 mp4 = { workspace = true }
 bytes = { workspace = true }
 directories = { workspace = true }
@@ -33,3 +36,7 @@ ruthos-dicom = { workspace = true }
 dicom-dictionary-std = { workspace = true }
 dicom-object = { workspace = true }
 dicom-core = { workspace = true }
+
+[dev-dependencies]
+# Only the tests build the encoder from source; no package does.
+openh264 = { workspace = true, features = ["source"] }

@@ -2,10 +2,14 @@
 //! teaching. The movie plays in PowerPoint, browsers and phones.
 //!
 //! Frames arrive as 8-bit RGB, already windowed and coloured the way the
-//! viewer shows them. They are encoded with OpenH264 (built from source, no
-//! system codec needed) and written to an MP4 file. H.264 needs even
-//! dimensions, so an odd width or height gets one extra column or row
-//! copied from the edge.
+//! viewer shows them. They are encoded with OpenH264 and written to an MP4
+//! file. H.264 needs even dimensions, so an odd width or height gets one extra
+//! column or row copied from the edge.
+//!
+//! The encoder is not in Ruthos. H.264 is covered by patents, and Cisco pays
+//! the royalties only for the copies of the binary it distributes itself, so
+//! Ruthos fetches Cisco's binary from Cisco, with the user's consent, and checks
+//! it against the known hashes before loading it.
 
 use std::io::{BufWriter, Seek, Write};
 use std::path::Path;
@@ -75,10 +79,92 @@ fn nal_units(stream: &[u8]) -> Vec<&[u8]> {
 
 /// Encode `count` frames of `width` x `height` RGB at `fps` frames per
 /// second into an MP4 file at `out`. `frame(i)` supplies frame `i`;
+/// Cisco's binary for this platform: its name on Cisco's server and the SHA-256
+/// of the unpacked library, which the openh264 crate also holds.
+struct CiscoBinary {
+    file: &'static str,
+    sha256: &'static str,
+}
+
+const CISCO_VERSION: &str = "2.6.0";
+const CISCO_SERVER: &str = "https://ciscobinary.openh264.org";
+/// Shown before the download and kept with the other licensing information.
+pub const CISCO_LICENCE: &str = include_str!("../../../licenses/openh264-BINARY_LICENSE.txt");
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+const CISCO_BINARY: Option<CiscoBinary> = Some(CiscoBinary {
+    file: "openh264-2.6.0-win64.dll",
+    sha256: "2076cb5675ec6c1a4c70e7a2a322552f547b6eeed649d6dfcd9e02a543b24691",
+});
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const CISCO_BINARY: Option<CiscoBinary> = Some(CiscoBinary {
+    file: "libopenh264-2.6.0-mac-arm64.dylib",
+    sha256: "052e98bfcf7a9167d22f3bbb3f5988ef79065591f36af8b52924b22b13624551",
+});
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const CISCO_BINARY: Option<CiscoBinary> = Some(CiscoBinary {
+    file: "libopenh264-2.6.0-mac-x64.dylib",
+    sha256: "e3dc8bc01fe69363f61fd3c02fd27798537a585eadd38cd808f303d1ee505a19",
+});
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const CISCO_BINARY: Option<CiscoBinary> = Some(CiscoBinary {
+    file: "libopenh264-2.6.0-linux64.8.so",
+    sha256: "2f0cde7c6a6abcf5cae76942894ea42897fa677bce4ed6c91a24dd1b041d5f04",
+});
+#[cfg(not(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos"),
+    all(target_os = "linux", target_arch = "x86_64")
+)))]
+const CISCO_BINARY: Option<CiscoBinary> = None;
+
+/// Where the encoder lives in the data folder.
+pub fn encoder_path(data_root: &Path) -> Option<std::path::PathBuf> {
+    Some(data_root.join("codecs").join(CISCO_BINARY?.file))
+}
+
+pub fn encoder_installed(data_root: &Path) -> bool {
+    encoder_path(data_root).is_some_and(|p| p.is_file())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Fetch Cisco's binary from Cisco. Call this only after the user has agreed.
+pub fn install_encoder(data_root: &Path) -> Result<std::path::PathBuf> {
+    use std::io::Read;
+    let binary = CISCO_BINARY.ok_or_else(|| CoreError::Other("Cisco offers no encoder for this computer".into()))?;
+    let fail = |e: &dyn std::fmt::Display| CoreError::Other(format!("the encoder could not be fetched: {e}"));
+    let url = format!("{CISCO_SERVER}/{}.bz2", binary.file);
+    let packed = reqwest::blocking::get(&url)
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.bytes())
+        .map_err(|e| fail(&e.without_url()))?;
+    let mut library = Vec::new();
+    bzip2_rs::DecoderReader::new(&packed[..])
+        .read_to_end(&mut library)
+        .map_err(|e| fail(&e))?;
+    if sha256_hex(&library) != binary.sha256 {
+        return Err(fail(&format!("OpenH264 {CISCO_VERSION} did not match its checksum")));
+    }
+    let path = data_root.join("codecs").join(binary.file);
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    // A download cut short must not look like an installed encoder.
+    let partial = path.with_extension("part");
+    std::fs::write(&partial, library)?;
+    std::fs::rename(&partial, &path)?;
+    Ok(path)
+}
+
 /// `progress(done, count)` is called after each frame. Setting `cancel`
 /// stops the export and removes the partial file.
 #[allow(clippy::too_many_arguments)]
 pub fn write_mp4(
+    api: OpenH264API,
     out: &Path,
     width: u32,
     height: u32,
@@ -97,7 +183,17 @@ pub fn write_mp4(
         10.0
     };
     let file = std::fs::File::create(out)?;
-    let result = encode(BufWriter::new(file), width, height, fps, count, frame, progress, cancel);
+    let result = encode(
+        api,
+        BufWriter::new(file),
+        width,
+        height,
+        fps,
+        count,
+        frame,
+        progress,
+        cancel,
+    );
     if result.is_err() {
         let _ = std::fs::remove_file(out);
     }
@@ -106,6 +202,7 @@ pub fn write_mp4(
 
 #[allow(clippy::too_many_arguments)]
 fn encode<W: Write + Seek>(
+    api: OpenH264API,
     writer: W,
     width: u32,
     height: u32,
@@ -131,7 +228,7 @@ fn encode<W: Write + Seek>(
         .skip_frames(false)
         .qp(QpRange::new(8, 26))
         .intra_frame_period(IntraFramePeriod::from_num_frames((fps * 2.0).round().max(1.0) as u32));
-    let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), config).map_err(err)?;
+    let mut encoder = Encoder::with_api_config(api, config).map_err(err)?;
 
     let mut mp4: Option<mp4::Mp4Writer<W>> = None;
     let mut writer = Some(writer);
@@ -236,6 +333,7 @@ pub struct MovieSource {
 /// the first are scaled to it, so a series that changes matrix still plays.
 #[allow(clippy::too_many_arguments)]
 pub fn export_dicom_movie(
+    encoder: &Path,
     out: &Path,
     source: &MovieSource,
     center: f32,
@@ -282,7 +380,8 @@ pub fn export_dicom_movie(
             .ok_or_else(|| CoreError::Other("frame buffer size mismatch".into()))?;
         Ok(image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle).into_raw())
     };
-    write_mp4(out, w, h, fps, index.len(), &mut frame, progress, cancel)
+    let api = OpenH264API::from_blob_path(encoder).map_err(|e| CoreError::Other(format!("video encoder: {e}")))?;
+    write_mp4(api, out, w, h, fps, index.len(), &mut frame, progress, cancel)
 }
 
 #[cfg(test)]
@@ -315,6 +414,7 @@ mod tests {
         let out = std::env::temp_dir().join(format!("ruthos-movie-{}.mp4", std::process::id()));
         let (w, h, n) = (65u32, 47u32, 12usize);
         write_mp4(
+            OpenH264API::from_source(),
             &out,
             w,
             h,
@@ -353,6 +453,7 @@ mod tests {
         let out = std::env::temp_dir().join(format!("ruthos-movie-cancel-{}.mp4", std::process::id()));
         let cancel = AtomicBool::new(false);
         let r = write_mp4(
+            OpenH264API::from_source(),
             &out,
             16,
             16,

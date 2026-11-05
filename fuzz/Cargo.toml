@@ -29,6 +29,10 @@ canary = ["ruthos-dicom/fuzz-canary"]
 [workspace]
 members = ["."]
 
+# OpenJPEG is unmaintained and openjpeg-sys bundles 2.5.3: see vendor/openjpeg-sys/RUTHOS.md.
+[patch.crates-io]
+openjpeg-sys = { path = "../vendor/openjpeg-sys" }
+
 [profile.release]
 debug = 1
 

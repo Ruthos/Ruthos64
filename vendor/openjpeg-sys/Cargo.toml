@@ -1,0 +1,31 @@
+[package]
+name = "openjpeg-sys"
+description = "OpenJPEG (JPEG 2000) FFI bindings"
+version = "1.0.13"
+authors = ["Kornel <kornel@geekhood.net>", "Eduardo Pinho <enet4mikeenet@gmail.com>"]
+edition = "2021"
+license = "BSD-2-Clause"
+links = "openjpeg"
+repository = "https://github.com/Enet4/openjpeg-sys"
+homepage = "https://lib.rs/openjpeg-sys"
+documentation = "https://docs.rs/openjpeg-sys"
+readme = "README.md"
+keywords = ["j2k", "jp2", "jpeg2000"]
+rust-version = "1.71"
+
+[dependencies]
+libc = "0.2.155"
+
+[build-dependencies]
+cc = "1.1.10"
+
+[features]
+default = ["threads"]
+
+# Compile OpenJPEG with thread support.
+threads = []
+
+parallel = ["cc/parallel"]
+
+[badges]
+maintenance = { status = "passively-maintained" }

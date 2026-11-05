@@ -87,6 +87,8 @@ pub struct Shared {
     pub session: Mutex<crate::session::Hub>,
     /// Open the Guided review window.
     pub open_session: AtomicBool,
+    /// Open the About window.
+    pub open_about: AtomicBool,
 }
 
 impl Shared {
@@ -104,6 +106,7 @@ impl Shared {
             library: Mutex::new(Arc::new(settings.library())),
             session: Mutex::new(crate::session::Hub::new(&settings)),
             open_session: AtomicBool::new(false),
+            open_about: AtomicBool::new(false),
             settings: Mutex::new(settings),
             render_state,
             loader: FrameLoader::new(),

@@ -363,6 +363,15 @@ impl Tiling {
     }
 }
 
+/// The first movie: Cisco's encoder is offered, with Cisco's licence, and
+/// nothing is fetched unless the user agrees.
+struct EncoderPrompt {
+    /// Where the movie was asked to go, when it was given in advance.
+    to: Option<std::path::PathBuf>,
+    fetching: Option<crate::pacs::Task<Result<std::path::PathBuf, String>>>,
+    error: Option<String>,
+}
+
 /// A movie export running on its own thread.
 struct MovieJob {
     task: crate::pacs::Task<Result<std::path::PathBuf, String>>,
@@ -657,6 +666,8 @@ pub struct ViewerState {
     dev_play_done: bool,
     /// A movie being written (the Movie button).
     movie: Option<MovieJob>,
+    /// Waiting for the user's consent to fetch Cisco's encoder.
+    encoder_prompt: Option<EncoderPrompt>,
     /// The dial's mode and the indicator (dial/mod.rs).
     dial: crate::dial::Dial,
     /// Dial events routed to this viewer by the app.
@@ -899,6 +910,7 @@ impl ViewerState {
             dev_shot_done: false,
             dev_play_done: false,
             movie: None,
+            encoder_prompt: None,
             dial: crate::dial::Dial::new(&shared.settings.lock().dial),
             dial_inbox: Vec::new(),
             hover_cell: None,
@@ -1929,6 +1941,21 @@ impl ViewerState {
             job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             return;
         }
+        if self.encoder_prompt.is_some() {
+            return;
+        }
+        let root = shared.paths.root.clone();
+        if !ruthos_core::movie::encoder_installed(&root) {
+            self.encoder_prompt = Some(EncoderPrompt {
+                to,
+                fetching: None,
+                error: None,
+            });
+            return;
+        }
+        let Some(encoder) = ruthos_core::movie::encoder_path(&root) else {
+            return;
+        };
         let Some(img) = self.current_image().cloned() else {
             return;
         };
@@ -1978,6 +2005,7 @@ impl ViewerState {
         let task = crate::pacs::Task::spawn(ctx, "ruthos-movie", move || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 ruthos_core::movie::export_dicom_movie(
+                    &encoder,
                     &out,
                     &ruthos_core::movie::MovieSource { files },
                     center,
@@ -2059,6 +2087,65 @@ impl ViewerState {
     }
 
     /// Progress and the end of a movie export.
+    /// Offer Cisco's encoder, with its licence, the first time a movie is made.
+    fn encoder_window(&mut self, ctx: &egui::Context, shared: &Shared) {
+        let Some(prompt) = self.encoder_prompt.as_mut() else {
+            return;
+        };
+        if let Some(done) = prompt.fetching.as_ref().and_then(|t| t.take()) {
+            prompt.fetching = None;
+            match done {
+                Ok(_) => {
+                    let to = prompt.to.take();
+                    self.encoder_prompt = None;
+                    self.export_movie(ctx, shared, to);
+                    return;
+                }
+                Err(e) => prompt.error = Some(e),
+            }
+        }
+        let (mut cancel, mut fetch) = (false, false);
+        egui::Window::new("Movie export needs an encoder")
+            .collapsible(false)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    "Movies are written as H.264, which is covered by patents. Cisco offers its encoder free of \
+                     those royalties, but only as its own binary, so Ruthos fetches it from Cisco rather than \
+                     including it.",
+                );
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("OpenH264 Video Codec provided by Cisco Systems, Inc.").strong());
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                    ui.label(egui::RichText::new(ruthos_core::movie::CISCO_LICENCE).small());
+                });
+                if let Some(e) = &prompt.error {
+                    ui.colored_label(Color32::from_rgb(240, 150, 120), e);
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if prompt.fetching.is_some() {
+                        ui.spinner();
+                        ui.label("Fetching from Cisco\u{2026}");
+                    } else {
+                        fetch = ui.button("Agree and download from Cisco").clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    }
+                });
+            });
+        if fetch {
+            let root = shared.paths.root.clone();
+            prompt.error = None;
+            prompt.fetching = Some(crate::pacs::Task::spawn(ctx, "ruthos-encoder", move || {
+                ruthos_core::movie::install_encoder(&root).map_err(|e| e.to_string())
+            }));
+        }
+        if cancel {
+            self.encoder_prompt = None;
+        }
+    }
+
     fn pump_movie(&mut self) {
         let Some(job) = &self.movie else { return };
         if let Some(result) = job.task.take() {
@@ -3250,6 +3337,7 @@ impl ViewerState {
         self.roi_manager_window(&ctx);
         self.roi_info_window(&ctx, shared);
         self.histogram_window(&ctx);
+        self.encoder_window(&ctx, shared);
         // Developer option: `RUTHOS_EXPORT_MOVIE=<file.mp4>` writes the
         // current loop or series as a movie once the viewer is showing it.
         if !self.dev_movie_done && self.current_key().is_some_and(|k| self.frames.contains_key(&k)) {

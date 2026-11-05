@@ -9,6 +9,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# The decode guard, for images converted before sending.
+ruthos-dicom = { workspace = true }
 dicom-core = { workspace = true }
 dicom-object = { workspace = true }
 dicom-dictionary-std = { workspace = true }

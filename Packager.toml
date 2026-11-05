@@ -11,7 +11,7 @@
 
 product-name = "Ruthos"
 identifier = "org.ruthos.Ruthos"
-version = "0.1.6-alpha"
+version = "0.1.7-alpha"
 description = "A Horos-inspired DICOM viewer and patient archive"
 long-description = "Ruthos is a community, open-source DICOM viewer and patient archive inspired by Horos: an archive with a DICOM listener, a 2D viewer, measurements with a stated scale basis, reports, and teaching anonymisation."
 authors = ["The Ruthos contributors"]
@@ -24,6 +24,12 @@ out-dir = "dist"
 binaries = [{ path = "ruthos", main = true }]
 
 # Formats are chosen per platform in release.yml (--formats).
+
+# release.yml writes these before packaging; `scripts/notices.py` makes them by hand.
+resources = [
+  { src = "notices/THIRD_PARTY_LICENSES.html", target = "THIRD_PARTY_LICENSES.html" },
+  { src = "notices/THIRD_PARTY_LICENSES.txt", target = "THIRD_PARTY_LICENSES.txt" },
+]
 
 [[file-associations]]
 extensions = ["dcm", "dicom", "dic"]

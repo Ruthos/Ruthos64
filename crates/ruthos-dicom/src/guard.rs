@@ -17,6 +17,7 @@
 //! Preferences to at most four times the defaults; nothing in a file can
 //! raise them. Every failure is an `Err`, never a panic.
 
+use dicom_encoding::adapters::PixelDataObject;
 use std::sync::RwLock;
 
 use dicom_dictionary_std::tags;
@@ -292,8 +293,8 @@ pub fn jpeg_ls_header(data: &[u8]) -> Option<CodecHeader> {
 /// The SIZ marker of a JPEG 2000 codestream: image size less its offset,
 /// and the component count. DICOM carries the bare codestream, which must
 /// start with SOC (FF4F) and SIZ (FF51); a JP2 file wrapper is refused, as
-/// it is not valid in DICOM and its box parser in OpenJPEG 2.5.3 has a
-/// known out-of-bounds write (CVE-2025-54874).
+/// it is not valid in DICOM and would reach a box parser Ruthos has no use
+/// for.
 pub fn jpeg2000_header(data: &[u8]) -> Option<CodecHeader> {
     if data.get(0..4)? != [0xFF, 0x4F, 0xFF, 0x51] {
         return None;
@@ -445,25 +446,32 @@ pub fn check_object(obj: &dicom_object::DefaultDicomObject, meta: &InstanceMeta,
             if codec == Codec::Rle && fragments.len() != n {
                 return Err(refuse(format!("{MISMATCH} (RLE needs one fragment per frame)")));
             }
-            // One fragment per frame: check each frame asked for. Otherwise
-            // the first fragment holds the first frame's header.
-            let wanted: Vec<usize> = if frames.is_empty() {
-                (0..n).collect()
+            // Check what the decoder will be given. It finds a frame through
+            // the object's own offset table, which a file can point anywhere,
+            // so this asks the same code rather than guessing at the layout.
+            let wanted: Vec<u32> = if frames.is_empty() {
+                (0..n as u32).collect()
             } else {
-                frames.iter().map(|f| *f as usize).collect()
+                frames.to_vec()
             };
-            if fragments.len() == n {
-                for f in wanted {
-                    if let Some(frag) = fragments.get(f) {
-                        check_codestream(meta, codec, frag)?;
-                    }
-                }
-            } else if let Some(first) = fragments.first() {
-                check_codestream(meta, codec, first)?;
+            for f in wanted {
+                let data = obj
+                    .frame_pixel_data(f)
+                    .ok_or_else(|| refuse(format!("{MISMATCH} (frame {f} is not in the image data)")))?;
+                check_codestream(meta, codec, &data)?;
             }
             Ok(())
         }
     }
+}
+
+/// All the guard asks of an object that a decoder is about to read whole, for
+/// any route other than the viewer's: converting a file to send it, say.
+pub fn check_decoding(obj: &dicom_object::DefaultDicomObject) -> Result<()> {
+    let mut meta = crate::meta::meta_from_object(obj);
+    meta.transfer_syntax = obj.meta().transfer_syntax().trim_end_matches('\0').to_string();
+    check_object(obj, &meta, &[])?;
+    check_series_bytes(decoded_bytes(&meta))
 }
 
 /// The decoded size of an image, as Ruthos holds it: four bytes a sample
@@ -565,7 +573,7 @@ mod tests {
         let ls = jpeg(0xF7, 300, 200, 1, 16);
         assert!(check_codestream(&m, Codec::JpegLs, &ls).is_ok());
         assert!(check_codestream(&m, Codec::JpegLs, &jpeg(0xF7, 301, 200, 1, 16)).is_err());
-        // A JP2 file wrapper is not DICOM and is refused (CVE-2025-54874).
+        // A JP2 file wrapper is not DICOM and is refused.
         let mut jp2 = vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 13, 10, 0x87, 10];
         jp2.extend(j2k(300, 200, 0, 0, 1));
         assert!(check_codestream(&m, Codec::Jpeg2000, &jp2).is_err());

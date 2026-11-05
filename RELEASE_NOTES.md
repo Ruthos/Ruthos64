@@ -1,8 +1,17 @@
-# Ruthos 0.1.6-alpha
+# Ruthos 0.1.7-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
-## New in 0.1.6-alpha
+## New in 0.1.7-alpha
+
+This release is about licences and decoder safety. Everyone on an earlier alpha should update.
+
+- **Movie export now uses Cisco's own encoder.** H.264 is covered by patents, and Cisco's cover applies only to the copy of OpenH264 it distributes. Earlier alphas compiled the encoder into Ruthos; this one does not contain it. The first time you export a movie, Ruthos shows Cisco's licence and, if you agree, fetches the binary from Cisco and checks it against its published hash. Nothing is fetched unless you agree. OpenH264 Video Codec provided by Cisco Systems, Inc.
+- **Third-party licences.** Every package now carries `THIRD_PARTY_LICENSES` in HTML and text, listing every component's copyright and licence, and CI fails if a dependency is missing from it or its licence is not one we accept.
+- **About Ruthos.** A new window, from the row at the foot of the sidebar, with the version, build, acknowledgements and the licences.
+- **Decoder hardening.** OpenJPEG moves to 2.5.4 with a further upstream fix that is in no release, built from a copy in this repository, as upstream now describes itself as unmaintained. The checks made before a file reaches a decoder now look at exactly what the decoder receives, for every frame, and they also apply when a file is converted to send to a PACS. Upstream changes to the C libraries are now reviewed nightly as well as their CVEs.
+
+## Previously, in 0.1.6-alpha
 
 - **3D in the MPR window.** GPU volume rendering in the fourth pane, with shaded, MIP and MinIP modes and presets. Rotate, window, move and zoom from a tool menu.
 - **Cutting.** Build a box or a path, check it from any side, then cut inside or outside it. Remove piece takes everything connected to a click, such as the table. Undo and restore.
@@ -13,16 +22,6 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - **Frame rates and speed.** Cine follows the file's rate and the screen's refresh, says when it is skipping frames, and offers slower speeds.
 - **Hardening.** Files are checked before they reach a decoder, with limits you can set in Preferences; decoders are fuzzed continuously; and the listener accepts only devices you have listed. If you use the listener, add your devices under Preferences > Listener. SECURITY.md explains how to report a problem.
 - **A Ruthos toolbar in MPR**, and a database sidebar that scrolls.
-
-## Previously, in 0.1.5-alpha
-
-- **Tools in MPR.** A tool bar as in the 2D viewer: Crosshair, WL/WW, Move and Zoom, and Caliper, Angle, Rectangle, Ellipse, Arrow, Point and Text, with the same letter shortcuts. Measurements are in millimetres and belong to the plane they were drawn on; select one to move its handles, Delete removes it.
-- **Lock planes**, so measuring cannot move or tilt them.
-- **Layouts:** 1×3, 2×2 (the fourth pane is the original slice through the crosshair) or a single pane.
-- **Save to study:** the plane, or a stack of planes across the volume, as a new series in the same study with its measurements; it opens, measures and reports like any other series. **Save image** writes a pane as a picture.
-- **The dial is reliable:** every turn and press reaches the viewer you last used, whatever Windows says has focus, and the dial's own menu shows the same mode as Ruthos.
-
-- Orthogonal and oblique MPR with thick slabs, and the dial control (Surface Dial, ASUS Dial and DialPad) with keyboard shortcuts.
 
 ## What works
 
@@ -60,7 +59,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.6-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.7-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed yet: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.

@@ -44,6 +44,7 @@ pub struct RuthosApp {
     startup_links: Vec<String>,
     /// When this copy last said it was running.
     heartbeat: Option<std::time::Instant>,
+    about_open: bool,
 }
 
 impl RuthosApp {
@@ -175,6 +176,9 @@ impl RuthosApp {
         if std::env::var_os("RUTHOS_OPEN_PREFS").is_some() {
             shared.open_prefs.store(true, Ordering::Relaxed);
         }
+        if std::env::var_os("RUTHOS_ABOUT_SCREENSHOT").is_some() {
+            shared.open_about.store(true, Ordering::Relaxed);
+        }
 
         let mut browser = BrowserState::new();
         // Developer option: select a study in the database window at startup.
@@ -256,6 +260,7 @@ impl RuthosApp {
             router: Default::default(),
             startup_links,
             heartbeat: None,
+            about_open: false,
         })
     }
 
@@ -292,6 +297,7 @@ impl RuthosApp {
     fn run_app_action(&mut self, id: &str) {
         use crate::platform::AppAction;
         match crate::platform::action_for(id) {
+            Some(AppAction::About) => self.shared.open_about.store(true, Ordering::Relaxed),
             Some(AppAction::Preferences) => self.shared.open_prefs.store(true, Ordering::Relaxed),
             Some(AppAction::ImportFolder) => self.browser.import_folder_dialog(&self.shared),
             Some(AppAction::ImportFiles) => self.browser.import_files_dialog(&self.shared),
@@ -686,6 +692,7 @@ impl eframe::App for RuthosApp {
         }
 
         self.guided_review(&ctx);
+        crate::about::window(&ctx, &self.shared, &mut self.about_open);
         self.preferences(&ctx);
         self.query_window(&ctx);
         self.router.pump(&ctx, &self.shared);

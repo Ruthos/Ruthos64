@@ -151,11 +151,17 @@ Team roles:
 
 ## Privacy
 
-Ruthos does not transmit any data to its developers or to third parties. It makes network connections only when the user configures them: the DICOM listener, which is off by default and receives only what the user's own devices send it, and DICOM connections the user initiates.
+Ruthos does not transmit any data to its developers or to third parties. It makes network connections only when the user configures them or asks for them: the DICOM listener, which is off by default and receives only what the user's own devices send it; DICOM connections the user initiates; a guided review server the user chooses to join; the optional AI model, fetched once on request; and Cisco's video encoder, fetched once from Cisco with the user's consent, the first time a movie is exported, which tells Cisco only what any download does.
 
 ## Licence
 
 Ruthos is licensed under the **GNU Lesser General Public License v3.0**, the same licence as Horos. This is deliberate: it keeps Ruthos free to reuse Horos assets and logic, and it keeps Ruthos free.
+
+## Acknowledgements
+
+Ruthos is built on [DICOM-rs](https://github.com/Enet4/dicom-rs) by Eduardo Pinho and contributors, including Paul Knopf (upper-layer networking) and Peter Evers (pixel data), which provides its DICOM parsing, pixel decoding and networking. The interface is built with [egui](https://github.com/emilk/egui) by Emil Ernerfeldt and contributors, and rendering uses [wgpu](https://wgpu.rs). Image decoding uses libjpeg-turbo, OpenJPEG and CharLS; this software is based in part on the work of the Independent JPEG Group. Ruthos's workflow, icons, colour tables and presets follow Horos, its interface uses the Inter typeface and Phosphor icons, and its test files come from pydicom. The full licence text of every component is in THIRD_PARTY_LICENSES, which every package carries, and the About window opens it.
+
+OpenH264 Video Codec provided by Cisco Systems, Inc. The encoder is not part of Ruthos: it is fetched from Cisco, with your consent, the first time you export a movie.
 
 ## Building
 

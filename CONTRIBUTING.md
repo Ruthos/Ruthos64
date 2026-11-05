@@ -60,6 +60,10 @@ This is the most valuable report we get, because every modality writes DICOM a l
 - `ruthos.log` and, if Ruthos showed an error dialog, `crash.log`. Both are in the data folder, `%LOCALAPPDATA%\Ruthos\Ruthos Data` by default.
 - If you can share a file, anonymise it first (we will add anonymisation to Ruthos; until then DICOM Cleaner or dcmtk's `dcmodify` work). A single still image is usually enough.
 
+## Dependencies and notices
+
+Every package carries `THIRD_PARTY_LICENSES`, built by `scripts/notices.py` and checked in CI. A new crate needs a licence on the accepted list, which `deny.toml` and `about.toml` must both hold. If it packages no licence file, run `python scripts/notices.py copyrights` and review the line it adds. A new C library, font or asset goes in the script's bundled list, with its licence in `licenses/`. Nothing may build OpenH264 into a package: the encoder must stay Cisco's own binary, fetched with the user's consent.
+
 ## Licence
 
 Ruthos is LGPL-3.0, the same licence as Horos. By contributing you agree your contribution is licensed the same way.

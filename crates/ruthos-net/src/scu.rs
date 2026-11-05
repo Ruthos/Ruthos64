@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use dicom_core::{dicom_value, DataElement, PrimitiveValue, Tag, VR};
 use dicom_dictionary_std::{tags, uids};
-use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+use dicom_encoding::transfer_syntax::{TransferSyntax, TransferSyntaxIndex};
 use dicom_object::{InMemDicomObject, OpenFileOptions};
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 use dicom_ul::association::client::{ClientAssociation, ClientAssociationOptions};
@@ -668,6 +668,18 @@ fn is_uncompressed(ts: &str) -> bool {
 /// Send files to the PACS over one association. Each image goes in its own
 /// transfer syntax when the PACS accepts it; uncompressed images are
 /// re-encoded when the PACS wants another uncompressed syntax.
+/// Convert a compressed file for sending. This decodes it, so it passes the
+/// same guard as a file opened in the viewer.
+fn decompress(obj: &mut dicom_object::DefaultDicomObject, target: &TransferSyntax) -> Result<(), String> {
+    use dicom_pixeldata::Transcode as _;
+    ruthos_dicom::guard::check_decoding(obj).map_err(|e| e.to_string())?;
+    ruthos_dicom::pixels::contained(|| {
+        obj.transcode(target)
+            .map_err(|e| ruthos_dicom::DicomError::Pixels(e.to_string()))
+    })
+    .map_err(|e| e.to_string())
+}
+
 pub fn send_files(
     node: &Node,
     me_ae: &str,
@@ -735,14 +747,13 @@ pub fn send_files(
         };
         if ts != *file_ts && !is_uncompressed(file_ts) {
             // The PACS takes only uncompressed images of this type.
-            use dicom_pixeldata::Transcode as _;
             let Some(target) = TransferSyntaxRegistry.get(&ts) else {
                 outcome
                     .failed
                     .push((path.clone(), format!("unknown transfer syntax {ts}")));
                 continue;
             };
-            if let Err(e) = obj.transcode(target) {
+            if let Err(e) = decompress(&mut obj, target) {
                 outcome.failed.push((
                     path.clone(),
                     format!(
@@ -802,5 +813,43 @@ fn ts_name(uid: &str) -> &'static str {
         uids::JPEG2000_LOSSLESS => "JPEG 2000 lossless",
         uids::RLE_LOSSLESS => "RLE",
         _ => "another format",
+    }
+}
+
+#[cfg(test)]
+mod conversion_for_sending {
+    use std::path::PathBuf;
+
+    use dicom_core::{dicom_value, DataElement, VR};
+    use dicom_dictionary_std::{tags, uids};
+    use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+    use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
+
+    use super::decompress;
+
+    fn sample() -> dicom_object::DefaultDicomObject {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/pydicom/JPEG2000.dcm");
+        dicom_object::open_file(path).unwrap()
+    }
+
+    #[test]
+    fn a_file_the_guard_refuses_is_not_decoded_to_send_it() {
+        let target = TransferSyntaxRegistry.get(uids::EXPLICIT_VR_LITTLE_ENDIAN).unwrap();
+        let mut obj = sample();
+        let rows: u16 = obj.element(tags::ROWS).unwrap().to_int().unwrap();
+        obj.put(DataElement::new(tags::ROWS, VR::US, dicom_value!(U16, [rows + 7])));
+        let e = decompress(&mut obj, target).expect_err("must be refused");
+        assert!(e.contains(ruthos_dicom::guard::MISMATCH), "{e}");
+    }
+
+    #[test]
+    fn a_sound_file_still_converts() {
+        let target = TransferSyntaxRegistry.get(uids::EXPLICIT_VR_LITTLE_ENDIAN).unwrap();
+        let mut obj = sample();
+        decompress(&mut obj, target).unwrap();
+        assert_eq!(
+            obj.meta().transfer_syntax().trim_end_matches('\0'),
+            uids::EXPLICIT_VR_LITTLE_ENDIAN
+        );
     }
 }

@@ -10,9 +10,10 @@ members = [
     "crates/ruthos-ui",
     "crates/ruthos",
 ]
+exclude = ["vendor/openjpeg-sys"]
 
 [workspace.package]
-version = "0.1.6-alpha"
+version = "0.1.7-alpha"
 edition = "2021"
 license = "LGPL-3.0-only"
 repository = "https://github.com/Ruthos/Ruthos64"
@@ -50,7 +51,10 @@ libc = "0.2"
 
 # Storage and files
 rusqlite = { version = "0.41", features = ["bundled"] }
-openh264 = "0.9.9"
+# Cisco's own binary, fetched on the user's consent, never compiled in: Cisco's
+# patent cover applies only to the copies it distributes.
+openh264 = { version = "0.9.9", default-features = false, features = ["libloading"] }
+bzip2-rs = "0.1"
 mp4 = "0.14.0"
 bytes = "1"
 directories = "6.0"
@@ -99,6 +103,10 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# OpenJPEG is unmaintained and openjpeg-sys bundles 2.5.3: see vendor/openjpeg-sys/RUTHOS.md.
+[patch.crates-io]
+openjpeg-sys = { path = "vendor/openjpeg-sys" }
 
 [profile.release]
 opt-level = 3

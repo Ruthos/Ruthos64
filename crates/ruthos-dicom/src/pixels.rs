@@ -98,7 +98,7 @@ pub fn decode_frame(path: &Path, frame_index: u32) -> Result<Frame> {
 /// Run a third-party decoder so that a panic costs one image rather than the
 /// thread decoding it. The guard turns away what is known to cause one; this
 /// is for what is not. Fuzz builds abort on any panic, so they still report it.
-pub(crate) fn contained<T>(decode: impl FnOnce() -> Result<T>) -> Result<T> {
+pub fn contained<T>(decode: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)).unwrap_or_else(|_| {
         tracing::warn!("a decoder panicked on this image");
         Err(DicomError::Pixels("the decoder could not read this image".into()))

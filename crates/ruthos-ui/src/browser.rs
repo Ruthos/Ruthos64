@@ -974,6 +974,12 @@ impl BrowserState {
         {
             shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
         }
+        if source_row(ui, icons::SMART_ALBUM, "About Ruthos…", None, false)
+            .on_hover_text("Version, acknowledgements and third-party licences")
+            .clicked()
+        {
+            shared.open_about.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         ui.add_space(4.0);
         ui.label(
             RichText::new(format!("{}", shared.paths.root.display()))

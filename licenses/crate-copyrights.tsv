@@ -1,0 +1,148 @@
+# Copyright lines for crates that package no licence file, by notices.py copyrights.
+# crate<TAB>copyright<TAB>where it came from
+accesskit	Copyright the accesskit authors: The AccessKit contributors	manifest
+accesskit_atspi_common	Copyright the accesskit_atspi_common authors: The AccessKit contributors	manifest
+accesskit_consumer	Copyright the accesskit_consumer authors: The AccessKit contributors	manifest
+accesskit_macos	Copyright the accesskit_macos authors: The AccessKit contributors	manifest
+accesskit_unix	Copyright the accesskit_unix authors: The AccessKit contributors	manifest
+accesskit_windows	Copyright the accesskit_windows authors: The AccessKit contributors	manifest
+accesskit_winit	Copyright the accesskit_winit authors: The AccessKit contributors	manifest
+adler2	Copyright the adler2 authors: Jonas Schievink, oyvindln	manifest
+allocator-api2	Copyright the allocator-api2 authors: Zakarum	manifest
+anyhow	Copyright the anyhow authors: David Tolnay	manifest
+async-channel	Copyright the async-channel authors: Stjepan Glavina	manifest
+async-executor	Copyright the async-executor authors: Stjepan Glavina, John Nunley	manifest
+async-io	Copyright the async-io authors: Stjepan Glavina	manifest
+async-lock	Copyright the async-lock authors: Stjepan Glavina	manifest
+async-process	Copyright the async-process authors: Stjepan Glavina	manifest
+async-recursion	Copyright the async-recursion authors: Robert Usher	manifest
+async-signal	Copyright the async-signal authors: John Nunley	manifest
+async-task	Copyright the async-task authors: Stjepan Glavina	manifest
+async-trait	Copyright the async-trait authors: David Tolnay	manifest
+atspi	Copyright the atspi authors: Alberto Tirla, DataTriny, Luuk van der Duim, Michael Connor Buchan, Tait Hoyem	manifest
+atspi-common	Copyright the atspi-common authors	manifest
+atspi-proxies	Copyright the atspi-proxies authors	manifest
+block2	Copyright 2026 Mads Marquart	repository
+blocking	Copyright the blocking authors	manifest
+codespan-reporting	Copyright the codespan-reporting authors: Brendan Zabarauskas	manifest
+color	Copyright the color authors	manifest
+concurrent-queue	Copyright the concurrent-queue authors: Stjepan Glavina, Taiki Endo, John Nunley	manifest
+curve25519-dalek-derive	Copyright the curve25519-dalek-derive authors	manifest
+dbus	Copyright the dbus authors: David Henningsson	manifest
+dicom-core	Copyright 2016 Eduardo Pinho / Copyright (c) 2016 Eduardo Pinho	repository
+dicom-dictionary-std	Copyright 2016 Eduardo Pinho / Copyright (c) 2016 Eduardo Pinho	repository
+dicom-encoding	Copyright 2016 Eduardo Pinho / Copyright (c) 2016 Eduardo Pinho	repository
+dicom-object	Copyright 2016 Eduardo Pinho / Copyright (c) 2016 Eduardo Pinho	repository
+dicom-parser	Copyright 2016 Eduardo Pinho / Copyright (c) 2016 Eduardo Pinho	repository
+dicom-pixeldata	Copyright 2016 Eduardo Pinho / Copyright (c) 2016 Eduardo Pinho	repository
+dicom-transfer-syntax-registry	Copyright 2016 Eduardo Pinho / Copyright (c) 2016 Eduardo Pinho	repository
+dicom-ul	Copyright 2016 Eduardo Pinho / Copyright (c) 2016 Eduardo Pinho	repository
+dispatch	Copyright the dispatch authors: Steven Sheldon	manifest
+dispatch2	Copyright 2026 Mads Marquart	repository
+displaydoc	Copyright the displaydoc authors: Jane Lusby	manifest
+document-features	Copyright the document-features authors: Slint Developers	manifest
+ecolor	Copyright the ecolor authors: Emil Ernerfeldt, Andreas Reich	manifest
+eframe	Copyright the eframe authors: Emil Ernerfeldt	manifest
+egui	Copyright the egui authors: Emil Ernerfeldt	manifest
+egui-wgpu	Copyright the egui-wgpu authors: Nils Hasenbanck, embotech, Emil Ernerfeldt	manifest
+egui-winit	Copyright the egui-winit authors: Emil Ernerfeldt	manifest
+egui_extras	Copyright the egui_extras authors: Dominik Rössler, Emil Ernerfeldt, René Rössler	manifest
+emath	Copyright the emath authors: Emil Ernerfeldt	manifest
+encoding-index-japanese	Copyright the encoding-index-japanese authors: Kang Seonghoon	manifest
+encoding-index-korean	Copyright the encoding-index-korean authors: Kang Seonghoon	manifest
+encoding-index-simpchinese	Copyright the encoding-index-simpchinese authors: Kang Seonghoon	manifest
+encoding-index-singlebyte	Copyright the encoding-index-singlebyte authors: Kang Seonghoon	manifest
+encoding-index-tradchinese	Copyright the encoding-index-tradchinese authors: Kang Seonghoon	manifest
+encoding_index_tests	Copyright the encoding_index_tests authors: Kang Seonghoon	manifest
+endi	Copyright the endi authors: Zeeshan Ali Khan	manifest
+enum-map	Copyright the enum-map authors: Luna Borowska	manifest
+enum-map-derive	Copyright the enum-map-derive authors: Luna Borowska	manifest
+epaint	Copyright the epaint authors: Emil Ernerfeldt	manifest
+epaint_default_fonts	Copyright the epaint_default_fonts authors: Emil Ernerfeldt	manifest
+event-listener	Copyright the event-listener authors: Stjepan Glavina, John Nunley	manifest
+event-listener-strategy	Copyright the event-listener-strategy authors: John Nunley	manifest
+fastrand	Copyright the fastrand authors: Stjepan Glavina	manifest
+fdeflate	Copyright the fdeflate authors: The image-rs Developers	manifest
+gethostname	Copyright the gethostname authors: Sebastian Wiesner	manifest
+glow	Copyright the glow authors: Joshua Groves, Dzmitry Malyshau	manifest
+half	Copyright the half authors: Kathryn Long	manifest
+hashlink	Copyright the hashlink authors	manifest
+hyper-rustls	Copyright the hyper-rustls authors	manifest
+image	Copyright the image authors: The image-rs Developers	manifest
+image-webp	Copyright the image-webp authors	manifest
+itoa	Copyright the itoa authors: David Tolnay	manifest
+jpeg-encoder	Copyright the jpeg-encoder authors: Volker Ströbel	manifest
+khronos-egl	Copyright the khronos-egl authors: Timothée Haudebourg, Sean Kerr	manifest
+lazy_static	Copyright the lazy_static authors: Marvin Löbel	manifest
+libdbus-sys	Copyright the libdbus-sys authors: David Henningsson	manifest
+linebender_resource_handle	Copyright the linebender_resource_handle authors	manifest
+link-cplusplus	Copyright the link-cplusplus authors: David Tolnay	manifest
+linux-raw-sys	Copyright the linux-raw-sys authors: Dan Gohman	manifest
+multiversion_no_op	Copyright the multiversion_no_op authors: Henri Sivonen	manifest
+notify	Copyright the notify authors: Félix Saparelli, Daniel Faust, Aron Heinecke	manifest
+objc-sys	Copyright 2026 Mads Marquart	repository
+objc2	Copyright 2026 Mads Marquart	repository
+objc2-app-kit	Copyright 2026 Mads Marquart	repository
+objc2-cloud-kit	Copyright 2026 Mads Marquart	repository
+objc2-core-data	Copyright 2026 Mads Marquart	repository
+objc2-core-foundation	Copyright 2026 Mads Marquart	repository
+objc2-core-graphics	Copyright 2026 Mads Marquart	repository
+objc2-core-image	Copyright 2026 Mads Marquart	repository
+objc2-core-services	Copyright 2026 Mads Marquart	repository
+objc2-core-text	Copyright 2026 Mads Marquart	repository
+objc2-core-video	Copyright 2026 Mads Marquart	repository
+objc2-encode	Copyright 2026 Mads Marquart	repository
+objc2-foundation	Copyright 2026 Mads Marquart	repository
+objc2-metal	Copyright 2026 Mads Marquart	repository
+objc2-quartz-core	Copyright 2026 Mads Marquart	repository
+once_cell	Copyright the once_cell authors: Aleksey Kladov	manifest
+openh264	Copyright the openh264 authors: Ralf Biedert	manifest
+openh264-sys2	Copyright the openh264-sys2 authors: Ralf Biedert	manifest
+openjpeg-sys	Copyright the openjpeg-sys authors: Kornel, Eduardo Pinho	manifest
+option-ext	Copyright the option-ext authors: Simon Ochsenreither	manifest
+ordered-stream	Copyright the ordered-stream authors: Daniel De Graaf, Zeeshan Ali Khan	manifest
+owned_ttf_parser	Copyright the owned_ttf_parser authors: Alex Butler	manifest
+paste	Copyright the paste authors: David Tolnay	manifest
+pin-project-lite	Copyright the pin-project-lite authors	manifest
+piper	Copyright the piper authors: Stjepan Glavina, John Nunley	manifest
+polling	Copyright the polling authors: Stjepan Glavina, John Nunley	manifest
+proc-macro-crate	Copyright the proc-macro-crate authors: Bastian Köcher	manifest
+proc-macro2	Copyright the proc-macro2 authors: David Tolnay, Alex Crichton	manifest
+profiling	Copyright (c) 2020 Philip Degarmo and other contributors	repository
+pulp-wasm-simd-flag	Copyright (c) 2021 sarah	repository
+quote	Copyright the quote authors: David Tolnay	manifest
+raw-window-metal	Copyright the raw-window-metal authors	manifest
+rustc-hash	Copyright the rustc-hash authors: The Rust Project Developers	manifest
+rustix	Copyright the rustix authors: Dan Gohman, Jakub Konka	manifest
+rustls	Copyright the rustls authors	manifest
+rustls-native-certs	Copyright the rustls-native-certs authors	manifest
+ryu	Copyright the ryu authors: David Tolnay	manifest
+serde	Copyright the serde authors: Erick Tryzelaar, David Tolnay	manifest
+serde_core	Copyright the serde_core authors: Erick Tryzelaar, David Tolnay	manifest
+serde_derive	Copyright the serde_derive authors: Erick Tryzelaar, David Tolnay	manifest
+serde_json	Copyright the serde_json authors	manifest
+serde_repr	Copyright the serde_repr authors: David Tolnay	manifest
+simd-adler32	Copyright the simd-adler32 authors: Marvin Countryman	manifest
+simdutf8	Copyright the simdutf8 authors: Hans Kratz	manifest
+smol_str	Copyright the smol_str authors: Aleksey Kladov	manifest
+spirv	Copyright the spirv authors: Lei Zhang	manifest
+syn	Copyright the syn authors: David Tolnay	manifest
+sync_wrapper	Copyright the sync_wrapper authors: Actyx AG	manifest
+thiserror	Copyright the thiserror authors: David Tolnay	manifest
+thiserror-impl	Copyright the thiserror-impl authors: David Tolnay	manifest
+turbojpeg-sys	Copyright 2023 Jan Špaček	repository
+typed-path	Copyright the typed-path authors: Chip Senkbeil	manifest
+unicode-general-category	Copyright the unicode-general-category authors: YesLogic Pty. Ltd.	manifest
+untrusted	Copyright the untrusted authors: Brian Smith	manifest
+utf-8	Copyright the utf-8 authors: Simon Sapin	manifest
+utf8_iter	Copyright the utf8_iter authors: Henri Sivonen	manifest
+utf_types	Copyright the utf_types authors: Henri Sivonen	manifest
+winit	Copyright the winit authors: The winit contributors, Pierre Krieger	manifest
+winnow	Copyright the winnow authors	manifest
+x11-dl	Copyright the x11-dl authors: daggerbot, Erle Pereira, AltF02	manifest
+zbus-lockstep	Copyright the zbus-lockstep authors: Luuk van der Duim, Tait Hoyem	manifest
+zbus-lockstep-macros	Copyright the zbus-lockstep-macros authors: Luuk van der Duim	manifest
+zlib-rs	Copyright the zlib-rs authors	manifest
+zmij	Copyright the zmij authors: David Tolnay	manifest
+zune-inflate	Copyright the zune-inflate authors	manifest
+zvariant_utils	Copyright (c) 2024 Zeeshan Ali Khan & zbus contributors	repository
