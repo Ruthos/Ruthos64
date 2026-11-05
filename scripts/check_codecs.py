@@ -141,7 +141,8 @@ def main():
         try:
             rel = get(f"https://api.github.com/repos/{c['github']}/releases/latest", gh_headers)
             latest = rel.get("tag_name", "")
-            if latest and version_tuple(latest) > version_tuple(c["version"]):
+            known = max(version_tuple(c["version"]), version_tuple(c.get("reviewed_release", "0")))
+            if latest and version_tuple(latest) > known:
                 findings.append((
                     f"{c['name']} {latest.lstrip('v')} is available (Ruthos bundles {c['version']})",
                     f"{c['name']} {latest} was released upstream: {rel.get('html_url', '')}\n\n"

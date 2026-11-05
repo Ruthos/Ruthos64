@@ -9,6 +9,8 @@
 # reviewed_commit that look like memory-safety fixes. After reading them, apply
 # what applies and move reviewed_commit forward. reviewed_cves holds CVEs read
 # and found not to apply, or already fixed here, so that they stay quiet.
+# reviewed_release does the same for an upstream release read and not taken,
+# with the reason beside it; a newer release raises an issue again.
 #
 # OpenJPEG is built from vendor/openjpeg-sys. `check_codecs.py --verify-vendor`
 # compares it with the upstream tag: every file must match except those in
@@ -19,6 +21,17 @@ name = "libjpeg-turbo"
 crate = "turbojpeg-sys"
 crate_version = "1.2.0"
 version = "3.1.0"
+# Read every note from 3.1.1 to 3.2.1 on 2026-11-05 and stayed on 3.1.0, as none
+# reaches what Ruthos calls: tj3Init, tj3Set, tj3Get, tj3DecompressHeader,
+# tj3Decompress8/12/16, tj3GetErrorStr and tj3Destroy, on a new handle for each
+# image, stopping at the first failure. The decoder fixes are in partial
+# decompression (jpeg_skip_scanlines and jpeg_crop_scanline, which tj3Decompress
+# reaches only after tj3SetCroppingRegion), merged upsampling reached the same
+# way, YUV output and RGB565, none of which Ruthos asks for. The rest is the
+# encoder, tj3Transform, tj3LoadImage, tj3SaveImage, jpegtran and Java. Moving
+# would also mean a vendored copy, as turbojpeg-sys 1.2.0 still bundles 3.1.0.
+# Look again at the next release, or if Ruthos starts cropping or scaling.
+reviewed_release = "3.2.1"
 reviewed_commit = "29e4d9b0178f08158fc72c6068f086c5ba27b772"
 # tj3LoadImage, which Ruthos does not call; and a bug in Pillow's own use of
 # scaling, which Ruthos does not use.
