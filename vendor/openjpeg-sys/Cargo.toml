@@ -6,6 +6,7 @@ authors = ["Kornel <kornel@geekhood.net>", "Eduardo Pinho <enet4mikeenet@gmail.c
 edition = "2021"
 license = "BSD-2-Clause"
 links = "openjpeg"
+build = "build.rs"
 repository = "https://github.com/Enet4/openjpeg-sys"
 homepage = "https://lib.rs/openjpeg-sys"
 documentation = "https://docs.rs/openjpeg-sys"
