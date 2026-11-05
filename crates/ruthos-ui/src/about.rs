@@ -13,7 +13,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const COMMIT: &str = env!("RUTHOS_COMMIT");
 
 const IJG: &str = "This software is based in part on the work of the Independent JPEG Group.";
-const ACKNOWLEDGEMENTS: &str = "Ruthos is built on DICOM-rs by Eduardo Pinho and contributors, including Paul Knopf \
+const ACKNOWLEDGEMENTS: &str = "Ruthos was created by Mark Bowen. It is built on DICOM-rs by Eduardo Pinho and contributors, including Paul Knopf \
     (upper-layer networking) and Peter Evers (pixel data), which provides its DICOM parsing, pixel decoding and \
     networking. The interface is built with egui by Emil Ernerfeldt and contributors, and rendering uses wgpu. Image \
     decoding uses libjpeg-turbo, OpenJPEG and CharLS. Ruthos's workflow, icons, colour tables and presets follow \

@@ -10,7 +10,7 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::{Color32, RichText, Ui};
 
 use ruthos_core::volume::Volume;
-use ruthos_segment::ai::{self, to_slice, Click, Sam2, SAM2_TINY};
+use ruthos_segment::ai::{self, to_slice, Click, Region, Sam2, SAM2_TINY};
 use ruthos_segment::Field;
 
 /// Slices without the object before following stops in that direction.
@@ -54,19 +54,39 @@ fn gray_slice(volume: &Volume, z: usize, (centre, width): (f32, f32)) -> Vec<f32
         .collect()
 }
 
-/// A slice and the window it was encoded under.
-type SliceKey = (usize, (u32, u32));
+/// A slice, the window it was encoded under and the part of it encoded.
+type SliceKey = (usize, (u32, u32), Region);
+
+/// More than this share of a box empty is worth a warning.
+const MOSTLY_EMPTY: f32 = 0.6;
+/// Above this many pixels to a mask cell, thin bone comes out noticeably thick:
+/// on a 256 pixel slice, at 1.0, a 3 pixel wall came out 47% too large.
+const FINE: f32 = 0.5;
+/// A box whose object spans less than this of it could be much tighter.
+const LOOSE: f32 = 0.4;
+/// The model stretches a box square; past this it distorts what it sees.
+const STRETCHED: f32 = 2.0;
+
+/// What the model is given: part of each slice, and the slices it may follow
+/// through, first and last included.
+#[derive(Clone, Copy, PartialEq)]
+pub struct Limits {
+    pub region: Region,
+    pub slices: (usize, usize),
+}
 
 enum Request {
     Click {
         z: usize,
         clicks: Vec<Click>,
         window: (f32, f32),
+        limits: Limits,
     },
     Follow {
         z: usize,
         clicks: Vec<Click>,
         window: (f32, f32),
+        limits: Limits,
     },
 }
 
@@ -78,6 +98,10 @@ pub enum Reply {
     Mask {
         z: usize,
         mask: Vec<bool>,
+        /// The object ran into a side of the box.
+        edge: bool,
+        /// The share of the box it spans.
+        extent: f32,
     },
     /// Slices done so far.
     Followed(usize),
@@ -116,31 +140,52 @@ fn serve(
     // Encoding is the expensive step, and clicks refine one slice repeatedly.
     let mut cached: Option<(SliceKey, ai::Features)> = None;
     while let Ok(request) = requests.recv() {
-        let (z, clicks, window, follow) = match request {
-            Request::Click { z, clicks, window } => (z, clicks, window, false),
-            Request::Follow { z, clicks, window } => (z, clicks, window, true),
+        let (z, clicks, window, limits, follow) = match request {
+            Request::Click {
+                z,
+                clicks,
+                window,
+                limits,
+            } => (z, clicks, window, limits, false),
+            Request::Follow {
+                z,
+                clicks,
+                window,
+                limits,
+            } => (z, clicks, window, limits, true),
+        };
+        let region = limits.region;
+        let (rw, rh) = (region.width, region.height);
+        let local: Vec<Click> = clicks.iter().map(|c| region.local(*c)).collect();
+        let cut = |slice: usize| region.take(&gray_slice(&volume, slice, window), w);
+        // Back into the whole slice, with what the panel warns about.
+        let reply = |z: usize, decoded: &ai::Decoded| {
+            let inner = to_slice(&decoded.mask, rw, rh);
+            Reply::Mask {
+                z,
+                mask: region.place(&inner, w, h),
+                edge: region.reaches_edge(&inner, w, h),
+                extent: region.extent(&inner),
+            }
         };
         let run = (|| -> Result<(), ai::AiError> {
-            let key = (z, (window.0.to_bits(), window.1.to_bits()));
+            let key = (z, (window.0.to_bits(), window.1.to_bits()), region);
             if cached.as_ref().is_none_or(|(k, _)| *k != key) {
-                let features = model.encode(&gray_slice(&volume, z, window), w, h)?;
+                let features = model.encode(&cut(z), rw, rh)?;
                 cached = Some((key, features));
             }
             let Some((_, features)) = cached.as_ref() else {
                 return Ok(());
             };
-            let first = model.click(features, &clicks, w, h)?;
-            let _ = replies.send(Reply::Mask {
-                z,
-                mask: to_slice(&first.mask, w, h),
-            });
+            let first = model.click(features, &local, rw, rh)?;
+            let _ = replies.send(reply(z, &first));
             if !follow {
                 return Ok(());
             }
             let bank = model.begin(features, &first)?;
             let mut done = 1;
-            let upward: Vec<usize> = (z + 1..d).collect();
-            let downward: Vec<usize> = (0..z).rev().collect();
+            let upward: Vec<usize> = (z + 1..=limits.slices.1.min(d - 1)).collect();
+            let downward: Vec<usize> = (limits.slices.0..z).rev().collect();
             for slices in [upward, downward] {
                 let mut memory = bank.clone();
                 let mut empty = 0;
@@ -149,15 +194,12 @@ fn serve(
                         let _ = replies.send(Reply::Finished(done));
                         return Ok(());
                     }
-                    let f = model.encode(&gray_slice(&volume, slice, window), w, h)?;
+                    let f = model.encode(&cut(slice), rw, rh)?;
                     let decoded = model.track(&f, &mut memory, i + 1)?;
-                    let mask = to_slice(&decoded.mask, w, h);
-                    empty = if decoded.score <= 0.0 || !mask.iter().any(|v| *v) {
-                        empty + 1
-                    } else {
-                        0
-                    };
-                    let _ = replies.send(Reply::Mask { z: slice, mask });
+                    let found = reply(slice, &decoded);
+                    let any = matches!(&found, Reply::Mask { mask, .. } if mask.iter().any(|v| *v));
+                    empty = if decoded.score <= 0.0 || !any { empty + 1 } else { 0 };
+                    let _ = replies.send(found);
                     done += 1;
                     let _ = replies.send(Reply::Followed(done));
                     if empty >= GIVE_UP_AFTER {
@@ -201,6 +243,18 @@ pub struct AiPanel {
     pub note: Option<String>,
     /// A new follow replaces what the last one wrote, once the panel sees it.
     pub restart: bool,
+    /// The volume's size, once a worker has started.
+    dims: Option<[usize; 3]>,
+    /// The cut box, from the 3D pane, when there is one.
+    pub cut_box: Option<Limits>,
+    /// Keep to the cut box.
+    use_box: bool,
+    /// The object reached a side of the box.
+    edge: bool,
+    /// The most of the box the object spanned.
+    extent: f32,
+    /// How empty the box is, and what that was worked out for.
+    emptiness: Option<(Region, usize, Target, f32)>,
 }
 
 impl Default for AiPanel {
@@ -220,6 +274,12 @@ impl Default for AiPanel {
             followed: None,
             note: None,
             restart: false,
+            dims: None,
+            cut_box: None,
+            use_box: true,
+            edge: false,
+            extent: 0.0,
+            emptiness: None,
         }
     }
 }
@@ -237,6 +297,7 @@ impl AiPanel {
         let (requests, serve_requests) = unbounded();
         let (serve_replies, replies) = unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
+        self.dims = Some(volume.dims);
         let (v, r, c) = (volume.clone(), root.to_path_buf(), cancel.clone());
         let spawned = std::thread::Builder::new()
             .name("ruthos-segmentation-model".to_string())
@@ -283,8 +344,28 @@ impl AiPanel {
         }
     }
 
+    /// What the model will be given.
+    fn limits(&self) -> Option<Limits> {
+        if let (true, Some(b)) = (self.use_box, self.cut_box) {
+            return Some(b);
+        }
+        let [w, h, d] = self.dims?;
+        Some(Limits {
+            region: Region::whole(w, h),
+            slices: (0, d.saturating_sub(1)),
+        })
+    }
+
     /// A click on a slice, at voxel `(x, y, z)`.
     pub fn click(&mut self, x: usize, y: usize, z: usize) {
+        let Some(limits) = self.limits() else { return };
+        let inside = z >= limits.slices.0 && z <= limits.slices.1;
+        if !inside || !limits.region.holds(x as f32 + 0.5, y as f32 + 0.5) {
+            self.note = Some("That click is outside the box".to_string());
+            return;
+        }
+        self.edge = false;
+        self.extent = 0.0;
         if self.slice != Some(z) {
             self.clicks.clear();
             self.slice = Some(z);
@@ -300,12 +381,14 @@ impl AiPanel {
                 z,
                 clicks: self.clicks.clone(),
                 window: self.target.window(),
+                limits,
             });
         }
     }
 
     /// Follow the object from the clicked slice through the stack.
     pub fn follow(&mut self) {
+        let Some(limits) = self.limits() else { return };
         let (Some(z), Some(w)) = (self.slice, &self.worker) else {
             return;
         };
@@ -320,6 +403,7 @@ impl AiPanel {
             z,
             clicks: self.clicks.clone(),
             window: self.target.window(),
+            limits,
         });
     }
 
@@ -346,7 +430,9 @@ impl AiPanel {
                     self.followed = None;
                     self.note = Some(e.clone());
                 }
-                Reply::Mask { .. } => {
+                Reply::Mask { edge, extent, .. } => {
+                    self.edge |= *edge;
+                    self.extent = self.extent.max(*extent);
                     if self.followed.is_none() {
                         self.busy = false;
                     }
@@ -367,6 +453,78 @@ impl AiPanel {
         self.clicks.clear();
         self.slice = None;
         self.label = None;
+    }
+
+    /// How much detail the model will see, and what would improve it.
+    fn detail_ui(&mut self, ui: &mut Ui, volume: &Volume) {
+        let warn = |ui: &mut Ui, text: String| {
+            ui.label(RichText::new(text).small().color(Color32::from_rgb(240, 190, 90)));
+        };
+        if self.cut_box.is_some() {
+            ui.checkbox(&mut self.use_box, "Keep to the cut box")
+                .on_hover_text("The model sees only the box, and follows only through its slices");
+        }
+        let Some(limits) = self.limits() else { return };
+        let region = limits.region;
+        let boxed = self.use_box && self.cut_box.is_some();
+        let cell = region.pixels_per_cell();
+        let what = if boxed {
+            format!("Box {} \u{d7} {}", region.width, region.height)
+        } else {
+            "Whole slice".to_string()
+        };
+        ui.label(RichText::new(format!("{what}: {cell:.1} pixels to each mask cell")).small())
+            .on_hover_text(
+                "The model stretches what it is given to a square and makes its mask in 256 cells, \
+                 so a smaller area means finer detail",
+            );
+        if !boxed {
+            if cell > FINE {
+                warn(
+                    ui,
+                    "Thin bone can come out thicker and a fracture line can be filled in. For detail, draw a \
+                     Cut box around the object in the 3D pane"
+                        .to_string(),
+                );
+            }
+            return;
+        }
+        let z = self.slice.unwrap_or((limits.slices.0 + limits.slices.1) / 2);
+        let empty = match self.emptiness {
+            Some((r, s, t, share)) if r == region && s == z && t == self.target => share,
+            _ => {
+                let share = region.empty_share(&gray_slice(volume, z, self.target.window()), volume.dims[0]);
+                self.emptiness = Some((region, z, self.target, share));
+                share
+            }
+        };
+        if empty > MOSTLY_EMPTY {
+            let percent = (empty * 100.0).round();
+            warn(
+                ui,
+                format!("About {percent}% of this box is empty. A tighter box gives more detail"),
+            );
+        }
+        if region.stretch() > STRETCHED {
+            warn(
+                ui,
+                "This box is long and thin, and the model stretches it square. A squarer box works better".to_string(),
+            );
+        }
+        if self.extent > 0.0 && self.extent < LOOSE {
+            let percent = (self.extent * 100.0).round();
+            warn(
+                ui,
+                format!("The object spans only {percent}% of this box. A tighter box gives more detail"),
+            );
+        }
+        if self.edge {
+            warn(
+                ui,
+                "The object reaches the side of the box, so it may be cut off. Make the box larger and click again"
+                    .to_string(),
+            );
+        }
     }
 
     pub fn ui(&mut self, ui: &mut Ui, root: &Path, volume: &Arc<Volume>) {
@@ -443,6 +601,7 @@ impl AiPanel {
             ui.spinner();
             return;
         }
+        self.detail_ui(ui, volume);
         ui.horizontal(|ui| {
             ui.label("Finding");
             egui::ComboBox::from_id_salt("ai-target")

@@ -44,11 +44,10 @@ impl DateShift {
     /// keeping the time and dropping any timezone suffix.
     pub fn shift_dt(&self, dt: &str) -> Option<String> {
         let dt = dt.trim();
-        if dt.len() < 8 {
-            return None;
-        }
-        let date = self.shift(&dt[..8])?;
-        let rest = &dt[8..];
+        // A value from a file need not be ASCII, so byte 8 need not be a
+        // character boundary.
+        let date = self.shift(dt.get(..8)?)?;
+        let rest = dt.get(8..)?;
         let rest = match rest.find(['+', '-']) {
             Some(i) => &rest[..i],
             None => rest,

@@ -3,7 +3,7 @@
 //! pass without doing anything, as they do in CI.
 #![cfg(feature = "ai")]
 
-use ruthos_segment::ai::{to_slice, Click, Sam2, SAM2_TINY};
+use ruthos_segment::ai::{to_slice, Click, Region, Sam2, SAM2_TINY};
 
 /// A bright disc on a dark field, drifting from slice to slice.
 fn slice(z: usize, size: usize) -> (Vec<f32>, Vec<bool>) {
@@ -83,6 +83,55 @@ fn an_exclude_click_changes_the_mask() {
     let inside = model.click(&f, &[include], size, size).unwrap();
     let out = model.click(&f, &[exclude], size, size).unwrap();
     assert!(count(&inside) > count(&out), "excluding the object must lose it");
+}
+
+/// Thin cortical bone on soft tissue, with a fracture gap on its right.
+fn fractured_ring(size: usize) -> (Vec<f32>, Vec<bool>) {
+    let (cx, cy, radius, wall, gap) = (300.0, 260.0, 60.0, 3.0, 3.0);
+    let mut gray = vec![0.25; size * size];
+    let mut truth = vec![false; size * size];
+    for y in 0..size {
+        for x in 0..size {
+            let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+            let d = (dx * dx + dy * dy).sqrt();
+            let gapped = dx > 0.0 && dy.abs() < gap / 2.0;
+            if (d - radius + wall / 2.0).abs() <= wall / 2.0 && !gapped {
+                gray[x + size * y] = 0.95;
+                truth[x + size * y] = true;
+            }
+        }
+    }
+    (gray, truth)
+}
+
+#[test]
+fn a_tight_box_recovers_detail_the_whole_slice_loses() {
+    let Some(root) = std::env::var_os("RUTHOS_SAM_ROOT") else {
+        return;
+    };
+    let mut model = Sam2::load(&SAM2_TINY, std::path::Path::new(&root)).expect("the model loads");
+    let size = 600;
+    let (gray, truth) = fractured_ring(size);
+    let click = Click {
+        x: 241.5,
+        y: 260.0,
+        include: true,
+    };
+    let mut score = |region: Region| {
+        let f = model
+            .encode(&region.take(&gray, size), region.width, region.height)
+            .unwrap();
+        let d = model
+            .click(&f, &[region.local(click)], region.width, region.height)
+            .unwrap();
+        let inner = to_slice(&d.mask, region.width, region.height);
+        dice(&region.place(&inner, size, size), &truth)
+    };
+    let whole = score(Region::whole(size, size));
+    let tight = score(Region::between([224.0, 184.0], [376.0, 336.0], size, size).unwrap());
+    eprintln!("whole slice dice {whole:.3}, tight box dice {tight:.3}");
+    assert!(tight > 0.85, "a tight box dice {tight}");
+    assert!(tight > whole + 0.1, "the box must help: {whole} then {tight}");
 }
 
 /// The real download into an empty folder, about 400 MB: set

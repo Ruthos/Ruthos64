@@ -41,7 +41,7 @@ diagnostic use.
 
 {IJG}
 
-Acknowledgements. Ruthos is built on DICOM-rs by Eduardo Pinho and contributors,
+Acknowledgements. Ruthos was created by Mark Bowen. It is built on DICOM-rs by Eduardo Pinho and contributors,
 including Paul Knopf (upper-layer networking) and Peter Evers (pixel data), which
 provides its DICOM parsing, pixel decoding and networking. The interface is built
 with egui by Emil Ernerfeldt and contributors, and rendering uses wgpu. Image

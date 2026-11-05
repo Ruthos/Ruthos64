@@ -382,6 +382,19 @@ impl CutBox {
         (0..3).all(|a| (self.low[a]..=self.high[a]).contains(&(voxel[a] as f64)))
     }
 
+    /// This box as what the AI model is given.
+    #[cfg(feature = "ai")]
+    fn limits(&self, dims: [usize; 3]) -> Option<crate::segments_ai::Limits> {
+        let (low, high) = ([self.low[0], self.low[1]], [self.high[0], self.high[1]]);
+        let region = ruthos_segment::ai::Region::between(low, high, dims[0], dims[1])?;
+        let first = self.low[2].ceil().max(0.0) as usize;
+        let last = (self.high[2].floor().max(0.0) as usize).min(dims[2].saturating_sub(1));
+        (first <= last).then_some(crate::segments_ai::Limits {
+            region,
+            slices: (first, last),
+        })
+    }
+
     fn corner(&self, n: usize) -> V3 {
         std::array::from_fn(|a| if n >> a & 1 == 1 { self.high[a] } else { self.low[a] })
     }
@@ -1100,6 +1113,11 @@ impl MprState {
             self.close_requested = true;
         }
         self.pump(shared);
+        #[cfg(feature = "ai")]
+        if let Some(dims) = self.volume.as_ref().map(|v| v.dims) {
+            let cut_box = self.three_d.as_ref().and_then(|v| v.cut_box);
+            self.segments.ai.cut_box = cut_box.and_then(|b| b.limits(dims));
+        }
         self.keys(ui);
         ui.style_mut().visuals = crate::theme::viewer_visuals();
         egui::Panel::top(("mpr-toolbar", self.id))

@@ -376,7 +376,7 @@ impl SegmentPanel {
         }
         for reply in self.ai.take_replies() {
             match reply {
-                Reply::Mask { z, mask } => self.write_slice(volume, z, &mask),
+                Reply::Mask { z, mask, .. } => self.write_slice(volume, z, &mask),
                 Reply::Finished(_) => self.changed(volume),
                 Reply::Failed(e) => self.note = Some(e),
                 _ => {}

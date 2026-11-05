@@ -297,6 +297,133 @@ pub fn install_from_folder(manifest: &Manifest, from: &Path, data_root: &Path) -
     Ok(())
 }
 
+/// The side of the mask the decoder really makes. `high_res_mask` is this scaled
+/// up, so this, not the 1024 of the input, sets the finest detail a mask can hold.
+pub const MASK_CELLS: usize = 256;
+
+/// A gray value at or below this is taken as empty when judging a crop.
+const EMPTY: f32 = 0.02;
+
+/// The part of a slice given to the model, in pixels. Whatever goes in is
+/// stretched to 1024 square and the mask comes back in 256 cells, so a smaller
+/// region means finer detail: on a whole 600 pixel slice thin bone came out 75%
+/// too large with its fracture gap filled; a tight crop greatly reduced both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Region {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl Region {
+    pub fn whole(width: usize, height: usize) -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }
+    }
+
+    /// The pixels between two corners, where pixel `i` covers `i - 0.5` to
+    /// `i + 0.5`, held to the slice. None if too little is left to work with.
+    pub fn between(low: [f64; 2], high: [f64; 2], width: usize, height: usize) -> Option<Self> {
+        let span = |low: f64, high: f64, size: usize| {
+            let start = low.ceil().max(0.0) as usize;
+            let end = ((high.floor() + 1.0).max(0.0) as usize).min(size);
+            (start, end.saturating_sub(start))
+        };
+        let (x, w) = span(low[0], high[0], width);
+        let (y, h) = span(low[1], high[1], height);
+        (w >= 8 && h >= 8).then_some(Self {
+            x,
+            y,
+            width: w,
+            height: h,
+        })
+    }
+
+    pub fn holds(&self, x: f32, y: f32) -> bool {
+        let (left, top) = (self.x as f32, self.y as f32);
+        x >= left && y >= top && x < left + self.width as f32 && y < top + self.height as f32
+    }
+
+    /// This part of a slice `full_width` pixels wide.
+    pub fn take(&self, slice: &[f32], full_width: usize) -> Vec<f32> {
+        let mut out = Vec::with_capacity(self.width * self.height);
+        for y in self.y..self.y + self.height {
+            let start = self.x + full_width * y;
+            out.extend_from_slice(&slice[start..start + self.width]);
+        }
+        out
+    }
+
+    /// A click on the slice, as a click on this region.
+    pub fn local(&self, click: Click) -> Click {
+        Click {
+            x: click.x - self.x as f32,
+            y: click.y - self.y as f32,
+            ..click
+        }
+    }
+
+    /// A mask of this region, as a mask of the whole slice.
+    pub fn place(&self, mask: &[bool], full_width: usize, full_height: usize) -> Vec<bool> {
+        let mut out = vec![false; full_width * full_height];
+        for (y, row) in mask.chunks_exact(self.width).enumerate() {
+            let start = self.x + full_width * (self.y + y);
+            out[start..start + self.width].copy_from_slice(row);
+        }
+        out
+    }
+
+    /// How many slice pixels one mask cell covers, on the longer side. Over 1
+    /// the mask is coarser than the image.
+    pub fn pixels_per_cell(&self) -> f32 {
+        self.width.max(self.height) as f32 / MASK_CELLS as f32
+    }
+
+    /// How far the region is stretched to reach a square, 1 being not at all.
+    pub fn stretch(&self) -> f32 {
+        self.width.max(self.height) as f32 / self.width.min(self.height).max(1) as f32
+    }
+
+    /// The share of this part of a slice that is empty.
+    pub fn empty_share(&self, slice: &[f32], full_width: usize) -> f32 {
+        let part = self.take(slice, full_width);
+        part.iter().filter(|v| **v <= EMPTY).count() as f32 / part.len().max(1) as f32
+    }
+
+    /// Whether a mask of this region runs into a side of it, other than a side
+    /// that is the edge of the slice: the object may carry on past that side.
+    pub fn reaches_edge(&self, mask: &[bool], full_width: usize, full_height: usize) -> bool {
+        let at = |x: usize, y: usize| mask[x + self.width * y];
+        (self.y > 0 && (0..self.width).any(|x| at(x, 0)))
+            || (self.y + self.height < full_height && (0..self.width).any(|x| at(x, self.height - 1)))
+            || (self.x > 0 && (0..self.height).any(|y| at(0, y)))
+            || (self.x + self.width < full_width && (0..self.height).any(|y| at(self.width - 1, y)))
+    }
+
+    /// The share of the region's longer side that a mask of it spans, 0 if the
+    /// mask is empty. Small means the region could be much tighter.
+    pub fn extent(&self, mask: &[bool]) -> f32 {
+        let (mut low, mut high) = ([usize::MAX; 2], [0usize; 2]);
+        for (i, _) in mask.iter().enumerate().filter(|(_, on)| **on) {
+            let at = [i % self.width, i / self.width];
+            for axis in 0..2 {
+                low[axis] = low[axis].min(at[axis]);
+                high[axis] = high[axis].max(at[axis]);
+            }
+        }
+        if low[0] == usize::MAX {
+            return 0.0;
+        }
+        let side = |axis: usize, size: usize| (high[axis] - low[axis] + 1) as f32 / size as f32;
+        side(0, self.width).max(side(1, self.height))
+    }
+}
+
 /// A gray slice, 0 to 1, as the encoder wants it: squashed to 1024 square with
 /// no padding, three channels, normalised by the training mean and deviation.
 pub fn to_pixels(gray: &[f32], width: usize, height: usize, mean: [f32; 3], std: [f32; 3]) -> Vec<f32> {
@@ -697,6 +824,75 @@ mod tests {
         let e = verify(&path, &good).unwrap_err();
         assert!(e.to_string().contains("checksum"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_region_comes_from_box_corners_held_to_the_slice() {
+        let r = Region::between([9.5, -0.5], [19.5, 7.5], 100, 50).unwrap();
+        assert_eq!((r.x, r.y, r.width, r.height), (10, 0, 10, 8));
+        let r = Region::between([90.2, 40.0], [500.0, 900.0], 100, 50).unwrap();
+        assert_eq!((r.x, r.y, r.width, r.height), (91, 40, 9, 10));
+        assert_eq!(Region::between([10.0, 10.0], [12.0, 40.0], 100, 50), None, "too narrow");
+        assert_eq!(Region::between([200.0, 0.0], [300.0, 40.0], 100, 50), None, "outside");
+    }
+
+    #[test]
+    fn a_region_is_cut_out_and_its_mask_goes_back_in_place() {
+        let r = Region {
+            x: 1,
+            y: 2,
+            width: 2,
+            height: 2,
+        };
+        let slice: Vec<f32> = (0..20).map(|v| v as f32).collect();
+        assert_eq!(r.take(&slice, 5), vec![11.0, 12.0, 16.0, 17.0]);
+        let mask = r.place(&[true, false, false, true], 5, 4);
+        let on: Vec<usize> = (0..20).filter(|i| mask[*i]).collect();
+        assert_eq!(on, vec![11, 17]);
+        let c = r.local(Click {
+            x: 1.5,
+            y: 3.5,
+            include: false,
+        });
+        assert_eq!((c.x, c.y, c.include), (0.5, 1.5, false));
+        assert!(r.holds(1.0, 2.0) && r.holds(2.9, 3.9));
+        assert!(!r.holds(3.0, 2.0) && !r.holds(1.0, 1.9));
+    }
+
+    #[test]
+    fn a_mask_at_a_side_of_the_slice_is_not_called_cut_off() {
+        let r = Region {
+            x: 0,
+            y: 10,
+            width: 4,
+            height: 4,
+        };
+        let mut left = vec![false; 16];
+        left[4] = true;
+        assert!(!r.reaches_edge(&left, 100, 100), "the slice ends there");
+        let mut top = vec![false; 16];
+        top[1] = true;
+        assert!(r.reaches_edge(&top, 100, 100), "the slice goes on above");
+        let mut right = vec![false; 16];
+        right[7] = true;
+        assert!(r.reaches_edge(&right, 100, 100));
+        let mut inside = vec![false; 16];
+        inside[5] = true;
+        assert!(!r.reaches_edge(&inside, 100, 100));
+    }
+
+    #[test]
+    fn a_region_reports_its_detail_emptiness_and_fit() {
+        let r = Region::whole(512, 128);
+        assert_eq!(r.pixels_per_cell(), 2.0);
+        assert_eq!(r.stretch(), 4.0);
+        let r = Region::whole(4, 2);
+        assert_eq!(r.empty_share(&[0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.5, 0.5], 4), 5.0 / 8.0);
+        let mut mask = vec![false; 8];
+        assert_eq!(r.extent(&mask), 0.0);
+        mask[1] = true;
+        mask[2] = true;
+        assert_eq!(r.extent(&mask), 0.5);
     }
 
     #[test]

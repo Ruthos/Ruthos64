@@ -56,6 +56,27 @@ the object meant, then follows it through the stack. It runs only when you ask,
 entirely on your machine, and no image data leaves it. Its result is an ordinary
 segment, marked **AI**, that every tool above can edit.
 
+### Detail, and the cut box
+
+The model stretches whatever it is given to 1024 by 1024 pixels and makes its
+mask in 256 by 256 cells, whatever the size of the image. On a whole 512 pixel
+slice each cell covers two pixels: thin bone comes out thicker than it is, and a
+fine fracture line can be filled in. In a test on a synthetic ring of 3 pixel
+cortex on a 600 pixel slice, the mask was 75% too large and the gap was filled.
+With a box drawn close around the ring, the overlap with the true shape rose from
+0.73 to 0.92.
+
+So draw a **Cut box** around the object in the 3D pane before you click. **Keep
+to the cut box** gives the model only the box, and follows only through its
+slices; nothing is cut from the volume. The panel shows how many pixels each mask
+cell covers, and warns when:
+
+- much of the box is empty, or the object spans little of it: a tighter box gives
+  more detail;
+- the box is long and thin, as the model stretches it square;
+- the object reaches a side of the box: it may be cut off there, so make the box
+  larger and click again.
+
 The model is not in the download. On first use Ruthos shows its licence (Apache
 2.0), source and training data, then fetches about 400 MB, leaving 216 MB on
 disk. That is the model and Microsoft's ONNX Runtime and DirectML, each checked

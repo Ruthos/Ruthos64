@@ -1,8 +1,14 @@
-# Ruthos 0.1.7-alpha
+# Ruthos 0.1.8-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
-## New in 0.1.7-alpha
+## New in 0.1.8-alpha
+
+- **Finer AI segmentation with the cut box.** The model stretches what it is given to a square and makes its mask in 256 by 256 cells, so on a whole slice thin bone can come out too thick and a fine fracture line can be filled in. Draw a Cut box around the object in the 3D pane and the model sees only the box and follows only through its slices, which keeps much more detail. Nothing is cut from the volume. The panel shows the detail you are getting and warns when the box is mostly empty, too loose or long and thin, or when the object reaches its side and may be cut off. Check every result against the slices. See `docs/segmentation.md`.
+- **Hardening.** Two problems the nightly fuzzing found are fixed: a small malformed file could make Ruthos ask for a very large amount of memory, and an unusual date value could stop an anonymisation run.
+- **Acknowledgements** now name Ruthos's author and are on the website as well as in the About window and the README.
+
+## Previously, in 0.1.7-alpha
 
 This release is about licences and decoder safety. Everyone on an earlier alpha should update.
 
@@ -10,18 +16,6 @@ This release is about licences and decoder safety. Everyone on an earlier alpha 
 - **Third-party licences.** Every package now carries `THIRD_PARTY_LICENSES` in HTML and text, listing every component's copyright and licence, and CI fails if a dependency is missing from it or its licence is not one we accept.
 - **About Ruthos.** A new window, from the row at the foot of the sidebar, with the version, build, acknowledgements and the licences.
 - **Decoder hardening.** OpenJPEG moves to 2.5.4 with a further upstream fix that is in no release, built from a copy in this repository, as upstream now describes itself as unmaintained. The checks made before a file reaches a decoder now look at exactly what the decoder receives, for every frame, and they also apply when a file is converted to send to a PACS. Upstream changes to the C libraries are now reviewed nightly as well as their CVEs.
-
-## Previously, in 0.1.6-alpha
-
-- **3D in the MPR window.** GPU volume rendering in the fourth pane, with shaded, MIP and MinIP modes and presets. Rotate, window, move and zoom from a tool menu.
-- **Cutting.** Build a box or a path, check it from any side, then cut inside or outside it. Remove piece takes everything connected to a click, such as the table. Undo and restore.
-- **Segments.** A Segments panel with threshold, region grow from a click, keep largest, split into pieces, and morphology. Segments are coloured on the slices and in 3D, each with its volume and statistics. They are not saved with the study yet.
-- **AI segmentation, on your machine.** Click a structure and SAM 2.1 Tiny finds it and follows it through the stack, with include and exclude clicks to correct it. It is an optional download of about 400 MB, shown with its licence and training data first, and no image leaves the computer. It was not trained on veterinary images: check every result against the slices. See `docs/segmentation.md`.
-- **STL export** of a segment, or of each shown segment as its own file, in patient coordinates, for planning and education.
-- **Guided review.** A client for guided teaching sessions, with follow, free view, hand-over of control, invitations and signed profiles. Ruthos includes no server: one comes from your educator or institution. See `docs/guided-review.md`.
-- **Frame rates and speed.** Cine follows the file's rate and the screen's refresh, says when it is skipping frames, and offers slower speeds.
-- **Hardening.** Files are checked before they reach a decoder, with limits you can set in Preferences; decoders are fuzzed continuously; and the listener accepts only devices you have listed. If you use the listener, add your devices under Preferences > Listener. SECURITY.md explains how to report a problem.
-- **A Ruthos toolbar in MPR**, and a database sidebar that scrolls.
 
 ## What works
 
@@ -59,7 +53,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.7-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.8-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed yet: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.

@@ -194,6 +194,7 @@ fn walk<R: Read + Seek>(src: &mut R, ts: &TransferSyntax, total: u64) -> Result<
     };
     let mut reader = LazyDataSetReader::new_with_ts(source, ts).map_err(|_| damaged())?;
     let mut depth = 0u32;
+    let mut open_items = 0u32;
     while let Some(token) = reader.advance() {
         let (decoder, len) = match token.map_err(|_| damaged())? {
             LazyDataToken::SequenceStart { len, .. } => {
@@ -207,6 +208,14 @@ fn walk<R: Read + Seek>(src: &mut R, ts: &TransferSyntax, total: u64) -> Result<
                 if beyond(len.0, total) {
                     return Err(damaged());
                 }
+                open_items += 1;
+                continue;
+            }
+            // Outside any item the two readers part: the parser ignores this
+            // delimiter, while this reader takes the next element for an item
+            // and never sees the length that element claims.
+            LazyDataToken::ItemEnd => {
+                open_items = open_items.checked_sub(1).ok_or_else(damaged)?;
                 continue;
             }
             LazyDataToken::SequenceEnd => {
