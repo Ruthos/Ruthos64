@@ -6,13 +6,21 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 
 - **Ruthos is for veterinary, research and teaching use.** It is not for human patients and it is not a medical device. It has no regulatory clearance of any kind, and it must not be the basis of a clinical decision.
 - **Refine edges is experimental and off by default.** AI segments of thin bone can still come out thick, and teeth can pull the level up for the cortex beside them. Check every AI result against the slices before you use its volume.
-- **DICOMweb is tested against Orthanc and a Cloudflare Access gateway.** dcm4chee-arc and the cloud DICOMweb services are not yet tested; `docs/dicomweb.md` keeps the compatibility table.
+- **DICOMweb is tested against Orthanc.** Cloudflare Access, OpenID Connect, dcm4chee-arc and the cloud DICOMweb services are not yet tested; `docs/dicomweb.md` keeps the compatibility table.
 - **The AI tool runs on Windows only.** macOS and Linux builds have everything else.
 - **The archive format may change before 1.0.** Keep your original files.
 - **Research-mode models carry their own licences.** nnInteractive is non-commercial (CC BY-NC-SA 4.0) and VISTA3D is for research and non-clinical use only (NVIDIA's model card and the NVIDIA Open Model License). Each shows its terms before first use, and whether your use is allowed is your responsibility.
 
 ## New since 0.1.10-alpha
 
+- **The 3D pane no longer shows a mirror image.** In every earlier version it drew the patient left to right reversed, from every angle, and dragging turned the view the wrong way. It is correct now. Do not rely on left and right in any 3D view made with an earlier version.
+- **Live cuts in 3D.** A Cuts menu holds the standard half, quarter and eighth cuts. Every face of the box has a dot to drag, and the view follows as you drag, with nothing lost until you choose to make a cut permanent.
+- **One Tool menu in MPR.** The left and right buttons work the same in every pane, and in 3D any tool that cannot act on the picture turns it. The 3D controls are now two menus, 3D and Cuts.
+- **Better turning in 3D.** The 3D menu looks from each side and turns by 90 degrees. The view turns around the middle of the volume or of the cut, or around a point you click.
+- **Colour maps you can see.** The colour menu draws every map as a strip, grouped as Classic, Scientific and Rendering. On CT it adds five maps whose colours stand for fixed Hounsfield ranges: Tissues, Lung Density, Calcium, Body Composition and Bone Density. Choosing one sets the window it is true at, hovering shows what each colour means, and moving the window shows a warning with a way back. The lung, calcium and bone thresholds come from human CT and are not validated in animals.
+- **Steadier 3D.** A fine 3D picture is built in bands over many frames, after a quick one, so that opening 3D on a segmented study no longer risks a graphics driver reset that closes Ruthos.
+- **Smoother scrolling.** The image stays on screen until the next slice is ready, with no blank frame between slices, slices are read ahead in the direction you are scrolling, and two open viewers no longer take each other's slices.
+- **Segment colours.** Click a segment's colour square to choose a colour by RGB, HSL or hex code.
 - **DICOMweb.** Search, retrieve and send over HTTPS, through a gateway such as Orthanc's DICOMweb plugin, with five sign-in methods: OpenID Connect, Cloudflare Access, an Access service token, Basic for testing, and none for a server on this computer. Secrets live in the system credential store. Replies are treated as untrusted input: same-host HTTPS redirects only, size and count limits, generated file names, and an interrupted retrieve picks up where it left off. See `docs/dicomweb.md`.
 - **Share.** Share in the database window writes a patient's studies as a folder or zip with a DICOMDIR, the key images, the report, a read-me page for any device and, on Windows, `Ruthos Viewer.exe`: Ruthos renamed, which opens the images beside it with an in-memory database and leaves no trace on the computer. Owner details can be left out. Importing a DICOMDIR from any system lists what is there first and can open it without importing. See `docs/sharing.md`.
 - **Application icon** on the program, the taskbar and the site.
@@ -20,7 +28,7 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 
 ## In 0.1.10-alpha
 
-- **Save segments to the study.** Save segments to study writes every segment on the panel as a DICOM Segmentation (SEG) in the study, which other programs can read. Saving again adds a version, and opening MPR offers the newest. A SEG from another program loads the same way, and one that does not line up with the series is refused with the reason. Closing MPR with unsaved changes asks first.
+- **Save segments to the study.** Save segments to study writes every segment on the panel as a DICOM Segmentation (SEG) in the study. Saving again adds a version, and opening MPR offers the newest. A SEG that does not line up with the series is refused with the reason. Closing MPR with unsaved changes asks first.
 - **Segments travel with the study.** Teaching copies include them with new UIDs and no creator's name, PACS can send and receive them, and reports list each with its volume and how it was made.
 - **Choose a model.** The AI section now has a Model list. SAM 2.1 Tiny remains the model you can download. Research mode, in Preferences under Viewer, offers VISTA3D and nnInteractive, 3D models still being tested. They cannot be downloaded from Ruthos yet: they install from a folder, and each shows its licence terms before first use.
 - **A progress bar and Stop** while following through slices.
@@ -51,6 +59,7 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - Reading Horos report files and Horos's saved measurements (ROIs).
 - Saving cuts with the study, surface rendering in the 3D pane, and Horos's volume rendering opacity presets.
 - Downloading VISTA3D and nnInteractive from within Ruthos.
+- Opening saved segments in other viewers, which has not been confirmed.
 - macOS and Linux for the AI tool, which runs on Windows only for now.
 - An installer and a Microsoft Store listing. This build is a zip; see below for signing.
 - dcm4chee-arc and cloud DICOMweb services, IHE AIW-I and UPS-RS, and surface rendering.

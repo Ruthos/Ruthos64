@@ -11,7 +11,8 @@
 //!   worked in keeps still while the other two turn. Lock planes stops all
 //!   of that, so measuring cannot move them by accident;
 //! - the wheel steps the pane's own plane, Ctrl and the wheel zoom, the
-//!   right button sets window and level and the middle button pans;
+//!   right button runs the tool chosen for it (window and level to begin
+//!   with) and the middle button pans;
 //! - the measuring tools (caliper, angle, rectangle, ellipse, arrow, point,
 //!   text) draw on a plane in millimetres. A measurement belongs to the
 //!   plane it was drawn on and shows whenever that plane is on screen;
@@ -30,7 +31,7 @@ use egui::{Align2, Color32, FontId, Key, Pos2, Rect, Sense, Stroke, Ui, Vec2, Vi
 use parking_lot::Mutex;
 use rayon::prelude::*;
 use ruthos_render::volume3d::{
-    Camera, GpuVolume, Placement, RenderMode, TransferFunction, VolumeCallback, SEGMENT_WIDTH,
+    Camera, Clip, GpuVolume, Placement, RenderMode, Side, TransferFunction, VolumeCallback, SEGMENT_WIDTH,
 };
 use ruthos_segment::tools::{flood, Outline};
 use ruthos_segment::{Field, Grid};
@@ -71,7 +72,7 @@ pub enum Layout {
     Single(usize),
 }
 
-/// What the left button does in a pane.
+/// What the left or right button does in a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MprTool {
     Crosshair,
@@ -101,6 +102,27 @@ impl MprTool {
         MprTool::Point,
         MprTool::Text,
     ];
+
+    /// How the tool is kept in the settings.
+    fn name(self) -> &'static str {
+        match self {
+            MprTool::Crosshair => "crosshair",
+            MprTool::Window => "window",
+            MprTool::Pan => "move",
+            MprTool::Zoom => "zoom",
+            MprTool::Length => "caliper",
+            MprTool::Angle => "angle",
+            MprTool::Rectangle => "rectangle",
+            MprTool::Oval => "ellipse",
+            MprTool::Arrow => "arrow",
+            MprTool::Point => "point",
+            MprTool::Text => "text",
+        }
+    }
+
+    fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.name() == name)
+    }
 
     fn icon(self) -> Icon {
         match self {
@@ -269,6 +291,10 @@ pub struct MprState {
     status: String,
     layout: Layout,
     tool: MprTool,
+    /// What the right button does.
+    right_tool: MprTool,
+    /// The tool the drag under way belongs to, whichever button began it.
+    drag_tool: MprTool,
     /// The planes cannot be moved or tilted.
     locked: bool,
     rois: Vec<PlaneRoi>,
@@ -296,14 +322,35 @@ pub struct MprState {
     dev_saved: bool,
 }
 
-/// What the left button does in the 3D pane. The middle button always moves
-/// and the right always zooms, as in the 2D viewer.
+/// What a mouse tool does in the 3D pane. Every pane obeys the one Tool menu:
+/// a tool with no meaning in 3D, such as Crosshair or a measuring tool, turns
+/// the view, so it can be turned without changing tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tool3d {
+enum Drag3d {
     Rotate,
     Window,
     Move,
     Zoom,
+}
+
+impl Drag3d {
+    fn of(tool: MprTool) -> Self {
+        match tool {
+            MprTool::Window => Drag3d::Window,
+            MprTool::Pan => Drag3d::Move,
+            MprTool::Zoom => Drag3d::Zoom,
+            _ => Drag3d::Rotate,
+        }
+    }
+}
+
+/// A job the left button takes on in the 3D pane until another tool is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tool3d {
+    /// None: the buttons do what the Tool menu says.
+    Plain,
+    /// Click the point the view turns around.
+    Centre,
     /// Build a box, then cut inside or outside it.
     CutBox,
     /// Build an outline from clicks or a drag, then cut through the depth.
@@ -313,16 +360,13 @@ enum Tool3d {
 }
 
 impl Tool3d {
-    const VIEW: [Tool3d; 4] = [Tool3d::Rotate, Tool3d::Window, Tool3d::Move, Tool3d::Zoom];
     const CUT: [Tool3d; 3] = [Tool3d::CutBox, Tool3d::CutPath, Tool3d::RemovePiece];
 
     fn icon(self) -> Icon {
         match self {
-            Tool3d::Rotate => Icon::Glyph(icons::TOOL_ROTATE),
-            Tool3d::Window => Icon::Bitmap(Bitmap::Wlww),
-            Tool3d::Move => Icon::Bitmap(Bitmap::Move),
-            Tool3d::Zoom => Icon::Bitmap(Bitmap::Zoom),
-            Tool3d::CutBox => Icon::Glyph(icons::THREE_D),
+            Tool3d::Plain => Icon::Glyph(icons::TOOL_ROTATE),
+            Tool3d::Centre => Icon::Glyph(icons::TOOL_POINT),
+            Tool3d::CutBox => Icon::Glyph(icons::CUTS),
             Tool3d::CutPath => Icon::Bitmap(Bitmap::Pencil),
             Tool3d::RemovePiece => Icon::Glyph(icons::TRASH),
         }
@@ -330,10 +374,8 @@ impl Tool3d {
 
     fn label(self) -> &'static str {
         match self {
-            Tool3d::Rotate => "Rotate",
-            Tool3d::Window => "Window",
-            Tool3d::Move => "Move",
-            Tool3d::Zoom => "Zoom",
+            Tool3d::Plain => "Cuts",
+            Tool3d::Centre => "Rotation centre",
             Tool3d::CutBox => "Cut box",
             Tool3d::CutPath => "Cut path",
             Tool3d::RemovePiece => "Remove piece",
@@ -342,12 +384,11 @@ impl Tool3d {
 
     fn hint(self) -> &'static str {
         match self {
-            Tool3d::Rotate => "Drag to turn the volume",
-            Tool3d::Window => "Drag across for contrast, up and down for level",
-            Tool3d::Move => "Drag to move the view",
-            Tool3d::Zoom => "Drag up and down to zoom",
+            Tool3d::Plain => "",
+            Tool3d::Centre => "Click the surface the view should turn around",
             Tool3d::CutBox => {
-                "Drag the handles to size a box, turning the view to check it, then choose Cut inside or Cut outside"
+                "Drag a dot to move that face: the view updates as you drag and nothing is lost. \
+                 Cut inside or Cut outside make it permanent"
             }
             Tool3d::CutPath => {
                 "Click points or drag to draw, drag a point to move it, then choose Cut inside or Cut outside"
@@ -426,6 +467,56 @@ impl CutBox {
     }
 }
 
+/// The standard cuts: a name, and the part of the patient it means along x
+/// (patient's left), y (back) and z (head), 0 being all of that axis.
+const CUT_PARTS: [(&str, [i8; 3]); 18] = [
+    ("Right (1/2)", [-1, 0, 0]),
+    ("Left (1/2)", [1, 0, 0]),
+    ("Front (1/2)", [0, -1, 0]),
+    ("Back (1/2)", [0, 1, 0]),
+    ("Up (1/2)", [0, 0, 1]),
+    ("Down (1/2)", [0, 0, -1]),
+    ("Up right (1/4)", [-1, 0, 1]),
+    ("Up left (1/4)", [1, 0, 1]),
+    ("Down right (1/4)", [-1, 0, -1]),
+    ("Down left (1/4)", [1, 0, -1]),
+    ("Up right front (1/8)", [-1, -1, 1]),
+    ("Up left front (1/8)", [1, -1, 1]),
+    ("Down right front (1/8)", [-1, -1, -1]),
+    ("Down left front (1/8)", [1, -1, -1]),
+    ("Up right back (1/8)", [-1, 1, 1]),
+    ("Up left back (1/8)", [1, 1, 1]),
+    ("Down right back (1/8)", [-1, 1, -1]),
+    ("Down left back (1/8)", [1, 1, -1]),
+];
+
+impl CutBox {
+    /// A part of the patient as a box in the volume, which may lie at any angle
+    /// or run backwards along any axis.
+    fn part(part: [i8; 3], axes: &[V3; 3], dims: [usize; 3]) -> Self {
+        let mut b = Self::around(dims);
+        for (patient, side) in part.into_iter().enumerate() {
+            if side == 0 {
+                continue;
+            }
+            let along = (0..3)
+                .max_by(|&i, &j| axes[i][patient].abs().total_cmp(&axes[j][patient].abs()))
+                .unwrap_or(patient);
+            let middle = (b.low[along] + b.high[along]) / 2.0;
+            if (side > 0) == (axes[along][patient] > 0.0) {
+                b.low[along] = middle;
+            } else {
+                b.high[along] = middle;
+            }
+        }
+        b
+    }
+
+    fn middle(&self) -> V3 {
+        std::array::from_fn(|a| (self.low[a] + self.high[a]) / 2.0)
+    }
+}
+
 /// The twelve edges of a box, by corner.
 const BOX_EDGES: [(usize, usize); 12] = [
     (0, 1),
@@ -494,6 +585,14 @@ struct View3d {
     labels: Vec<u8>,
     cuts: u8,
     cut_box: Option<CutBox>,
+    /// The box limits the view as it is moved, and stops once it has cut.
+    box_live: bool,
+    /// Hide what is in the box rather than what is outside it.
+    box_removes: bool,
+    /// Which of the standard cuts the box began as.
+    cut_part: Option<usize>,
+    /// The point the view turns around, once one has been chosen.
+    pivot: Option<V3>,
     cut_path: Option<CutPath>,
     grabbed: Option<Grabbed>,
     /// The segments' labels as last sent, and which change that was.
@@ -538,12 +637,16 @@ impl View3d {
             baked,
             segments: Arc::new(shown_only()),
             moved: None,
-            tool: Tool3d::Rotate,
+            tool: Tool3d::Plain,
             shift: 0.0,
             scale: 1.0,
             labels: vec![0; volume.dims[0] * volume.dims[1] * volume.dims[2]],
             cuts: 0,
             cut_box: None,
+            box_live: false,
+            box_removes: false,
+            cut_part: None,
+            pivot: None,
             cut_path: None,
             grabbed: None,
             segment_labels: None,
@@ -570,6 +673,7 @@ impl View3d {
     /// Back to the framing and the preset's own window.
     fn reset_view(&mut self) {
         self.camera = Camera::framing(&self.placement);
+        self.pivot = None;
         self.shift = 0.0;
         self.scale = 1.0;
         self.rebake();
@@ -656,10 +760,78 @@ impl View3d {
 
     fn clear_shape(&mut self) {
         match self.tool {
-            Tool3d::CutBox => self.cut_box = Some(CutBox::around(self.placement.dims)),
+            Tool3d::CutBox => {
+                self.cut_box = Some(CutBox::around(self.placement.dims));
+                self.cut_part = None;
+                self.box_live = false;
+                self.box_removes = false;
+            }
             _ => self.cut_path = None,
         }
         self.grabbed = None;
+    }
+
+    /// One of the standard cuts, or none, ready to adjust with its dots.
+    fn choose_cut(&mut self, part: Option<usize>) {
+        self.tool = if part.is_some() { Tool3d::CutBox } else { Tool3d::Plain };
+        self.cut_part = part;
+        match part {
+            Some(i) => {
+                self.cut_box = Some(CutBox::part(CUT_PARTS[i].1, &self.placement.axes, self.placement.dims));
+                self.box_live = true;
+            }
+            None => {
+                self.cut_box = Some(CutBox::around(self.placement.dims));
+                self.box_live = false;
+                self.box_removes = false;
+            }
+        }
+    }
+
+    /// What limits the rendering just now.
+    fn clip(&self) -> Option<Clip> {
+        let b = self.cut_box.filter(|_| self.box_live)?;
+        Some(Clip {
+            low: b.low,
+            high: b.high,
+            remove: self.box_removes,
+        })
+    }
+
+    /// Whether the box is keeping a voxel out of the view.
+    fn clipped(&self, voxel: [usize; 3]) -> bool {
+        self.clip().is_some_and(|c| {
+            let inside = (0..3).all(|a| (c.low[a]..=c.high[a]).contains(&(voxel[a] as f64)));
+            inside == c.remove
+        })
+    }
+
+    /// The point the view turns around: the one chosen, or the middle of what
+    /// the box shows, or the middle of the volume.
+    fn rotation_centre(&self) -> V3 {
+        if let Some(p) = self.pivot {
+            return p;
+        }
+        match self.cut_box.filter(|_| self.box_live && !self.box_removes) {
+            Some(b) => self.patient(b.middle()),
+            None => self.placement.centre(),
+        }
+    }
+
+    fn turn(&mut self, across: f64, up: f64) {
+        self.camera.orbit_about(self.rotation_centre(), across, up);
+        self.moved = Some(std::time::Instant::now());
+    }
+
+    /// Make the point clicked on the surface the one the view turns around.
+    fn set_centre(&mut self, volume: &Volume, ndc: [f64; 2], aspect: f64) -> bool {
+        let Some(i) = self.pick(volume, ndc, aspect) else {
+            return false;
+        };
+        let at = self.grid().position(i);
+        self.pivot = Some(self.patient(at.map(|a| a as f64)));
+        self.tool = Tool3d::Plain;
+        true
     }
 
     /// Cut with the shape that has been built: what is inside it, or what is
@@ -706,7 +878,9 @@ impl View3d {
         };
         self.cut(shared, voxels);
         // The box stays where it was built, for the next cut or to undo and
-        // adjust; a path has done its job.
+        // adjust, but it has done its work on the view; a path has done its job.
+        self.box_live = false;
+        self.box_removes = false;
         if self.tool == Tool3d::CutPath {
             self.clear_shape();
         }
@@ -776,6 +950,8 @@ impl View3d {
                     self.to_screen(rect, aspect, self.patient(next)) - self.to_screen(rect, aspect, self.patient(from));
                 b.move_face(axis, high, along_axis(drag, unit), self.placement.dims);
                 self.cut_box = Some(b);
+                self.box_live = true;
+                self.moved = Some(std::time::Instant::now());
             }
             Grabbed::Point(i) => {
                 if let Some(p) = at {
@@ -829,6 +1005,21 @@ impl View3d {
         }
     }
 
+    /// The point the view turns around, once there is reason to show it.
+    fn draw_centre(&self, painter: &egui::Painter, rect: Rect, aspect: f64) {
+        if self.pivot.is_none() && self.tool != Tool3d::Centre {
+            return;
+        }
+        let at = self.to_screen(rect, aspect, self.rotation_centre());
+        const LINE: Color32 = Color32::from_rgb(120, 220, 255);
+        let reach = Vec2::new(9.0, 0.0);
+        let shadow = Stroke::new(3.0, Color32::BLACK);
+        for stroke in [shadow, Stroke::new(1.5, LINE)] {
+            painter.line_segment([at - reach, at + reach], stroke);
+            painter.line_segment([at - reach.rot90(), at + reach.rot90()], stroke);
+        }
+    }
+
     /// The first visible voxel along the ray through a point on the view.
     fn pick(&self, volume: &Volume, ndc: [f64; 2], aspect: f64) -> Option<usize> {
         let transfer = self.transfer();
@@ -852,7 +1043,7 @@ impl View3d {
             }
             let (x, y, z) = (voxel[0] as usize, voxel[1] as usize, voxel[2] as usize);
             let i = grid.index(x, y, z);
-            if self.labels[i] == 0 && transfer.at(volume.voxel(x, y, z))[3] > 0.05 {
+            if self.labels[i] == 0 && !self.clipped([x, y, z]) && transfer.at(volume.voxel(x, y, z))[3] > 0.05 {
                 return Some(i);
             }
         }
@@ -868,7 +1059,10 @@ impl View3d {
             spacing: self.placement.spacing,
         };
         let labels = &self.labels;
-        let piece = flood(&grid, seed, |i| labels[i] == 0 && transfer.at(volume.at(i))[3] > 0.02);
+        let this = &*self;
+        let piece = flood(&grid, seed, |i| {
+            labels[i] == 0 && !this.clipped(grid.position(i)) && transfer.at(volume.at(i))[3] > 0.02
+        });
         let n = piece.len();
         self.cut(shared, piece);
         Some(n)
@@ -894,6 +1088,13 @@ fn to_view(rect: Rect, p: Pos2) -> [f32; 2] {
 impl MprState {
     /// Open an MPR window on a series and start building its volume.
     pub fn open(shared: &Shared, study: StudyRow, series: SeriesRow, ctx: &egui::Context) -> Self {
+        let (left_tool, right_tool) = {
+            let s = shared.settings.lock();
+            (
+                MprTool::named(&s.mpr_left_tool).unwrap_or(MprTool::Crosshair),
+                MprTool::named(&s.mpr_right_tool).unwrap_or(MprTool::Window),
+            )
+        };
         let id = shared.next_id();
         let files: Vec<std::path::PathBuf> = shared
             .db
@@ -947,7 +1148,9 @@ impl MprState {
             clut: "No CLUT".into(),
             status: String::new(),
             layout,
-            tool: MprTool::Crosshair,
+            tool: left_tool,
+            right_tool,
+            drag_tool: left_tool,
             locked: false,
             rois: Vec::new(),
             selected: None,
@@ -989,7 +1192,12 @@ impl MprState {
         )
     }
 
+    /// Back to where the window opened, in every pane. Cuts stay: they have
+    /// their own Undo.
     fn reset(&mut self) {
+        if let Some(view) = self.three_d.as_mut() {
+            view.reset_view();
+        }
         let Some(v) = &self.volume else { return };
         self.axes = v.axes;
         self.centre = v.centre();
@@ -1338,10 +1546,11 @@ impl MprState {
         }
         #[cfg(feature = "ai")]
         if let Some(dims) = self.volume.as_ref().map(|v| v.dims) {
-            let cut_box = self.three_d.as_ref().and_then(|v| v.cut_box);
+            let cut_box = self.three_d.as_ref().filter(|v| !v.box_removes).and_then(|v| v.cut_box);
             self.segments.ai.cut_box = cut_box.and_then(|b| b.limits(dims));
         }
         self.keys(ui);
+        self.remember_tools(shared);
         ui.style_mut().visuals = crate::theme::viewer_visuals();
         egui::Panel::top(("mpr-toolbar", self.id))
             .exact_size(crate::theme::TOOLBAR_HEIGHT)
@@ -1438,6 +1647,7 @@ impl MprState {
                         if let [a, b, c, d, e, f] = share_box[..] {
                             let n = v.placement.dims.map(|d| d as f64);
                             v.tool = Tool3d::CutBox;
+                            v.box_live = true;
                             v.cut_box = Some(CutBox {
                                 low: [a * n[0] - 0.5, b * n[1] - 0.5, c * n[2] - 0.5],
                                 high: [d * n[0] - 0.5, e * n[1] - 0.5, f * n[2] - 0.5],
@@ -1489,6 +1699,27 @@ impl MprState {
     }
 
     /// Tool letters, Delete and Escape, as in the 2D viewer.
+    /// The next MPR window starts with the tools on the buttons now.
+    fn remember_tools(&self, shared: &Shared) {
+        let (left, right) = (self.tool.name(), self.right_tool.name());
+        let mut s = shared.settings.lock();
+        if s.mpr_left_tool != left || s.mpr_right_tool != right {
+            s.mpr_left_tool = left.to_string();
+            s.mpr_right_tool = right.to_string();
+            if let Err(e) = s.save() {
+                tracing::warn!("the MPR tools could not be saved: {e}");
+            }
+        }
+    }
+
+    /// The buttons go back to what the Tool menu says.
+    fn leave_3d_job(&mut self) {
+        if let Some(v) = self.three_d.as_mut() {
+            v.tool = Tool3d::Plain;
+            v.grabbed = None;
+        }
+    }
+
     fn keys(&mut self, ui: &Ui) {
         if ui.ctx().memory(|m| m.focused().is_some()) {
             return;
@@ -1505,11 +1736,13 @@ impl MprState {
         if let Some(t) = pressed {
             self.tool = t;
             self.angle_draft = None;
+            self.leave_3d_job();
         }
         if escape {
             self.draft = None;
             self.angle_draft = None;
             self.selected = None;
+            self.leave_3d_job();
         }
         if delete {
             if let Some(i) = self.selected.take() {
@@ -1572,17 +1805,16 @@ impl MprState {
             {
                 self.segments.open = !self.segments.open;
             }
-            if ToolbarButton::new(icons::THREE_D, "3D")
+            if self.three_d.is_some() {
+                self.three_d_controls(ui, shared);
+            } else if ToolbarButton::new(icons::THREE_D, "3D")
                 .enabled(ready)
-                .selected(self.three_d.is_some())
                 .tooltip("Volume rendering in the fourth pane")
                 .show(ui)
                 .clicked()
             {
-                let on = self.three_d.is_none();
-                self.set_3d(on, shared);
+                self.set_3d(true, shared);
             }
-            self.three_d_controls(ui, shared);
             toolbar_separator(ui);
             if ToolbarButton::new(Bitmap::Save, "Save to study")
                 .width(76.0)
@@ -1688,8 +1920,16 @@ impl MprState {
         menu_with_caption(ui, self.tool.icon(), &caption, |ui| {
             let mut row = |ui: &mut Ui, t: MprTool| {
                 let label = format!("{}  ({:?})", t.label(), t.key());
-                if tool_menu_row(ui, t.icon(), &label, self.tool == t, false).clicked() {
+                let r = tool_menu_row(ui, t.icon(), &label, self.tool == t, self.right_tool == t);
+                if r.clicked() {
                     self.tool = t;
+                    self.angle_draft = None;
+                    if let Some(v) = self.three_d.as_mut() {
+                        v.tool = Tool3d::Plain;
+                    }
+                    ui.close();
+                } else if r.secondary_clicked() {
+                    self.right_tool = t;
                     self.angle_draft = None;
                     ui.close();
                 }
@@ -1705,6 +1945,12 @@ impl MprState {
             for t in MprTool::ALL.into_iter().filter(|t| t.measures() || *t == MprTool::Text) {
                 row(ui, t);
             }
+            ui.add_space(3.0);
+            ui.label(
+                egui::RichText::new("Click: left button  ·  Right-click: right button")
+                    .size(11.0)
+                    .color(Color32::from_gray(150)),
+            );
         });
     }
 
@@ -1742,57 +1988,41 @@ impl MprState {
 
     fn clut_menu(&mut self, ui: &mut Ui, shared: &Shared) {
         let caption = crate::widgets::truncate(&self.clut, 12);
+        let mut picked = None;
         menu_with_caption(ui, Icon::Glyph(icons::CLUT), &caption, |ui| {
-            for name in shared.cluts.names() {
-                if menu_item(ui, name, self.clut == name).clicked() {
-                    self.clut = name.to_string();
-                    ui.close();
+            picked = crate::clut_menu::show(ui, &shared.cluts, &self.clut, &self.series.modality);
+        });
+        match picked {
+            Some(crate::clut_menu::Pick::ImageDefault) => {
+                self.clut = Clut::grayscale().name;
+                if let Some(v) = &self.volume {
+                    self.window = volume_window(v);
                 }
             }
-        });
+            Some(crate::clut_menu::Pick::Table { name, window }) => {
+                self.clut = name;
+                if let Some(w) = window {
+                    self.window = w;
+                }
+            }
+            None => {}
+        }
+        let clut = shared.cluts.get(&self.clut);
+        if crate::clut_menu::moved_warning(ui, clut, self.window) {
+            if let Some(w) = clut.and_then(|c| c.window()) {
+                self.window = w;
+            }
+        }
     }
 
-    /// The 3D pane's own controls, shown only while it is open.
+    /// The 3D pane's own controls, shown only while it is open: how it looks,
+    /// and what is cut away.
     fn three_d_controls(&mut self, ui: &mut Ui, shared: &Shared) {
+        let mut close = false;
         let Some(v) = self.three_d.as_mut() else { return };
-        let caption = format!("3D: {}", v.tool.label());
-        menu_with_caption(ui, v.tool.icon(), &caption, |ui| {
-            let row = |ui: &mut Ui, v: &mut View3d, t: Tool3d| {
-                if tool_menu_row(ui, t.icon(), t.label(), v.tool == t, false)
-                    .on_hover_text(t.hint())
-                    .clicked()
-                {
-                    v.tool = t;
-                    if t == Tool3d::CutBox && v.cut_box.is_none() {
-                        v.cut_box = Some(CutBox::around(v.placement.dims));
-                    }
-                    ui.close();
-                }
-            };
-            menu_heading(ui, "View");
-            for t in Tool3d::VIEW {
-                row(ui, v, t);
-            }
-            menu_heading(ui, "Cut");
-            for t in Tool3d::CUT {
-                row(ui, v, t);
-            }
-            ui.separator();
-            if menu_item_enabled(ui, "Undo cut", false, v.cuts > 0).clicked() {
-                v.undo_cut(shared);
-                ui.close();
-            }
-            if menu_item_enabled(ui, "Restore everything cut", false, v.cuts > 0).clicked() {
-                v.restore_cuts(shared);
-                ui.close();
-            }
-            if menu_item(ui, "Reset view", false).clicked() {
-                v.reset_view();
-                ui.close();
-            }
-        });
-        let caption = crate::widgets::truncate(&v.presets[v.preset].name, 13);
-        menu_with_caption(ui, Icon::Glyph(icons::CLUT), &caption, |ui| {
+        let caption = format!("3D: {}", crate::widgets::truncate(&v.presets[v.preset].name, 10));
+        menu_with_caption(ui, Icon::Glyph(icons::THREE_D), &caption, |ui| {
+            menu_heading(ui, "Picture");
             let mut chosen = None;
             for (i, p) in v.presets.iter().enumerate() {
                 if menu_item(ui, p.name.as_str(), i == v.preset).clicked() {
@@ -1803,7 +2033,6 @@ impl MprState {
             if let Some(i) = chosen {
                 v.set_preset(i);
             }
-            ui.separator();
             for (mode, label) in [
                 (RenderMode::Shaded, "Shaded"),
                 (RenderMode::Maximum, "Maximum intensity (MIP)"),
@@ -1813,6 +2042,90 @@ impl MprState {
                     v.mode = mode;
                     ui.close();
                 }
+            }
+            menu_heading(ui, "Look from");
+            for side in Side::ALL {
+                if menu_item(ui, side.label(), false).clicked() {
+                    let centre = v.rotation_centre();
+                    v.camera.look_from(side, centre);
+                    ui.close();
+                }
+            }
+            menu_heading(ui, "Turn");
+            for (label, across, up) in [
+                ("Left 90\u{b0}", 1.0, 0.0),
+                ("Right 90\u{b0}", -1.0, 0.0),
+                ("Up 90\u{b0}", 0.0, 1.0),
+                ("Down 90\u{b0}", 0.0, -1.0),
+            ] {
+                if menu_item(ui, label, false).clicked() {
+                    let quarter = std::f64::consts::FRAC_PI_2;
+                    v.turn(across * quarter, up * quarter);
+                    ui.close();
+                }
+            }
+            menu_heading(ui, "Rotation centre");
+            if menu_item(ui, "Click to set\u{2026}", v.tool == Tool3d::Centre)
+                .on_hover_text(Tool3d::Centre.hint())
+                .clicked()
+            {
+                v.tool = Tool3d::Centre;
+                ui.close();
+            }
+            if menu_item_enabled(ui, "Use the middle of the volume", false, v.pivot.is_some()).clicked() {
+                v.pivot = None;
+                ui.close();
+            }
+            ui.separator();
+            if menu_item(ui, "Close 3D", false).clicked() {
+                close = true;
+                ui.close();
+            }
+        });
+        let caption = match v.tool {
+            Tool3d::CutBox | Tool3d::CutPath | Tool3d::RemovePiece => v.tool.label(),
+            _ => "Cuts",
+        };
+        menu_with_caption(ui, Icon::Glyph(icons::CUTS), caption, |ui| {
+            if menu_item(ui, "No cut", v.cut_part.is_none() && !v.box_live).clicked() {
+                v.choose_cut(None);
+                ui.close();
+            }
+            for (i, (name, _)) in CUT_PARTS.iter().enumerate() {
+                if menu_item(ui, *name, v.cut_part == Some(i)).clicked() {
+                    v.choose_cut(Some(i));
+                    ui.close();
+                }
+            }
+            let label = "Remove this part instead";
+            if menu_item_enabled(ui, label, v.box_removes, v.box_live)
+                .on_hover_text("Show everything except what the box holds, to open up the inside")
+                .clicked()
+            {
+                v.box_removes = !v.box_removes;
+                ui.close();
+            }
+            menu_heading(ui, "Cut by hand");
+            for t in Tool3d::CUT {
+                if tool_menu_row(ui, t.icon(), t.label(), v.tool == t, false)
+                    .on_hover_text(t.hint())
+                    .clicked()
+                {
+                    v.tool = t;
+                    if t == Tool3d::CutBox && v.cut_box.is_none() {
+                        v.cut_box = Some(CutBox::around(v.placement.dims));
+                    }
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if menu_item_enabled(ui, "Undo cut", false, v.cuts > 0).clicked() {
+                v.undo_cut(shared);
+                ui.close();
+            }
+            if menu_item_enabled(ui, "Restore everything cut", false, v.cuts > 0).clicked() {
+                v.restore_cuts(shared);
+                ui.close();
             }
         });
         if matches!(v.tool, Tool3d::CutBox | Tool3d::CutPath) {
@@ -1827,7 +2140,7 @@ impl MprState {
             {
                 v.cut_shape(shared, true);
             }
-            if ToolbarButton::new(icons::THREE_D, "Cut outside")
+            if ToolbarButton::new(icons::CUTS, "Cut outside")
                 .width(68.0)
                 .enabled(ready)
                 .tooltip("Keep only what the shape encloses")
@@ -1837,12 +2150,15 @@ impl MprState {
                 v.cut_shape(shared, false);
             }
             if ToolbarButton::new(icons::RESET, "Clear")
-                .tooltip("Discard the shape")
+                .tooltip("Discard the shape and show everything again")
                 .show(ui)
                 .clicked()
             {
                 v.clear_shape();
             }
+        }
+        if close {
+            self.set_3d(false, shared);
         }
     }
 
@@ -1917,6 +2233,7 @@ impl MprState {
         let key = self.id * 64 + 48;
         let assisted = self.segments.has_ai();
         let volume = self.volume.clone();
+        let (left_tool, right_tool) = (self.tool, self.right_tool);
         let Some(v) = self.three_d.as_mut() else { return };
         let response = ui.interact(rect, egui::Id::unique(("mpr-3d", self.id)), Sense::click_and_drag());
         let aspect = (rect.width() / rect.height().max(1.0)) as f64;
@@ -1932,26 +2249,40 @@ impl MprState {
         if response.drag_stopped() {
             v.grabbed = None;
         }
-        if response.dragged_by(egui::PointerButton::Middle) || (primary && v.tool == Tool3d::Move) {
-            v.camera.slide(share(d.x), -share(d.y));
-            v.moved = Some(std::time::Instant::now());
-        } else if response.dragged_by(egui::PointerButton::Secondary) || (primary && v.tool == Tool3d::Zoom) {
-            v.camera.zoom((d.y as f64 * 0.006).exp());
-            v.moved = Some(std::time::Instant::now());
-        } else if primary {
+        let secondary = response.dragged_by(egui::PointerButton::Secondary);
+        let drag = if response.dragged_by(egui::PointerButton::Middle) {
+            Some(Drag3d::Move)
+        } else if primary && v.tool == Tool3d::Plain {
+            Some(Drag3d::of(left_tool))
+        } else if primary && v.tool != Tool3d::CutPath && v.grabbed.is_none() {
+            // Off every handle a 3D job still turns the view, so a box can be
+            // checked from all sides as it is built.
+            Some(Drag3d::Rotate)
+        } else if secondary {
+            Some(Drag3d::of(right_tool))
+        } else {
+            None
+        };
+        match drag {
+            Some(Drag3d::Move) => {
+                v.camera.slide(share(d.x), -share(d.y));
+                v.moved = Some(std::time::Instant::now());
+            }
+            Some(Drag3d::Zoom) => {
+                v.camera.zoom((d.y as f64 * 0.006).exp());
+                v.moved = Some(std::time::Instant::now());
+            }
+            Some(Drag3d::Rotate) => v.turn(-d.x as f64 * 0.008, -d.y as f64 * 0.008),
+            Some(Drag3d::Window) => {
+                v.scale = (v.scale * (d.x * 0.004).exp()).clamp(0.05, 20.0);
+                v.shift += d.y * (v.gpu.max - v.gpu.min) / 800.0;
+                v.rebake();
+            }
+            None => {}
+        }
+        if primary {
             match (v.grabbed, v.tool) {
                 (Some(g), _) => v.drag_grabbed(g, rect, aspect, d, pointer),
-                // Off every handle the box tool still turns the view, so a box
-                // can be checked from all sides as it is built.
-                (None, Tool3d::Rotate | Tool3d::CutBox) => {
-                    v.camera.orbit(-d.x as f64 * 0.008, -d.y as f64 * 0.008);
-                    v.moved = Some(std::time::Instant::now());
-                }
-                (None, Tool3d::Window) => {
-                    v.scale = (v.scale * (d.x * 0.004).exp()).clamp(0.05, 20.0);
-                    v.shift += d.y * (v.gpu.max - v.gpu.min) / 800.0;
-                    v.rebake();
-                }
                 (None, Tool3d::CutPath) => {
                     if let Some(p) = pointer {
                         let last = v.cut_path.as_ref().and_then(|c| c.points.last()).copied();
@@ -1971,6 +2302,15 @@ impl MprState {
                 v.add_point([at[0] as f64, at[1] as f64], aspect);
             }
         }
+        if response.clicked() && v.tool == Tool3d::Centre {
+            if let (Some(p), Some(volume)) = (pointer, volume.as_ref()) {
+                let at = to_view(rect, p);
+                if !v.set_centre(volume, [at[0] as f64, at[1] as f64], aspect) {
+                    self.status = "Nothing visible there".to_string();
+                }
+            }
+        }
+        let Some(v) = self.three_d.as_mut() else { return };
         if response.clicked() && v.tool == Tool3d::RemovePiece {
             if let (Some(p), Some(volume)) = (pointer, volume.as_ref()) {
                 let at = to_view(rect, p);
@@ -2009,6 +2349,14 @@ impl MprState {
                 aspect: (rect.width() / rect.height().max(1.0)) as f64,
                 mode: v.mode,
                 step_mm,
+                clip: v.clip(),
+                size_px: [
+                    (rect.width() * ui.pixels_per_point()).round() as u32,
+                    (rect.height() * ui.pixels_per_point()).round() as u32,
+                ],
+                settled: !moving,
+                context: ui.ctx().clone(),
+                viewport: ui.ctx().viewport_id(),
             },
         ));
         painter.text(
@@ -2019,6 +2367,7 @@ impl MprState {
             Color32::from_gray(210),
         );
         v.draw_shape(&painter, rect, aspect);
+        v.draw_centre(&painter, rect, aspect);
         painter.text(
             rect.left_bottom() + Vec2::new(6.0, -6.0),
             Align2::LEFT_BOTTOM,
@@ -2183,7 +2532,7 @@ impl MprState {
             }
             if let Some((p, a, b)) = self.draft {
                 if p == i {
-                    if let Some(kind) = draft_kind(self.tool, a, b) {
+                    if let Some(kind) = draft_kind(self.drag_tool, a, b) {
                         Roi::new(kind).draw(&painter, &t, frame, crate::theme::ROI_DRAFT, false);
                     }
                 }
@@ -2333,20 +2682,29 @@ impl MprState {
 
         // Clicks: select a measurement, place a point, a text note, or the
         // end of an angle.
-        if response.clicked() {
+        let clicked = if response.clicked() {
+            Some(self.tool)
+        } else if response.secondary_clicked() {
+            Some(self.right_tool)
+        } else {
+            None
+        };
+        if let Some(tool) = clicked {
             if let Some(p) = response.interact_pointer_pos() {
                 let ip = t.screen_to_image(p);
-                if let Some(d) = self.angle_draft.filter(|d| d.pane == i) {
+                if let Some(d) = self.angle_draft.filter(|d| d.pane == i && tool == MprTool::Angle) {
                     let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: ip });
                     self.angle_draft = None;
                     if !roi.is_degenerate() {
                         self.push_roi(key, plane, roi);
                     }
-                } else if let Some(k) = self.roi_at(key, t, p) {
+                } else if let Some(k) = self.roi_at(key, t, p).filter(|_| response.clicked()) {
                     self.selected = Some(k);
                 } else {
-                    self.selected = None;
-                    match self.tool {
+                    if response.clicked() {
+                        self.selected = None;
+                    }
+                    match tool {
                         MprTool::Point => self.push_roi(key, plane, Roi::new(RoiKind::Point { p: ip })),
                         MprTool::Text => {
                             self.text_prompt = Some(TextPrompt {
@@ -2382,9 +2740,11 @@ impl MprState {
             });
             let what = if middle {
                 Drag::Pan
-            } else if secondary {
-                Drag::Window
+            } else if let (true, Some(p)) = (secondary, origin) {
+                self.drag_tool = self.right_tool;
+                self.tool_drag(i, t, p, centre_screen, lines, handle_at)
             } else if let (true, Some(p)) = (primary, origin) {
+                self.drag_tool = self.tool;
                 self.primary_drag(i, t, key, p, centre_screen, lines, handle_at)
             } else {
                 Drag::Window
@@ -2455,12 +2815,12 @@ impl MprState {
         if response.drag_stopped() {
             if let Some((p, Drag::Draw(_))) = self.drag {
                 if let Some((dp, a, b)) = self.draft.take() {
-                    if dp == p && self.tool == MprTool::Angle {
+                    if dp == p && self.drag_tool == MprTool::Angle {
                         if (b - a).length() >= 1.0 {
                             self.angle_draft = Some(AngleDraft { pane: p, a, b, c: b });
                             self.status = "Angle: now click the end of the second arm".into();
                         }
-                    } else if let Some(kind) = draft_kind(self.tool, a, b) {
+                    } else if let Some(kind) = draft_kind(self.drag_tool, a, b) {
                         let roi = Roi::new(kind);
                         if !roi.is_degenerate() {
                             self.push_roi(key, plane, roi);
@@ -2511,7 +2871,21 @@ impl MprState {
                 return Drag::Move(k);
             }
         }
-        match self.tool {
+        self.tool_drag(i, t, p, centre_screen, lines, handle_at)
+    }
+
+    /// What a drag starting at `p` does with the tool of the button pressed.
+    #[allow(clippy::too_many_arguments)]
+    fn tool_drag(
+        &mut self,
+        i: usize,
+        t: &ViewTransform,
+        p: Pos2,
+        centre_screen: Pos2,
+        lines: &[(usize, Vec2)],
+        handle_at: f32,
+    ) -> Drag {
+        match self.drag_tool {
             MprTool::Crosshair if !self.locked => {
                 let rel = p - centre_screen;
                 let on_handle = i != ORIGINAL
@@ -2880,6 +3254,56 @@ mod tests {
         assert!(b.high[0] - b.low[0] >= 1.0);
         b.move_face(2, true, 100.0, dims);
         assert_eq!(b.high[2], 29.5);
+    }
+
+    #[test]
+    fn every_tool_keeps_its_name_in_the_settings() {
+        for t in MprTool::ALL {
+            assert_eq!(MprTool::named(t.name()), Some(t));
+        }
+        assert_eq!(MprTool::named(""), None);
+    }
+
+    #[test]
+    fn every_tool_means_something_in_3d() {
+        assert_eq!(Drag3d::of(MprTool::Window), Drag3d::Window);
+        assert_eq!(Drag3d::of(MprTool::Pan), Drag3d::Move);
+        assert_eq!(Drag3d::of(MprTool::Zoom), Drag3d::Zoom);
+        // Whatever cannot act on a 3D picture turns it.
+        for t in MprTool::ALL {
+            if !matches!(t, MprTool::Window | MprTool::Pan | MprTool::Zoom) {
+                assert_eq!(Drag3d::of(t), Drag3d::Rotate, "{t:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_standard_cut_keeps_its_share_of_the_volume() {
+        let dims = [40, 60, 80];
+        for (name, part) in CUT_PARTS {
+            let b = CutBox::part(part, &AXES, dims);
+            let kept: f64 = (0..3).map(|a| (b.high[a] - b.low[a]) / dims[a] as f64).product();
+            let cuts = part.iter().filter(|s| **s != 0).count() as i32;
+            assert!((kept - 0.5f64.powi(cuts)).abs() < 1e-9, "{name}: {kept}");
+            let label = format!("(1/{})", 1 << cuts);
+            assert!(name.ends_with(&label), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cut_names_the_patient_and_not_the_scanner() {
+        let dims = [40, 60, 80];
+        // Patient's right is low x on an ordinary series.
+        let right = CutBox::part([-1, 0, 0], &AXES, dims);
+        assert!(right.contains([0, 0, 0]) && !right.contains([39, 0, 0]));
+        // Here the slices run feet to head the other way, so up is low z.
+        let reversed = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]];
+        let up = CutBox::part([0, 0, 1], &reversed, dims);
+        assert!(up.contains([0, 0, 0]) && !up.contains([0, 0, 79]));
+        // And here the volume's first axis runs along the patient's z.
+        let turned = [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]];
+        let up = CutBox::part([0, 0, 1], &turned, dims);
+        assert!(up.contains([39, 0, 0]) && !up.contains([0, 0, 0]));
     }
 
     #[test]

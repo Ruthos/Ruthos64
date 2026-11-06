@@ -1165,7 +1165,7 @@ impl PrefsState {
             .selected_text(self.draft.default_clut.clone())
             .width(200.0)
             .show_ui(ui, |ui| {
-                for name in shared.cluts.names() {
+                for name in shared.cluts.any_window_names() {
                     ui.selectable_value(&mut self.draft.default_clut, name.to_string(), name);
                 }
             });
@@ -1247,6 +1247,9 @@ impl PrefsState {
         {
             let now = shared.settings.lock();
             self.draft.hidden_smart_albums = now.hidden_smart_albums.clone();
+            // Set from the MPR Tool menu.
+            self.draft.mpr_left_tool = now.mpr_left_tool.clone();
+            self.draft.mpr_right_tool = now.mpr_right_tool.clone();
             // Set from the Segments panel.
             self.draft.research_agreed = now.research_agreed.clone();
             self.draft.ai_model = now.ai_model.clone();

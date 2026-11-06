@@ -22,7 +22,7 @@ Each pane names its plane (Axial, Coronal, Sagittal, or Oblique and the plane it
 
 ## Tools, layouts and the lock
 
-The second toolbar picks what the left button does, as in the 2D viewer; the letter in brackets is the shortcut.
+The Tool menu sets the mouse buttons, as in the 2D viewer: click a tool for the left button, right-click it for the right button, and a small mouse beside each name shows which. The right button starts on WL/WW, and your choices carry over to the next MPR window. The letter in brackets is the shortcut, which sets the left button.
 
 - **Crosshair** (C) moves and tilts the planes, as described above. Elsewhere in the pane it sets window and level.
 - **WL/WW** (W), **Move** (M) and **Zoom** (Z) adjust the view.

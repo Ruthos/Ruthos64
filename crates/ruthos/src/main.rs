@@ -26,6 +26,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("Ruthos")
             .with_app_id("org.ruthos.Ruthos")
+            .with_icon(ruthos_ui::app_icon())
             .with_inner_size([1320.0, 840.0])
             .with_min_inner_size([900.0, 600.0]),
         renderer: eframe::Renderer::Wgpu,

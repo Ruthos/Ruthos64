@@ -1209,6 +1209,7 @@ pub fn window(ctx: &egui::Context, shared: &Shared) {
     ctx.show_viewport_immediate(
         id,
         ViewportBuilder::default()
+            .with_icon(crate::app_icon())
             .with_title("Guided review \u{2014} Ruthos")
             .with_inner_size([440.0, 620.0])
             .with_min_inner_size([360.0, 320.0]),

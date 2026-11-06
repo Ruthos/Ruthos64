@@ -5798,6 +5798,7 @@ dependencies = [
  "bytemuck",
  "egui",
  "egui-wgpu",
+ "naga",
  "ruthos-dicom",
  "tracing",
  "wgpu",

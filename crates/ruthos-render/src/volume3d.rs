@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use egui_wgpu::wgpu;
@@ -228,6 +229,64 @@ impl Placement {
     }
 }
 
+/// A side of the patient to look from, by DICOM's axes: x to the patient's
+/// left, y to the back, z to the head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Front,
+    Back,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl Side {
+    pub const ALL: [Side; 6] = [
+        Side::Front,
+        Side::Back,
+        Side::Left,
+        Side::Right,
+        Side::Top,
+        Side::Bottom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Side::Front => "Front",
+            Side::Back => "Back",
+            Side::Left => "Left",
+            Side::Right => "Right",
+            Side::Top => "Top",
+            Side::Bottom => "Bottom",
+        }
+    }
+
+    /// The directions of the view's right and up.
+    fn frame(self) -> (V3, V3) {
+        const HEAD: V3 = [0.0, 0.0, 1.0];
+        const FRONT: V3 = [0.0, -1.0, 0.0];
+        match self {
+            Side::Front => ([1.0, 0.0, 0.0], HEAD),
+            Side::Back => ([-1.0, 0.0, 0.0], HEAD),
+            Side::Left => ([0.0, 1.0, 0.0], HEAD),
+            Side::Right => ([0.0, -1.0, 0.0], HEAD),
+            Side::Top => ([-1.0, 0.0, 0.0], FRONT),
+            Side::Bottom => ([1.0, 0.0, 0.0], FRONT),
+        }
+    }
+}
+
+/// A box the rendering is limited by, moved at no cost: nothing is rewritten.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Clip {
+    /// Corners in voxels, where voxel centres are whole numbers.
+    pub low: V3,
+    pub high: V3,
+    /// Hide what is in the box, rather than what is outside it.
+    pub remove: bool,
+}
+
 /// An orbit around a point, in patient space.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -241,17 +300,26 @@ pub struct Camera {
 impl Camera {
     /// Looking at the whole volume from the front, patient head up.
     pub fn framing(p: &Placement) -> Self {
+        let (right, up) = Side::Front.frame();
         Self {
             target: p.centre(),
-            // DICOM's axes: x to the patient's left, y to the back, z to the head.
-            right: [-1.0, 0.0, 0.0],
-            up: [0.0, 0.0, 1.0],
+            right,
+            up,
             half_height: p.diagonal() / 2.0,
         }
     }
 
+    /// The way the view looks. Right, up and back towards the viewer are a
+    /// right-handed frame: the other hand would show a mirror image.
     pub fn forward(&self) -> V3 {
-        normalised(cross(self.right, self.up))
+        normalised(cross(self.up, self.right))
+    }
+
+    /// Look at a point from one side of the patient, with that point in the
+    /// middle of the view.
+    pub fn look_from(&mut self, side: Side, point: V3) {
+        (self.right, self.up) = side.frame();
+        self.target = point;
     }
 
     /// Orbit by a drag, in radians across and up the view.
@@ -261,6 +329,14 @@ impl Camera {
         self.up = normalised(turn(turn(top, top, across), right, up));
         // Keep the frame square against rounding.
         self.up = normalised(cross(cross(self.right, self.up), self.right));
+    }
+
+    /// Orbit around a point, which stays where it is on screen.
+    pub fn orbit_about(&mut self, pivot: V3, across: f64, up: f64) {
+        let offset: V3 = std::array::from_fn(|i| pivot[i] - self.target[i]);
+        let (x, y) = (dot(offset, self.right), dot(offset, self.up));
+        self.orbit(across, up);
+        self.target = std::array::from_fn(|i| pivot[i] - self.right[i] * x - self.up[i] * y);
     }
 
     /// Move the view by a drag, as a share of its height.
@@ -350,6 +426,8 @@ pub struct GpuVolume {
     /// The value range the texture's 0 to 1 stands for.
     pub min: f32,
     pub max: f32,
+    /// Counts changes to the labels, which change the picture.
+    revision: AtomicU64,
 }
 
 impl GpuVolume {
@@ -419,6 +497,7 @@ impl GpuVolume {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let label_view = label_texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
+            revision: AtomicU64::new(0),
             view,
             label_texture,
             label_view,
@@ -432,6 +511,7 @@ impl GpuVolume {
 
     /// Replace the labels, given on the source grid.
     pub fn write_labels(&self, queue: &wgpu::Queue, source_dims: [usize; 3], labels: &[u8]) {
+        self.revision.fetch_add(1, Ordering::Relaxed);
         let [w, h, d] = self.dims;
         let mut layer = Vec::with_capacity((w * h) as usize);
         for z in 0..d as usize {
@@ -490,12 +570,15 @@ fn half(v: f32) -> u16 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     m: [[f32; 4]; 4],
     params: [f32; 4],
     dims: [f32; 4],
     spacing: [f32; 4],
+    /// In texture coordinates. `clip_low[3]`: 0 none, 1 keep inside, 2 remove inside.
+    clip_low: [f32; 4],
+    clip_high: [f32; 4],
 }
 
 struct Draw {
@@ -506,6 +589,45 @@ struct Draw {
     volume_ptr: usize,
     transfer_ptr: usize,
     segments_ptr: usize,
+    picture: Option<Picture>,
+}
+
+/// The 3D picture as last rendered. Ray marching is by far the heaviest thing
+/// in the window, and everything else there repaints it: scrolling a slice
+/// beside it must not pay for a picture that has not changed.
+struct Picture {
+    size: [u32; 2],
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    /// What it shows, once it has been rendered.
+    drawn: Option<Shown>,
+    /// What is being built, and the next row of it.
+    building: Option<(Shown, u32)>,
+}
+
+/// The height of one band of a full-quality picture, in pixels.
+///
+/// Windows resets a graphics card that spends about two seconds on one job, and
+/// that takes the whole program with it. A fine ray march of a large volume can
+/// take longer than that, so it is shared out over many frames.
+const BAND: u32 = 48;
+
+/// How many times longer the first step is than a fine one, for the quick
+/// picture shown while the fine one is built.
+const PREVIEW: f32 = 7.0;
+
+/// Which rows the next band of the picture covers, or none when it is done.
+fn band(next_row: u32, height: u32) -> Option<(u32, u32)> {
+    (next_row < height).then(|| (next_row, BAND.min(height - next_row)))
+}
+
+/// Everything the picture depends on.
+#[derive(Clone, Copy, PartialEq)]
+struct Shown {
+    uniforms: Uniforms,
+    transfer_ptr: usize,
+    segments_ptr: usize,
+    labels: u64,
 }
 
 /// The ray marcher's pipeline, stored once in egui-wgpu's callback resources.
@@ -513,6 +635,9 @@ pub struct VolumeRenderer {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    format: wgpu::TextureFormat,
+    blit: wgpu::RenderPipeline,
+    blit_layout: wgpu::BindGroupLayout,
     draws: HashMap<u64, Draw>,
 }
 
@@ -588,6 +713,52 @@ impl VolumeRenderer {
             multiview_mask: None,
             cache: None,
         });
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ruthos 3D picture"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("blit.wgsl").into()),
+        });
+        let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("ruthos 3D picture layout"),
+            entries: &[
+                texture(0, filterable, wgpu::TextureViewDimension::D2),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ruthos 3D picture pipeline layout"),
+            bind_group_layouts: &[Some(&blit_layout)],
+            immediate_size: 0,
+        });
+        let blit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ruthos 3D picture"),
+            layout: Some(&blit_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("ruthos volume sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -601,6 +772,9 @@ impl VolumeRenderer {
             pipeline,
             layout,
             sampler,
+            format: target_format,
+            blit,
+            blit_layout,
             draws: HashMap::new(),
         }
     }
@@ -647,6 +821,14 @@ pub struct VolumeCallback {
     pub mode: RenderMode,
     /// A step in millimetres: coarser while the user rotates.
     pub step_mm: f32,
+    pub clip: Option<Clip>,
+    /// The pane's size in physical pixels.
+    pub size_px: [u32; 2],
+    /// The final picture, rather than one to show while the view moves.
+    pub settled: bool,
+    /// To come back for the next band.
+    pub context: egui::Context,
+    pub viewport: egui::ViewportId,
 }
 
 impl CallbackTrait for VolumeCallback {
@@ -655,7 +837,7 @@ impl CallbackTrait for VolumeCallback {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen: &ScreenDescriptor,
-        _encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut wgpu::CommandEncoder,
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(r) = resources.get_mut::<VolumeRenderer>() else {
@@ -730,9 +912,14 @@ impl CallbackTrait for VolumeCallback {
                     volume_ptr,
                     transfer_ptr: 0,
                     segments_ptr: 0,
+                    picture: None,
                 },
             );
         }
+        let limit = device.limits().max_texture_dimension_2d;
+        let size = self.size_px.map(|side| side.clamp(1, limit));
+        let (format, blit_layout, sampler) = (r.format, &r.blit_layout, &r.sampler);
+        let pipeline = &r.pipeline;
         let Some(d) = r.draws.get_mut(&self.key) else {
             return Vec::new();
         };
@@ -748,6 +935,17 @@ impl CallbackTrait for VolumeCallback {
         }
         let dims = self.volume.dims;
         let spacing = self.volume.spacing;
+        let (clip_low, clip_high) = match self.clip {
+            None => ([0.0; 4], [1.0; 4]),
+            Some(c) => {
+                let at = |v: V3, a: usize| ((v[a] + 0.5) / self.placement.dims[a] as f64) as f32;
+                let kind = if c.remove { 2.0 } else { 1.0 };
+                (
+                    [at(c.low, 0), at(c.low, 1), at(c.low, 2), kind],
+                    [at(c.high, 0), at(c.high, 1), at(c.high, 2), 1.0],
+                )
+            }
+        };
         let uniforms = Uniforms {
             m: self.camera.matrix(&self.placement, self.aspect),
             params: [
@@ -759,8 +957,117 @@ impl CallbackTrait for VolumeCallback {
             ],
             dims: [dims[0] as f32, dims[1] as f32, dims[2] as f32, 0.0],
             spacing: [spacing[0] as f32, spacing[1] as f32, spacing[2] as f32, 0.0],
+            clip_low,
+            clip_high,
         };
-        queue.write_buffer(&d.uniform, 0, bytemuck::bytes_of(&uniforms));
+        if d.picture.as_ref().is_none_or(|p| p.size != size) {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("ruthos 3D picture"),
+                size: wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("ruthos 3D picture bind group"),
+                layout: blit_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            });
+            d.picture = Some(Picture {
+                size,
+                view,
+                bind_group,
+                drawn: None,
+                building: None,
+            });
+        }
+        let shown = Shown {
+            uniforms,
+            transfer_ptr,
+            segments_ptr,
+            labels: self.volume.revision.load(Ordering::Relaxed),
+        };
+        let Some(picture) = d.picture.as_mut() else {
+            return Vec::new();
+        };
+        let size = picture.size;
+        let draw = |picture: &mut Picture, encoder: &mut wgpu::CommandEncoder, rows: Option<(u32, u32)>| {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ruthos ray march"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &picture.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: match rows {
+                            Some(_) => wgpu::LoadOp::Load,
+                            None => wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let Some((top, height)) = rows {
+                pass.set_scissor_rect(0, top, size[0], height);
+            }
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &d.bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        };
+        if picture.drawn != Some(shown) {
+            match picture.building.filter(|(what, _)| *what == shown) {
+                Some((_, row)) => {
+                    queue.write_buffer(&d.uniform, 0, bytemuck::bytes_of(&uniforms));
+                    if let Some((top, height)) = band(row, size[1]) {
+                        draw(picture, encoder, Some((top, height)));
+                    }
+                    let next = row + BAND;
+                    if next >= size[1] {
+                        picture.drawn = Some(shown);
+                        picture.building = None;
+                    } else {
+                        picture.building = Some((shown, next));
+                        self.context.request_repaint_of(self.viewport);
+                    }
+                }
+                None if self.settled => {
+                    // Something to look at at once, then the fine picture.
+                    let mut quick = uniforms;
+                    quick.params[0] *= PREVIEW;
+                    queue.write_buffer(&d.uniform, 0, bytemuck::bytes_of(&quick));
+                    draw(picture, encoder, None);
+                    picture.building = Some((shown, 0));
+                    self.context.request_repaint_of(self.viewport);
+                }
+                None => {
+                    queue.write_buffer(&d.uniform, 0, bytemuck::bytes_of(&uniforms));
+                    draw(picture, encoder, None);
+                    picture.drawn = Some(shown);
+                    picture.building = None;
+                }
+            }
+        }
         Vec::new()
     }
 
@@ -773,11 +1080,11 @@ impl CallbackTrait for VolumeCallback {
         let Some(r) = resources.get::<VolumeRenderer>() else {
             return;
         };
-        let Some(d) = r.draws.get(&self.key) else {
+        let Some(picture) = r.draws.get(&self.key).and_then(|d| d.picture.as_ref()) else {
             return;
         };
-        render_pass.set_pipeline(&r.pipeline);
-        render_pass.set_bind_group(0, &d.bind_group, &[]);
+        render_pass.set_pipeline(&r.blit);
+        render_pass.set_bind_group(0, &picture.bind_group, &[]);
         render_pass.draw(0..3, 0..1);
     }
 }
@@ -797,6 +1104,122 @@ mod tests {
 
     fn apply(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 3] {
         std::array::from_fn(|r| (0..4).map(|c| m[c][r] * v[c]).sum())
+    }
+
+    #[test]
+    fn bands_cover_every_row_once() {
+        for height in [1, BAND - 1, BAND, BAND + 1, 1280] {
+            let mut covered = 0;
+            let mut row = 0;
+            while let Some((top, rows)) = band(row, height) {
+                assert_eq!(top, covered);
+                covered += rows;
+                row += BAND;
+            }
+            assert_eq!(covered, height);
+        }
+    }
+
+    #[test]
+    fn the_picture_shader_is_valid() {
+        let module = naga::front::wgsl::parse_str(include_str!("blit.wgsl")).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::default(),
+        )
+        .validate(&module)
+        .unwrap();
+    }
+
+    /// A shader is otherwise compiled only when the 3D pane first opens, and
+    /// the block it reads must match the bytes sent to it.
+    #[test]
+    fn the_ray_marcher_is_valid_and_agrees_on_its_uniforms() {
+        let module = naga::front::wgsl::parse_str(include_str!("raymarch.wgsl")).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::default(),
+        )
+        .validate(&module)
+        .unwrap();
+        let span = module
+            .types
+            .iter()
+            .find_map(|(_, t)| match (&t.name, &t.inner) {
+                (Some(n), naga::TypeInner::Struct { span, .. }) if n == "Uniforms" => Some(*span),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(span as usize, std::mem::size_of::<Uniforms>());
+    }
+
+    /// The fault this guards against showed the patient's right on the wrong
+    /// side, from every angle, and a roughly symmetrical skull hid it.
+    #[test]
+    fn from_the_front_the_patients_right_is_on_the_left_of_the_view() {
+        let p = placement();
+        let cam = Camera::framing(&p);
+        assert_eq!(cam.forward(), [0.0, 1.0, 0.0], "rays go from the front to the back");
+        let c = p.centre();
+        let patients_right = [c[0] - 10.0, c[1], c[2]];
+        assert!(cam.project(patients_right, 1.0)[0] < 0.0);
+        let head = [c[0], c[1], c[2] + 10.0];
+        assert!(cam.project(head, 1.0)[1] > 0.0);
+    }
+
+    #[test]
+    fn every_side_is_a_true_view_and_not_a_mirror() {
+        let p = placement();
+        let want: [(Side, V3); 6] = [
+            (Side::Front, [0.0, 1.0, 0.0]),
+            (Side::Back, [0.0, -1.0, 0.0]),
+            (Side::Left, [-1.0, 0.0, 0.0]),
+            (Side::Right, [1.0, 0.0, 0.0]),
+            (Side::Top, [0.0, 0.0, -1.0]),
+            (Side::Bottom, [0.0, 0.0, 1.0]),
+        ];
+        for (side, forward) in want {
+            let mut cam = Camera::framing(&p);
+            cam.look_from(side, [1.0, 2.0, 3.0]);
+            assert_eq!(cam.forward(), forward, "{side:?}");
+            assert_eq!(cam.target, [1.0, 2.0, 3.0]);
+            // Towards the viewer is right cross up: a right-handed frame.
+            let back = cross(cam.right, cam.up);
+            assert!((0..3).all(|i| (back[i] + forward[i]).abs() < 1e-12), "{side:?}");
+        }
+    }
+
+    #[test]
+    fn a_drag_carries_the_near_surface_with_it() {
+        let p = placement();
+        let mut cam = Camera::framing(&p);
+        // A point on the side of the volume facing the viewer.
+        let f = cam.forward();
+        let near: V3 = std::array::from_fn(|i| cam.target[i] - f[i] * 20.0);
+        // As pane_3d does: a drag right and down, in points.
+        let (right, down) = (30.0, 20.0);
+        cam.orbit(-right * 0.008, 0.0);
+        assert!(cam.project(near, 1.0)[0] > 0.0, "it follows to the right");
+        let mut cam = Camera::framing(&p);
+        cam.orbit(0.0, -down * 0.008);
+        assert!(cam.project(near, 1.0)[1] < 0.0, "and down");
+    }
+
+    #[test]
+    fn a_turn_about_a_point_leaves_that_point_where_it_is() {
+        let p = placement();
+        let mut cam = Camera::framing(&p);
+        cam.slide(0.2, -0.1);
+        let pivot = [3.0, 25.0, 40.0];
+        let was = cam.project(pivot, 1.3);
+        for _ in 0..20 {
+            cam.orbit_about(pivot, 0.31, -0.17);
+        }
+        let now = cam.project(pivot, 1.3);
+        assert!(
+            (now[0] - was[0]).abs() < 1e-9 && (now[1] - was[1]).abs() < 1e-9,
+            "{was:?} {now:?}"
+        );
     }
 
     #[test]

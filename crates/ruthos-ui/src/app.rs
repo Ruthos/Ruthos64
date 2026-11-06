@@ -384,6 +384,7 @@ impl RuthosApp {
         ctx.show_viewport_immediate(
             id,
             ViewportBuilder::default()
+                .with_icon(crate::app_icon())
                 .with_title("Query/Retrieve \u{2014} Ruthos")
                 .with_inner_size([1040.0, 640.0])
                 .with_min_inner_size([720.0, 420.0]),
@@ -421,6 +422,7 @@ impl RuthosApp {
         ctx.show_viewport_immediate(
             id,
             ViewportBuilder::default()
+                .with_icon(crate::app_icon())
                 .with_title("Ruthos Preferences")
                 // Wide enough for the eight section buttons.
                 .with_inner_size([900.0, 560.0])
@@ -688,6 +690,7 @@ impl eframe::App for RuthosApp {
             ctx.show_viewport_deferred(
                 id,
                 ViewportBuilder::default()
+                    .with_icon(crate::app_icon())
                     .with_title(title)
                     .with_inner_size([1500.0, 640.0])
                     // Wide enough for the whole toolbar, cut buttons included.
@@ -721,6 +724,7 @@ impl eframe::App for RuthosApp {
             ctx.show_viewport_deferred(
                 id,
                 ViewportBuilder::default()
+                    .with_icon(crate::app_icon())
                     .with_title(title)
                     .with_inner_size([1200.0, 860.0])
                     .with_min_inner_size([700.0, 500.0]),
@@ -799,6 +803,7 @@ impl eframe::App for RuthosApp {
             ctx.show_viewport_deferred(
                 id,
                 ViewportBuilder::default()
+                    .with_icon(crate::app_icon())
                     .with_title(title)
                     .with_inner_size([760.0, 820.0])
                     .with_min_inner_size([560.0, 500.0]),

@@ -18,6 +18,9 @@ pub struct Settings {
     pub save_unrefined_masks: bool,
     /// Load the newest saved segments on opening MPR, without asking.
     pub load_newest_segments: bool,
+    /// The MPR tools on the left and right mouse buttons.
+    pub mpr_left_tool: String,
+    pub mpr_right_tool: String,
     /// Offer models whose terms limit them to research and other non-commercial use.
     pub research_mode: bool,
     /// Models whose terms the user has agreed to, by id, with the date.
@@ -351,6 +354,8 @@ impl Default for Settings {
             refine_band: 3,
             save_unrefined_masks: false,
             load_newest_segments: false,
+            mpr_left_tool: String::new(),
+            mpr_right_tool: String::new(),
             research_mode: false,
             research_agreed: Default::default(),
             ai_model: String::new(),

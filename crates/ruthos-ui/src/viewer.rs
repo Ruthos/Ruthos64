@@ -575,6 +575,9 @@ pub struct ViewerState {
 
     pub rois: HashMap<FrameKey, Vec<Roi>>,
     /// Frames whose stored ROIs have been read from the archive.
+    /// The slice scrolled to, shown as soon as it has been read.
+    scroll_target: Option<i64>,
+    scroll_direction: i64,
     rois_loaded: HashSet<FrameKey>,
     /// Frames whose ROIs changed and must be written back.
     dirty_rois: HashSet<FrameKey>,
@@ -807,7 +810,11 @@ struct CalibrateDraft {
     scope: Option<(f64, f64)>,
 }
 
-const FRAME_CACHE: usize = 24;
+const FRAME_CACHE: usize = 48;
+
+/// Slices read in the direction of scrolling, and behind it.
+const READ_AHEAD: usize = 12;
+const READ_BEHIND: usize = 3;
 
 /// Size of the lock control in a cell's bottom-right corner.
 const LOCK_CHIP: Vec2 = Vec2::new(40.0, 18.0);
@@ -858,6 +865,8 @@ impl ViewerState {
             annotations,
             bilinear: true,
             rois: HashMap::new(),
+            scroll_target: None,
+            scroll_direction: 1,
             rois_loaded: HashSet::new(),
             dirty_rois: HashSet::new(),
             label_hits: Vec::new(),
@@ -1226,6 +1235,22 @@ impl ViewerState {
             }
         }
         let n = p.images.len() as i64;
+        // Through a stack the view stays on a slice until the next is ready, so
+        // the picture, its slice number and its measurements always agree.
+        if !self.playing && frames == 1 {
+            let from = self
+                .scroll_target
+                .and_then(|id| p.images.iter().position(|i| i.id == id))
+                .unwrap_or(idx);
+            let next = &p.images[(from as i64 + delta).rem_euclid(n) as usize];
+            if next.number_of_frames <= 1 {
+                self.scroll_target = Some(next.id);
+                self.scroll_direction = delta.signum();
+                self.selected_roi = None;
+                return;
+            }
+        }
+        self.scroll_target = None;
         let next = (idx as i64 + delta).rem_euclid(n);
         p.image_idx = next as usize;
         p.frame_idx = if delta < 0 {
@@ -3163,11 +3188,28 @@ impl ViewerState {
 
     // ------------------------------------------------------------ caches
 
+    /// Move to the slice scrolled to, once it is there.
+    fn settle_scroll(&mut self) {
+        let Some(id) = self.scroll_target else { return };
+        let ready = self.frames.contains_key(&FrameKey { image_id: id, frame: 0 });
+        let p = &mut self.panes[self.active];
+        match p.images.iter().position(|i| i.id == id) {
+            Some(at) if ready => {
+                p.image_idx = at;
+                p.frame_idx = 0;
+                self.scroll_target = None;
+            }
+            Some(_) => {}
+            None => self.scroll_target = None,
+        }
+    }
+
     fn pump_loader(&mut self, shared: &Shared) {
         for notice in shared.loader.take_notices() {
             self.set_status(notice);
         }
-        for loaded in shared.loader.poll() {
+        let mine: HashSet<i64> = self.panes.iter().flat_map(|p| p.images.iter().map(|i| i.id)).collect();
+        for loaded in shared.loader.poll_for(&|id| mine.contains(&id)) {
             match loaded.result {
                 Ok(frame) => {
                     // A user calibration overrides whatever the header says.
@@ -3185,13 +3227,30 @@ impl ViewerState {
                     self.frames.insert(loaded.key, frame);
                     self.frame_order.push_back(loaded.key);
                     let (frame_cache, _) = self.cache_limits();
-                    while self.frame_order.len() > frame_cache {
-                        if let Some(old) = self.frame_order.pop_front() {
+                    let shown: HashSet<FrameKey> = self.panes.iter().filter_map(|p| p.key()).collect();
+                    // Oldest first, but never what is on screen.
+                    for _ in 0..self.frame_order.len() {
+                        if self.frame_order.len() <= frame_cache {
+                            break;
+                        }
+                        let Some(old) = self.frame_order.pop_front() else { break };
+                        if shown.contains(&old) {
+                            self.frame_order.push_back(old);
+                        } else {
                             self.frames.remove(&old);
                         }
                     }
                 }
                 Err(e) => {
+                    // A slice that cannot be read is still shown, as the error.
+                    if self.scroll_target == Some(loaded.key.image_id) {
+                        self.scroll_target = None;
+                        let p = &mut self.panes[self.active];
+                        if let Some(at) = p.images.iter().position(|i| i.id == loaded.key.image_id) {
+                            p.image_idx = at;
+                            p.frame_idx = 0;
+                        }
+                    }
                     for p in &mut self.panes {
                         if p.key() == Some(loaded.key) {
                             p.load_error = Some(e.clone());
@@ -3223,6 +3282,20 @@ impl ViewerState {
             } else {
                 shared.loader.request(key, shared.resolve(&img.path));
             }
+        }
+    }
+
+    /// Queue a slice of a stack that scrolling may reach.
+    fn read_ahead(&self, shared: &Shared, images: &[ImageRow], idx: usize) {
+        let Some(img) = images.get(idx).filter(|i| i.number_of_frames <= 1) else {
+            return;
+        };
+        let key = FrameKey {
+            image_id: img.id,
+            frame: 0,
+        };
+        if !self.frames.contains_key(&key) {
+            shared.loader.request_ahead(key, shared.resolve(&img.path));
         }
     }
 
@@ -3389,6 +3462,7 @@ impl ViewerState {
             self.close_requested = true;
         }
         self.pump_loader(shared);
+        self.settle_scroll();
         self.session_sync(ui, shared);
         self.tick_cine(ui);
         if !self.session.following {
@@ -3846,6 +3920,7 @@ impl ViewerState {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 let clut_caption = crate::widgets::truncate(&self.panes[self.active].clut, 12);
+                let mut picked = None;
                 ui.menu_button(
                     (
                         icons::rich(icons::CLUT, 16.0),
@@ -3853,17 +3928,34 @@ impl ViewerState {
                         icons::rich(icons::CARET_DOWN, 11.0),
                     ),
                     |ui| {
-                        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                            for name in shared.cluts.names() {
-                                if menu_item(ui, name, self.panes[self.active].clut == name).clicked() {
-                                    self.panes[self.active].clut = name.to_string();
-                                    ui.close();
-                                }
-                            }
-                        });
+                        let modality = self.current_series().modality.clone();
+                        picked = crate::clut_menu::show(ui, &shared.cluts, &self.panes[self.active].clut, &modality);
                     },
                 );
                 toolbar_caption(ui, &clut_caption);
+                match picked {
+                    Some(crate::clut_menu::Pick::ImageDefault) => {
+                        self.panes[self.active].clut = ruthos_dicom::Clut::grayscale().name;
+                        self.apply_default_window(shared, false);
+                    }
+                    Some(crate::clut_menu::Pick::Table { name, window }) => {
+                        self.panes[self.active].clut = name;
+                        if let Some((c, w)) = window {
+                            self.panes[self.active].view.window_center = c;
+                            self.panes[self.active].view.window_width = w;
+                        }
+                    }
+                    None => {}
+                }
+                let pane = &mut self.panes[self.active];
+                let clut = shared.cluts.get(&pane.clut);
+                let window = (pane.view.window_center, pane.view.window_width);
+                if crate::clut_menu::moved_warning(ui, clut, window) {
+                    if let Some((c, w)) = clut.and_then(|c| c.window()) {
+                        pane.view.window_center = c;
+                        pane.view.window_width = w;
+                    }
+                }
             });
 
             let mpr_ok = crate::mpr::series_suits_mpr(&self.panes[self.active].images);
@@ -4754,9 +4846,31 @@ impl ViewerState {
                     if p.images.len() == 1 {
                         self.ensure_requested(shared, &p.images, 0, next as u32);
                         self.ensure_requested(shared, &p.images, 0, prev as u32);
-                    } else {
+                    } else if self.tiled_series() {
                         self.ensure_requested(shared, &p.images, next, 0);
                         self.ensure_requested(shared, &p.images, prev, 0);
+                    } else {
+                        // The slice scrolled to first, then outwards from it,
+                        // mostly the way the wheel is going.
+                        let at = self
+                            .scroll_target
+                            .and_then(|id| p.images.iter().position(|i| i.id == id))
+                            .unwrap_or(p.image_idx);
+                        self.ensure_requested(shared, &p.images, at, 0);
+                        let forward = self.scroll_direction >= 0;
+                        let along = |by: usize, ahead: bool| {
+                            if ahead == forward {
+                                (at + by) % n
+                            } else {
+                                (at + n - by % n) % n
+                            }
+                        };
+                        for by in 1..=READ_AHEAD {
+                            self.read_ahead(shared, &p.images, along(by, true));
+                            if by <= READ_BEHIND {
+                                self.read_ahead(shared, &p.images, along(by, false));
+                            }
+                        }
                     }
                     // Playing a stack: half a second of images ahead.
                     if self.playing && p.images.len() > 1 && p.image().is_some_and(|i| i.number_of_frames <= 1) {
@@ -4828,10 +4942,11 @@ impl ViewerState {
             self.handle_input(ui, &response, &mut transform, &frame, &key);
             self.panes[k].view = transform.state;
             // Input may have scrolled this cell to another image (or past the
-            // end of a tiled series); finish painting on the next frame.
-            if self.panes[k].key() != Some(key) {
+            // end of a tiled series). This frame still paints the image it
+            // began with: stopping here would leave the cell black for a frame,
+            // which flickers on every step of the wheel.
+            if self.panes[k].key() != Some(key) || self.scroll_target.is_some() {
                 ui.ctx().request_repaint();
-                return;
             }
         }
         let transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.panes[k].view);

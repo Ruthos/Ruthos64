@@ -16,3 +16,6 @@ bytemuck = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 ruthos-dicom = { workspace = true }
+
+[dev-dependencies]
+naga = { version = "30", features = ["wgsl-in"] }

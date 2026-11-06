@@ -13,16 +13,36 @@ device and is not for diagnostic use.
 ## The 3D pane
 
 Click **3D** in the MPR toolbar; it takes the fourth pane of the 2×2 layout.
-**3D: Rotate** chooses what the left button does: Rotate, Window, Move or Zoom.
-The middle button always moves and the right always zooms. The presets menu
-beside it holds the presets and the Shaded, MIP and MinIP modes.
+The **Tool** menu works here too. WL/WW, Move and Zoom do the same as on a slice,
+and any other tool, such as Crosshair or a measuring tool, turns the view, so it
+turns without changing tool. The right button follows its own tool in the same way,
+and the middle button always moves. **Reset** takes every pane back, 3D included,
+and leaves cuts alone.
+
+The **3D** menu holds how the picture looks: the presets, Shaded, MIP and MinIP,
+looking from the front, back, left, right, top or bottom, and turning by 90 degrees.
+Left and right are the patient's, and up is towards the head, as the scanner
+recorded them, so check them against a series positioned another way. **Close 3D**
+is at the foot.
+
+The view turns around the middle of the volume, or of the box while a box is
+cutting it. To turn around something else, choose **Click to set** under Rotation
+centre and click it. A cross marks the point, and **Use the middle of the volume**
+goes back.
 
 ## Cutting
 
-Cutting builds a shape first and removes nothing until you press a button.
+**Cuts** holds the standard cuts: a half, quarter or eighth of the patient, named
+for the part that stays. Each is a box with a dot on every face: drag a dot and the
+view follows as you drag. Nothing is lost, and **No cut** shows everything again.
+**Remove this part instead** hides what the box holds, which opens up the inside.
 
-- **Cut box:** drag the handles to size a box, turning the view to check it, then
-  press **Cut inside** or **Cut outside**. The box stays for the next cut.
+**Cut by hand**, in the same menu, gives the left button a job until you pick a
+tool or press Esc:
+
+- **Cut box:** as above, starting from the whole volume. **Cut inside** or **Cut
+  outside** make the cut permanent, until you undo it. The box stays for the next
+  cut.
 - **Cut path:** click points or drag to draw, drag a point to move it, then cut
   straight through the depth, from the view the path was started in.
 - **Remove piece:** click something, such as the table, and everything connected
@@ -46,15 +66,16 @@ Click **Segments** in the toolbar.
 | Fill holes | Fills enclosed spaces |
 | Fill slice gaps | Fills voxels missing from one slice but present either side |
 
-Each segment lists its volume, voxel count and value statistics. **What it is**
-sets the code other programs read (bone, tooth, soft tissue, mass, fluid or other
+Each segment lists its volume, voxel count and value statistics. Click its colour
+square to change the colour, by RGB, HSL or a hex code. **What it is**
+sets the code stored with it (bone, tooth, soft tissue, mass, fluid or other
 tissue); the name you give a segment is always kept beside it.
 
 ## Saving segments
 
 **Save segments to study** writes every segment on the panel as a DICOM
 Segmentation object, a new series in the same study that refers to the series it
-was drawn on. 3D Slicer, OHIF and the main PACS products read this format. Only
+was drawn on. Opening these in other viewers has not been confirmed. Only
 slices holding part of a segment are written, so one small structure in a large
 CT makes a small file.
 
@@ -62,9 +83,8 @@ Saving again adds a new version to the same series. Earlier versions remain, and
 the newest is what opens. Closing MPR with unsaved changes asks whether to save.
 
 Opening MPR on a series with saved segments offers to load the newest, or loads it
-without asking if you choose that in Preferences, under Viewer. A segmentation made
-by another program loads the same way, and an unfamiliar code keeps its label and
-colour. It is refused, with the reason, if its frames do not line up with this
+without asking if you choose that in Preferences, under Viewer. An unfamiliar code
+keeps its label and colour. A segmentation is refused, with the reason, if its frames do not line up with this
 series: Ruthos never resamples a segment, because one moved without saying so is
 worse than none. Binary segmentations only: one holding probabilities, or one
 compressed with RLE, is refused for now. An enhanced multi-frame source series

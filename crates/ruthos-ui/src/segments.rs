@@ -668,6 +668,7 @@ impl SegmentPanel {
         let mut touched = false;
         // Showing or hiding is not a change to what would be saved.
         let mut looked = false;
+        let mut recoloured = false;
         let voxel_ml = seg.grid.voxel_mm3() / 1000.0;
         let rows: Vec<Row> = seg
             .segments
@@ -701,9 +702,27 @@ impl SegmentPanel {
                         }
                         looked = true;
                     }
-                    let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                    let (rect, swatch) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
                     ui.painter()
                         .rect_filled(rect, 2.0, Color32::from_rgb(colour[0], colour[1], colour[2]));
+                    let swatch = swatch.on_hover_text("Change this segment's colour");
+                    let mut picked = colour;
+                    egui::Popup::from_toggle_button_response(&swatch)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            ui.set_min_width(230.0);
+                            crate::colour_pick::editor(ui, swatch.id, &mut picked);
+                        });
+                    if picked != colour {
+                        if let Some(s) = self
+                            .seg
+                            .as_mut()
+                            .and_then(|g| g.segments.iter_mut().find(|s| s.label == label))
+                        {
+                            s.colour = picked;
+                        }
+                        recoloured = true;
+                    }
                     if ui.selectable_label(self.active == Some(label), name).clicked() {
                         self.active = Some(label);
                     }
@@ -775,7 +794,7 @@ impl SegmentPanel {
             }
             touched = true;
         }
-        if touched {
+        if touched || recoloured {
             self.changed(volume);
         } else if looked {
             let was = self.dirty;

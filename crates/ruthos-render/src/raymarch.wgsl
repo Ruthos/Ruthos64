@@ -12,6 +12,10 @@ struct Uniforms {
     dims: vec4<f32>,
     // Millimetres per voxel along each axis.
     spacing: vec4<f32>,
+    // A box in texture coordinates. clip_low.w: 0 none, 1 keep what is inside
+    // it, 2 remove what is inside it.
+    clip_low: vec4<f32>,
+    clip_high: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -90,10 +94,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let start = (u.m * vec4<f32>(in.ndc, 0.0, 1.0)).xyz;
     let dir = (u.m * vec4<f32>(0.0, 0.0, 1.0, 0.0)).xyz;
 
-    // Where the ray enters and leaves the unit cube, in millimetres of depth.
+    // Where the ray enters and leaves what can be seen, in millimetres of depth:
+    // the unit cube, or a box kept inside it.
+    let keep = u.clip_low.w > 0.5 && u.clip_low.w < 1.5;
+    let remove = u.clip_low.w > 1.5;
+    let box_low = select(vec3<f32>(0.0), u.clip_low.xyz, keep);
+    let box_high = select(vec3<f32>(1.0), u.clip_high.xyz, keep);
     let inv = 1.0 / dir;
-    let t0 = (vec3<f32>(0.0) - start) * inv;
-    let t1 = (vec3<f32>(1.0) - start) * inv;
+    let t0 = (box_low - start) * inv;
+    let t1 = (box_high - start) * inv;
     let near = min(t0, t1);
     let far = max(t0, t1);
     let enter = max(max(near.x, near.y), near.z);
@@ -124,6 +133,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
         let p = start + dir * (enter + (f32(i) + jitter) * step);
         i += 1u;
+        if (remove && all(p >= u.clip_low.xyz) && all(p <= u.clip_high.xyz)) {
+            continue;
+        }
+        // Most of a ray is air. Looking up segments costs far more than this,
+        // so it waits until there is something to show.
+        let v = value_at(p);
+        var c = vec4<f32>(0.0);
+        if (mode < 0.5) {
+            c = textureSampleLevel(transfer, linear, vec2<f32>(v, 0.5), 0.0);
+            if (c.a <= 0.002) {
+                continue;
+            }
+        }
         var tint = Tint(vec3<f32>(0.0), 0.0, 1.0);
         if (use_segments) {
             tint = segment_at(p);
@@ -131,17 +153,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 continue;
             }
         }
-        let v = value_at(p);
         if (mode > 0.5) {
             if (mode < 1.5) {
                 best = max(best, v);
             } else {
                 best = min(best, v);
             }
-            continue;
-        }
-        var c = textureSampleLevel(transfer, linear, vec2<f32>(v, 0.5), 0.0);
-        if (c.a <= 0.002) {
             continue;
         }
         if (use_segments) {
