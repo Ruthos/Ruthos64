@@ -23,6 +23,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 crossbeam-channel = { workspace = true }
+url = { workspace = true }
 parking_lot = { workspace = true }
 image = { workspace = true }
 ruthos-core = { workspace = true }

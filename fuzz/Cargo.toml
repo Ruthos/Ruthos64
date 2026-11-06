@@ -17,6 +17,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 serde_json = "1"
 ruthos-dicom = { path = "../crates/ruthos-dicom" }
+ruthos-net = { path = "../crates/ruthos-net" }
 ruthos-core = { path = "../crates/ruthos-core" }
 ruthos-session = { path = "../crates/ruthos-session" }
 chrono = "0.4"
@@ -35,6 +36,13 @@ openjpeg-sys = { path = "../vendor/openjpeg-sys" }
 
 [profile.release]
 debug = 1
+
+[[bin]]
+name = "multipart"
+path = "fuzz_targets/multipart.rs"
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "dicomdir"

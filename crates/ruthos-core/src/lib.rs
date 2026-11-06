@@ -5,6 +5,7 @@
 //! Nothing in here knows about windows or pixels on screen.
 
 pub mod catalogue;
+pub mod credentials;
 pub mod db;
 pub mod horos;
 pub mod import;

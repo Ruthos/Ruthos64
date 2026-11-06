@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use ruthos_core::routing::assign;
 use ruthos_net::{NetError, SendOutcome};
 
-use crate::pacs::{me, node, problem, Task};
+use crate::pacs::{me, problem, Task};
 use crate::shared::Shared;
 
 /// How long a study must be quiet before its images are sent.
@@ -143,11 +143,11 @@ impl Router {
                 );
                 continue;
             };
-            let target = node(n);
+            let target = n.clone();
             let ae = settings.listener_ae_title.clone();
             let files = batch.files.clone();
             let task = Task::spawn(ctx, "ruthos-route", move || {
-                ruthos_net::send_files(&target, &ae, &files, &|_, _| {}, &AtomicBool::new(false))
+                crate::pacs::send(&target, &ae, &files, false, &|_, _| {}, &AtomicBool::new(false))
             });
             self.running.push(Running { key, batch, task });
         }

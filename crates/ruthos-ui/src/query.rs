@@ -94,6 +94,15 @@ enum Line {
     Note(usize),
 }
 
+/// A node's name in the list, marked with its protocol.
+fn node_label(n: &ruthos_core::settings::PacsNode) -> String {
+    if n.is_web() {
+        format!("{} (DICOMweb)", n.name)
+    } else {
+        n.name.clone()
+    }
+}
+
 /// The key of a retrieval: the study, or the study and one series.
 fn job_key(study: &str, series: Option<&str>) -> String {
     match series {
@@ -117,6 +126,8 @@ pub struct QueryState {
     date: DateRange,
     modality: &'static str,
     search: Option<(SearchTask, Arc<AtomicBool>)>,
+    /// A DICOMweb search had more results than can be shown.
+    narrow: Arc<AtomicBool>,
     results: Vec<StudyResult>,
     searched: bool,
     error: Option<Problem>,
@@ -146,6 +157,7 @@ impl QueryState {
             date: DateRange::Any,
             modality: "",
             search: None,
+            narrow: Arc::default(),
             results: Vec::new(),
             searched: false,
             error: None,
@@ -176,16 +188,17 @@ impl QueryState {
             accession: self.accession.trim().to_string(),
             study_date: self.date.dicom(),
             modality: self.modality.to_string(),
-            study_uid: String::new(),
+            ..StudyQuery::default()
         };
         let ae = settings.listener_ae_title.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let c2 = cancel.clone();
-        let target = node(&n);
         self.error = None;
+        let narrow = self.narrow.clone();
+        narrow.store(false, std::sync::atomic::Ordering::Relaxed);
         self.search = Some((
             Task::spawn(ctx, "ruthos-find", move || {
-                ruthos_net::find_studies(&target, &ae, &q, &c2)
+                crate::pacs::search(&n, &ae, &q, &c2, &narrow)
             }),
             cancel,
         ));
@@ -217,6 +230,7 @@ impl QueryState {
         let cancel = Arc::new(AtomicBool::new(false));
         let (p2, c2, ctx2) = (progress.clone(), cancel.clone(), ctx.clone());
         let target = node(&n);
+        let db = shared.db.clone();
         let ae = settings.listener_ae_title.clone();
         let out = shared.paths.incoming_dir();
         let study = study_uid.to_string();
@@ -226,6 +240,9 @@ impl QueryState {
                 *p2.lock() = p;
                 ctx2.request_repaint();
             };
+            if n.is_web() {
+                return crate::pacs::web_retrieve(&n, &db, &study, series.as_deref(), &out, &report, &c2);
+            }
             match &series {
                 Some(se) => ruthos_net::retrieve_series(&target, &ae, &study, se, method, &out, &report, &c2),
                 None => ruthos_net::retrieve_study(&target, &ae, &study, method, &out, &report, &c2),
@@ -244,11 +261,10 @@ impl QueryState {
                 let Some(n) = settings.pacs_nodes.get(self.node).cloned() else {
                     return;
                 };
-                let target = node(&n);
                 let ae = settings.listener_ae_title.clone();
                 let uid = study_uid.to_string();
                 let task = Task::spawn(ctx, "ruthos-find-series", move || {
-                    ruthos_net::find_series(&target, &ae, &uid, &AtomicBool::new(false))
+                    crate::pacs::series_of(&n, &ae, &uid, &AtomicBool::new(false))
                 });
                 self.series.insert(study_uid.to_string(), SeriesState::Loading(task));
             }
@@ -268,6 +284,13 @@ impl QueryState {
                     Ok(results) => {
                         self.selected.retain(|u| results.iter().any(|s| &s.study_uid == u));
                         self.results = results;
+                        if self.narrow.load(std::sync::atomic::Ordering::Relaxed) {
+                            self.error = Some(Problem {
+                                summary: "Only the first 1,000 results are shown.".into(),
+                                fix: "Narrow the search to see the rest.".into(),
+                                technical: "stopped at the result limit".into(),
+                            });
+                        }
                         self.local_checked = None;
                         self.expanded.clear();
                         self.series.clear();
@@ -415,11 +438,11 @@ impl QueryState {
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Search");
                     egui::ComboBox::from_id_salt("query-node")
-                        .selected_text(settings.pacs_nodes[self.node].name.clone())
+                        .selected_text(node_label(&settings.pacs_nodes[self.node]))
                         .width(170.0)
                         .show_ui(ui, |ui| {
                             for (i, n) in settings.pacs_nodes.iter().enumerate() {
-                                ui.selectable_value(&mut self.node, i, n.name.clone());
+                                ui.selectable_value(&mut self.node, i, node_label(n));
                             }
                         });
                     let r = ui.add(

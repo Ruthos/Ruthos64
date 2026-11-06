@@ -5,6 +5,7 @@
 //! retrieve (C-GET or C-MOVE) and send (C-STORE). Failures are classified
 //! in `error` so the interface can say what went wrong in plain words.
 
+pub mod dicomweb;
 pub mod dimse;
 pub mod error;
 pub mod scp;

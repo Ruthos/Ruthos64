@@ -106,6 +106,11 @@ pub struct StudyQuery {
     pub modality: String,
     /// Search a specific study (to refresh one row).
     pub study_uid: String,
+    /// Sent only to DICOMweb nodes, and only when filled.
+    pub description: String,
+    pub species: String,
+    pub breed: String,
+    pub responsible: String,
 }
 
 /// One study as the PACS describes it.
@@ -361,6 +366,8 @@ pub enum RetrieveMethod {
     Get,
     /// The PACS opens its own connection to Ruthos's listener.
     Move,
+    /// WADO-RS over HTTPS.
+    Web,
 }
 
 /// Progress of a retrieval, from the PACS's sub-operation counts.
@@ -473,6 +480,7 @@ fn retrieve_with(
     match method {
         RetrieveMethod::Get => get_study(node, me_ae, identifier, out_dir, progress, cancel),
         RetrieveMethod::Move => move_study(node, me_ae, identifier, progress, cancel),
+        RetrieveMethod::Web => Err(NetError::NotSupported("DICOMweb on a classic node")),
         RetrieveMethod::Auto => match get_study(node, me_ae, identifier, out_dir, progress, cancel) {
             Err(NetError::NotSupported(_)) | Err(NetError::Status(0xA900..=0xA9FF)) => {
                 tracing::info!("{} does not offer C-GET; retrieving with C-MOVE", node.ae_title);
@@ -659,6 +667,8 @@ fn move_study(
 pub struct SendOutcome {
     pub sent: usize,
     pub failed: Vec<(PathBuf, String)>,
+    /// Stored, with a warning from the server.
+    pub warned: Vec<(PathBuf, String)>,
 }
 
 fn is_uncompressed(ts: &str) -> bool {

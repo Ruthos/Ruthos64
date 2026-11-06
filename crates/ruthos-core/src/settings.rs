@@ -235,6 +235,44 @@ pub struct PacsNode {
     pub ae_title: String,
     /// `auto` (C-GET, then C-MOVE), `get` or `move`.
     pub retrieve: String,
+    /// Names this node's secrets, so a new name does not lose them.
+    pub id: String,
+    /// `dicom` or `dicomweb`.
+    pub protocol: String,
+    /// The DICOMweb service root.
+    pub base_url: String,
+    /// For servers that split their service roots. Empty uses the base address.
+    pub qido_url: String,
+    pub wado_url: String,
+    pub stow_url: String,
+    /// `oidc`, `access`, `service`, `basic` or `none`. There is no default: the
+    /// person chooses when adding the node.
+    pub sign_in: String,
+    pub oidc_issuer: String,
+    pub oidc_client_id: String,
+    pub oidc_scopes: String,
+    /// The Access application's audience tag.
+    pub access_audience: String,
+    pub service_client_id: String,
+    pub basic_user: String,
+    /// SHA-256 of a self-signed gateway's public key.
+    pub pin: String,
+    /// `*`, `explicit` or `jpeg2000`.
+    pub transfer: String,
+    /// QIDO page size.
+    pub page_size: u32,
+    /// Found by the connection test.
+    pub include_all: Option<bool>,
+    /// Series retrieved at once, one to eight.
+    pub parallel: u32,
+    /// Only teaching copies may be sent here.
+    pub teaching_node: bool,
+}
+
+impl PacsNode {
+    pub fn is_web(&self) -> bool {
+        self.protocol == "dicomweb"
+    }
 }
 
 impl Default for PacsNode {
@@ -245,6 +283,25 @@ impl Default for PacsNode {
             port: 104,
             ae_title: String::new(),
             retrieve: "auto".into(),
+            id: uuid::Uuid::new_v4().simple().to_string(),
+            protocol: "dicom".into(),
+            base_url: String::new(),
+            qido_url: String::new(),
+            wado_url: String::new(),
+            stow_url: String::new(),
+            sign_in: String::new(),
+            oidc_issuer: String::new(),
+            oidc_client_id: String::new(),
+            oidc_scopes: String::new(),
+            access_audience: String::new(),
+            service_client_id: String::new(),
+            basic_user: String::new(),
+            pin: String::new(),
+            transfer: "*".into(),
+            page_size: 100,
+            include_all: None,
+            parallel: 4,
+            teaching_node: false,
         }
     }
 }

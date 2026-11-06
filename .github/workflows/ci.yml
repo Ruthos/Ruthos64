@@ -53,6 +53,40 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  orthanc:
+    name: DICOMweb against Orthanc
+    runs-on: ubuntu-latest
+    services:
+      orthanc:
+        image: orthancteam/orthanc:26.9.1
+        env:
+          DICOM_WEB_PLUGIN_ENABLED: "true"
+          ORTHANC__AUTHENTICATION_ENABLED: "true"
+          ORTHANC__REGISTERED_USERS: '{"orthanc": "orthanc"}'
+          ORTHANC__DICOM_ALWAYS_ALLOW_FIND: "true"
+        ports:
+          - 8042:8042
+          - 4242:4242
+        options: >-
+          --health-cmd "curl -fsS -u orthanc:orthanc http://localhost:8042/system"
+          --health-interval 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries for winit, wgpu and the file dialogs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake nasm libgtk-3-dev libxkbcommon-dev libwayland-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-dev libxi-dev libxrandr-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p ruthos-net --test orthanc -- --nocapture
+        env:
+          RUTHOS_ORTHANC_WEB: http://localhost:8042/dicom-web
+          RUTHOS_ORTHANC_DIMSE: localhost:4242:ORTHANC
+
   windows:
     name: Windows (test)
     runs-on: windows-latest

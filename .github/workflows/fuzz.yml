@@ -89,7 +89,7 @@ jobs:
           SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && '1800' || inputs.seconds || '60' }}
         run: |
           failed=""
-          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar profile_and_link dicomdir; do
+          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar profile_and_link dicomdir multipart; do
             dict=""
             case $t in
               open_file|decode_frame|anonymise) dict="-dict=dict/dicom.dict" ;;
@@ -135,7 +135,7 @@ jobs:
         run: |
           set -e
           cd fuzz
-          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar profile_and_link dicomdir; do
+          for t in open_file decode_frame jpeg_codestream guard_headers anonymise sidecar profile_and_link dicomdir multipart; do
             mkdir -p /tmp/min/$t
             cargo fuzz run -O $t /tmp/min/$t corpus/$t -- -merge=1 || true
           done

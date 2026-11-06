@@ -110,3 +110,5 @@ cargo run -p ruthos-net --example pacs_check -- 127.0.0.1 11120 QRSCP testdata/p
 
 It echoes, sends the folder's images, searches, retrieves by C-GET and
 C-MOVE, and prints the explanations for an unknown host and a closed port.
+
+For a server reached over HTTPS rather than the practice network, see [DICOMweb](dicomweb.md).

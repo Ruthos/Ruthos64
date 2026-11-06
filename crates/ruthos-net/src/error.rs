@@ -35,6 +35,20 @@ pub enum NetError {
     Status(u16),
     #[error("cancelled")]
     Cancelled,
+    #[error("sign-in is needed")]
+    SignInNeeded,
+    #[error("signed in, but not permitted to see this")]
+    NotPermitted,
+    #[error("the certificate could not be trusted: {0}")]
+    Certificate(String),
+    #[error("this is not a DICOMweb server: {0}")]
+    NotDicomWeb(String),
+    #[error("a redirect to {0} was refused")]
+    RedirectRefused(String),
+    #[error("stopped: {0}")]
+    TooLarge(String),
+    #[error("{0}")]
+    Insecure(String),
     #[error("{0}")]
     Other(String),
 }
@@ -192,6 +206,31 @@ pub fn explain(e: &NetError, node: &Node, me: &Me) -> Problem {
             "Try again; if it keeps happening, the PACS's own log will say more.".to_string(),
         ),
         NetError::Cancelled => ("Cancelled.".to_string(), String::new()),
+        NetError::SignInNeeded => (
+            format!("You need to sign in to {host}."),
+            "Use Sign in beside this node under Preferences > PACS.".to_string(),
+        ),
+        NetError::NotPermitted => (
+            "You're signed in, but not permitted to see this.".to_string(),
+            "This isn't a connection problem. Ask whoever runs the server for access to these studies.".to_string(),
+        ),
+        NetError::Certificate(_) => (
+            format!("Ruthos can't trust the certificate from {host}."),
+            "If this server uses its own certificate, ask for its public key pin and add it to this node. Otherwise it may not be the server you think it is.".to_string(),
+        ),
+        NetError::NotDicomWeb(why) => (
+            format!("{host} answered, but not as a DICOMweb server ({why})."),
+            "Check the base address, which usually ends in /dicom-web.".to_string(),
+        ),
+        NetError::RedirectRefused(to) => (
+            format!("{host} tried to send Ruthos to another address ({to}), and it was refused."),
+            "Ruthos only follows redirects on the same server, so that a sign-in can't be sent elsewhere. Check the base address.".to_string(),
+        ),
+        NetError::TooLarge(what) => (
+            format!("The server sent too much, so Ruthos stopped ({what})."),
+            "Anything already received has been kept. Narrow the search, or retrieve one series at a time.".to_string(),
+        ),
+        NetError::Insecure(why) => (format!("This address can't be used: {why}."), String::new()),
         NetError::Other(text) => (format!("Something went wrong: {text}."), "Try again, and check ruthos.log for details.".to_string()),
     };
     Problem {

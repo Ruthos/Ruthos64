@@ -42,6 +42,14 @@ pub struct PrefsState {
     watch_message: Option<String>,
     pacs_tests: std::collections::HashMap<usize, crate::pacs::Task<Result<std::time::Duration, ruthos_net::NetError>>>,
     pacs_results: std::collections::HashMap<usize, Result<std::time::Duration, ruthos_net::NetError>>,
+    /// DICOMweb connection tests, step by step.
+    web_tests: std::collections::HashMap<usize, crate::pacs::Task<WebTest>>,
+    web_results: std::collections::HashMap<usize, WebTest>,
+    /// A browser sign-in in progress, and how the last one ended.
+    web_sign_ins: std::collections::HashMap<usize, crate::pacs::Task<Result<(), ruthos_net::NetError>>>,
+    web_sign_in_notes: std::collections::HashMap<usize, String>,
+    /// A password or token secret being typed. Never kept in the draft.
+    web_secret: String,
     pub close_requested: bool,
     /// The dial settings when the window opened. Dial changes apply at
     /// once, so the user can turn the dial and compare; closing without
@@ -52,7 +60,18 @@ pub struct PrefsState {
     note: Option<String>,
 }
 
+type WebTest = Result<(Vec<ruthos_net::dicomweb::TestStep>, Option<bool>), ruthos_net::NetError>;
+
 impl PrefsState {
+    fn start_web_test(&mut self, ui: &Ui, i: usize) {
+        let n = self.draft.pacs_nodes[i].clone();
+        self.web_results.remove(&i);
+        self.web_tests.insert(
+            i,
+            crate::pacs::Task::spawn(ui.ctx(), "ruthos-web-test", move || crate::pacs::web_test(&n)),
+        );
+    }
+
     pub fn new(shared: &Shared) -> Self {
         let draft = shared.settings.lock().clone();
         // Developer option: `RUTHOS_OPEN_PREFS=listener|pacs|viewer|measurements`;
@@ -78,6 +97,11 @@ impl PrefsState {
             watch_message: None,
             pacs_tests: Default::default(),
             pacs_results: Default::default(),
+            web_tests: Default::default(),
+            web_results: Default::default(),
+            web_sign_ins: Default::default(),
+            web_sign_in_notes: Default::default(),
+            web_secret: String::new(),
             close_requested: false,
             dial_original: shared.settings.lock().dial.clone(),
             saved: None,
@@ -342,6 +366,27 @@ impl PrefsState {
                 self.pacs_results.insert(i, r);
             }
         }
+        let done: Vec<usize> = self.web_tests.keys().copied().collect();
+        for i in done {
+            if let Some(r) = self.web_tests.get(&i).and_then(|t| t.take()) {
+                self.web_tests.remove(&i);
+                if let (Ok((_, Some(found))), Some(n)) = (&r, self.draft.pacs_nodes.get_mut(i)) {
+                    n.include_all = Some(*found);
+                }
+                self.web_results.insert(i, r);
+            }
+        }
+        let done: Vec<usize> = self.web_sign_ins.keys().copied().collect();
+        for i in done {
+            if let Some(r) = self.web_sign_ins.get(&i).and_then(|t| t.take()) {
+                self.web_sign_ins.remove(&i);
+                let note = match r {
+                    Ok(()) => "Signed in.".to_string(),
+                    Err(e) => format!("Sign-in failed: {e}."),
+                };
+                self.web_sign_in_notes.insert(i, note);
+            }
+        }
         if self.draft.pacs_nodes.is_empty() {
             Self::hint(
                 ui,
@@ -358,9 +403,13 @@ impl PrefsState {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&n.name).strong());
                         ui.label(
-                            RichText::new(format!("{}:{}  \u{b7}  AE title {}", n.host, n.port, n.ae_title))
-                                .size(12.0)
-                                .color(Color32::from_gray(110)),
+                            RichText::new(if n.is_web() {
+                                format!("{}  \u{b7}  DICOMweb", n.base_url)
+                            } else {
+                                format!("{}:{}  \u{b7}  AE title {}", n.host, n.port, n.ae_title)
+                            })
+                            .size(12.0)
+                            .color(Color32::from_gray(110)),
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -373,7 +422,7 @@ impl PrefsState {
                         {
                             self.pacs_edit = if self.pacs_edit == Some(i) { None } else { Some(i) };
                         }
-                        let testing = self.pacs_tests.contains_key(&i);
+                        let testing = self.pacs_tests.contains_key(&i) || self.web_tests.contains_key(&i);
                         if ui
                             .add_enabled(
                                 !testing,
@@ -395,8 +444,29 @@ impl PrefsState {
                     Some(Err(e)) => show_problem(ui, ("pacs-problem", i), &crate::pacs::problem(e, &n, &me)),
                     None => {}
                 }
+                match self.web_results.get(&i) {
+                    Some(Ok((steps, _))) => {
+                        for step in steps {
+                            let (mark, color) = if step.passed {
+                                ("\u{2713}", Color32::from_rgb(30, 120, 50))
+                            } else {
+                                ("\u{2717}", Color32::from_rgb(190, 40, 30))
+                            };
+                            ui.label(RichText::new(format!("{mark} {}: {}", step.name, step.detail)).color(color));
+                        }
+                    }
+                    Some(Err(e)) => show_problem(ui, ("web-problem", i), &crate::pacs::problem(e, &n, &me)),
+                    None => {}
+                }
+                if let Some(note) = self.web_sign_in_notes.get(&i) {
+                    ui.label(note);
+                }
             });
             ui.add_space(4.0);
+        }
+        if let Some(i) = test.filter(|i| self.draft.pacs_nodes[*i].is_web()) {
+            self.start_web_test(ui, i);
+            test = None;
         }
         if let Some(i) = test {
             let n = node(&self.draft.pacs_nodes[i]);
@@ -412,6 +482,10 @@ impl PrefsState {
             self.pacs_edit = None;
             self.pacs_tests.clear();
             self.pacs_results.clear();
+            self.web_tests.clear();
+            self.web_results.clear();
+            self.web_sign_ins.clear();
+            self.web_sign_in_notes.clear();
         }
         if ui.button("Add a PACS").clicked() {
             self.draft.pacs_nodes.push(ruthos_core::settings::PacsNode::default());
@@ -424,11 +498,23 @@ impl PrefsState {
         };
         ui.add_space(12.0);
         let mut test_now = false;
+        let mut web_action = crate::prefs_web::Action::Nothing;
+        let web_secret = &mut self.web_secret;
         let n = &mut self.draft.pacs_nodes[i];
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new(format!("Edit {}", n.name)).size(14.0).strong());
             ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Connects with");
+                ui.radio_value(&mut n.protocol, "dicom".to_string(), "Classic DICOM");
+                ui.radio_value(&mut n.protocol, "dicomweb".to_string(), "DICOMweb");
+            });
+            ui.add_space(4.0);
+            if n.is_web() {
+                web_action = crate::prefs_web::fields(ui, n, web_secret);
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.label("Start from");
                 egui::ComboBox::from_id_salt("pacs-preset")
@@ -514,6 +600,18 @@ impl PrefsState {
                 }
             });
         });
+        match web_action {
+            crate::prefs_web::Action::Nothing => {}
+            crate::prefs_web::Action::Test => self.start_web_test(ui, i),
+            crate::prefs_web::Action::SignIn => {
+                let n = self.draft.pacs_nodes[i].clone();
+                self.web_sign_in_notes.remove(&i);
+                self.web_sign_ins.insert(
+                    i,
+                    crate::pacs::Task::spawn(ui.ctx(), "ruthos-web-sign-in", move || crate::pacs::web_sign_in(&n)),
+                );
+            }
+        }
         if test_now {
             let n = node(&self.draft.pacs_nodes[i]);
             let ae = self.draft.listener_ae_title.clone();
@@ -1165,6 +1263,12 @@ impl PrefsState {
                 }
                 if previous.thumbnail_size != self.draft.thumbnail_size {
                     notes.push("the thumbnail size");
+                }
+                // Deleting a node deletes its secrets.
+                for old in &shared.settings.lock().pacs_nodes {
+                    if !self.draft.pacs_nodes.iter().any(|n| n.id == old.id) {
+                        ruthos_core::credentials::delete_node(&old.id);
+                    }
                 }
                 self.saved = Some(self.draft.clone());
                 self.dial_original = self.draft.dial.clone();

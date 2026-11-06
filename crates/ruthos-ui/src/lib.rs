@@ -23,6 +23,7 @@ pub mod package_ui;
 pub mod pacs;
 pub mod platform;
 pub mod prefs;
+pub mod prefs_web;
 pub mod query;
 pub mod report;
 pub mod roi;

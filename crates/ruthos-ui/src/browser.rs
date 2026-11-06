@@ -1867,6 +1867,7 @@ impl BrowserState {
         let Ok(Some(study)) = shared.db.study(study_id) else {
             return;
         };
+        let teaching_copy = study.teaching_reference.is_some();
         let files: Vec<PathBuf> = shared
             .db
             .images_for_study(study_id)
@@ -1875,6 +1876,7 @@ impl BrowserState {
             .map(|i| shared.resolve(&i.path))
             .collect();
         self.send = Some(SendDialog {
+            teaching_copy,
             label: format!(
                 "{}{}",
                 study.patient_name,
@@ -1890,7 +1892,7 @@ impl BrowserState {
     }
 
     fn send_dialog(&mut self, ctx: &Context, shared: &Shared) {
-        use crate::pacs::{me, node, problem, show_problem, Task};
+        use crate::pacs::{me, problem, show_problem, Task};
         let Some(d) = self.send.as_mut() else { return };
         let settings = shared.settings.lock().clone();
         let listener_on = shared.net_status.lock().running;
@@ -1992,7 +1994,8 @@ impl BrowserState {
                         .add_enabled(!d.files.is_empty(), egui::Button::new(RichText::new(label).strong()))
                         .clicked()
                     {
-                        let target = node(&n);
+                        let target = n.clone();
+                        let teaching_copy = d.teaching_copy;
                         let ae = settings.listener_ae_title.clone();
                         let files = d.files.clone();
                         let (p2, c2, ctx2) = (d.progress.clone(), d.cancel.clone(), ctx.clone());
@@ -2000,10 +2003,11 @@ impl BrowserState {
                         *p2.lock() = (0, files.len());
                         d.outcome = None;
                         d.task = Some(Task::spawn(ctx, "ruthos-send", move || {
-                            ruthos_net::send_files(
+                            crate::pacs::send(
                                 &target,
                                 &ae,
                                 &files,
+                                teaching_copy,
                                 &|done, total| {
                                     *p2.lock() = (done, total);
                                     ctx2.request_repaint();
@@ -2246,6 +2250,8 @@ fn smart_album_name(f: &StudyFilter) -> String {
 struct SendDialog {
     label: String,
     files: Vec<PathBuf>,
+    /// The study is a teaching copy, which is all a teaching node may receive.
+    teaching_copy: bool,
     node: usize,
     task: Option<crate::pacs::Task<Result<ruthos_net::SendOutcome, ruthos_net::NetError>>>,
     progress: Arc<parking_lot::Mutex<(usize, usize)>>,
