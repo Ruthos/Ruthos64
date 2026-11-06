@@ -33,7 +33,7 @@ jobs:
     outputs:
       artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ilammy/setup-nasm@v1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -91,7 +91,7 @@ jobs:
     if: ${{ !cancelled() && needs.windows-build.result == 'success' && needs.windows-sign.result != 'failure' }}
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Signed executable, or the unsigned one when signing is not set up
         uses: actions/download-artifact@v4
         with:
@@ -121,7 +121,7 @@ jobs:
     runs-on: macos-latest
     environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
@@ -221,7 +221,7 @@ jobs:
     if: ${{ vars.LINUX_RELEASE == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: System libraries
         run: |
           sudo apt-get update
@@ -253,7 +253,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
