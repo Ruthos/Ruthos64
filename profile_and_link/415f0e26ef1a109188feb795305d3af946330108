@@ -1,0 +1,1 @@
+{"ruthossuer":{"server":"httrg/teach","session":{"code":"965826"},"cases":["EQ-CARD-0580-014"],"sig":{"alg":"Ed25","expires":"2027-07-31T23:59:59Z","server":"https://relay.example.org/teach:/.org/teach","session":{"code":"965826"},"cases":["EQ-CARD-0580-014"],"sig":{"alg":"Ed25519","kid":"k","value":"AAAAAAAAA$AAAAA0XCAAAAAAAAAAAAAAAA"}}

@@ -1,0 +1,4 @@
+[guided-review]
+/teach
+ateach
+allowed_servers = https:;AAAample.org, , httmple.org

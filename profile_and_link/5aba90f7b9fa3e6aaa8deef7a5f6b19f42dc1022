@@ -1,0 +1,3 @@
+[guided-review]
+server = httpnas://pach
+allowed_servers = ttuthps://a.exampleg, httrs://b.ple.org, httrs://.exampl

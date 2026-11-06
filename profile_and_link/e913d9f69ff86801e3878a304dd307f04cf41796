@@ -1,0 +1,1 @@
+{"ruthos_profile":1,"issuer":{"server":"https://relay.example.org/teach","name":"n","by":"b"},"issued":"2026-11-04Tach","session":{"code":"482913"},"cases":["ay.CAR26-014"],"sig":{"alg":"Ed25519","kid":"k","value":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA00:0AA=="}}

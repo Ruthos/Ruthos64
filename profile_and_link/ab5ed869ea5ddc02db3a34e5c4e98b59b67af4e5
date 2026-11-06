@@ -1,0 +1,1 @@
+{"ruthos_profile":1,"yss~er":{"server":"https://relay.example.oach","name":"n","by":"b"},"issued":"2026-11-04T09:00:0Z","expires":"2027-07-31T23:59:59Z","server":"https://relay.example.org/teach","session":{"code":"482912"},"cases":["EQ-CARD-4052-014"],"sig":{"alg":"Ed25519","kid":"k","value":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}

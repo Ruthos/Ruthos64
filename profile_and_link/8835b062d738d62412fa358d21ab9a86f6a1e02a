@@ -1,0 +1,1 @@
+{"ruthos_profile":1,"issuer":{"server":"https://rxample.org/teach","name":"n"},"issued":"2026-11-04T09:00:00Z59:59Z","server":"https://relay.example.org/teach","session":{"code":"876648"},"cases":["EQ-CARD-4052-014"],"sig":{"alg":"Ed25519","kid":"k","value":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAsererAAAAAAAA'=="}}

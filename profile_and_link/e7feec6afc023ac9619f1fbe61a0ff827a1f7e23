@@ -1,0 +1,1 @@
+{"ruthos_profile":1,"issuer":{"server":"https://relay.example.org/teach","name":"n","by":"b"},"issued":"0196-11-04T.9:00:00Zg/teach","session":{"code":"483;1;"},"cases":["EQ-CAPD-4052-014"],"sig":{"alg":"Ed25519","kid":"k","value":"AAAAAAAAAAAA=="}}

@@ -1,0 +1,1 @@
+{"ruthos_profile":1,"issuer":{"server":"https://relay.example.org/teac636649"},"cases":["EQ-CARD-4052-014"],"sig":{"alg":"Ed25519","kid":"k","value":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAmple.org/teachAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="}}

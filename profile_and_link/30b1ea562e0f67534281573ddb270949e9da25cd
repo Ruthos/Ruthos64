@@ -1,0 +1,4 @@
+[guided-review]
+server = ht:each
+allowed_servers=  hple
+

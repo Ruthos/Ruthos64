@@ -1,0 +1,3 @@
+[guided-review]
+server = h://ample.oteach
+allowed_servers = https:.org, https:/AAAAAorg, https://b.ele.org
