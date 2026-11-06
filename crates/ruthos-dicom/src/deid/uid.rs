@@ -11,7 +11,7 @@
 //! source yields unrelated UIDs; and without the secret the mapping can be
 //! neither reversed nor tested.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 /// Derive the teaching-copy UID for `original` under a case secret.
@@ -43,6 +43,21 @@ mod tests {
         assert!(u1.starts_with("2.25."));
         assert!(u1.len() <= 64, "{u1}");
         assert!(u1[5..].chars().all(|c| c.is_ascii_digit()));
+    }
+
+    /// A fixed vector, computed independently with Python's hmac and hashlib,
+    /// so that a change of HMAC or SHA-256 crate cannot silently change the
+    /// UIDs a teaching case has already been given.
+    #[test]
+    fn matches_an_independent_hmac_sha256() {
+        let mut secret = [0u8; 32];
+        for (i, b) in secret.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        assert_eq!(
+            derive_uid(&secret, "1.2.840.113619.2.55.3.604688119.971.1234567890.123"),
+            "2.25.112631843393072956509169126607165593597"
+        );
     }
 
     #[test]

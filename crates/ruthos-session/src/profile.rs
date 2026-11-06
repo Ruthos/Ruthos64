@@ -406,6 +406,23 @@ pub(crate) mod tests {
         })
     }
 
+    /// A signature made independently, with Python's cryptography library,
+    /// under the key [7; 32]: a change of Ed25519 crate must still verify
+    /// profiles that were signed before it.
+    #[test]
+    fn verifies_an_independently_made_signature() {
+        let key = "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=";
+        let sig = "kElKzYgBiBjwMwFisSOV96dF62bUVYMH66dg4iWsH2+1iI0FZU0R30j2Rb5D2dwp27bwFDI++631MN6MfmnmBQ==";
+        let message = r#"{"issuer":{"name":"Example Teaching"},"ruthos_profile":1}"#;
+        assert_eq!(
+            STANDARD.encode(SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes()),
+            key,
+            "the test key is the one the vector was made with"
+        );
+        assert!(verify(message, sig, key).is_ok());
+        assert!(verify(&message.replace('1', "2"), sig, key).is_err());
+    }
+
     #[test]
     fn canonical_form_sorts_keys_without_whitespace() {
         assert_eq!(
