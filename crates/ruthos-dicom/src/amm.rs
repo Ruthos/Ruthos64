@@ -290,6 +290,7 @@ pub fn write_strip(template: &Path, strip: &Strip, window: (f32, f32), folder: &
     string(&mut obj, tags::SERIES_TIME, VR::TM, &time);
     string(&mut obj, tags::MANUFACTURER, VR::LO, "Ruthos");
     string(&mut obj, tags::PATIENT_ORIENTATION, VR::CS, "");
+    string(&mut obj, tags::LATERALITY, VR::CS, "");
     string(&mut obj, tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "MONOCHROME2");
     string(&mut obj, tags::BURNED_IN_ANNOTATION, VR::CS, "NO");
     string(&mut obj, tags::LOSSY_IMAGE_COMPRESSION, VR::CS, "00");
