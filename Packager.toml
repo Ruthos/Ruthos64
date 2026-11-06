@@ -23,6 +23,16 @@ out-dir = "dist"
 
 binaries = [{ path = "ruthos", main = true }]
 
+# The application icon; cargo-packager builds the .icns for Ruthos.app from
+# these. The Windows executable embeds assets/icon/ruthos.ico (crates/ruthos/build.rs).
+icons = [
+  "assets/icon/ruthos-16.png",
+  "assets/icon/ruthos-32.png",
+  "assets/icon/ruthos-64.png",
+  "assets/icon/ruthos-128.png",
+  "assets/icon/ruthos-256.png",
+]
+
 # Formats are chosen per platform in release.yml (--formats).
 
 # release.yml writes these before packaging; `scripts/notices.py` makes them by hand.

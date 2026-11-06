@@ -40,6 +40,7 @@ One crate per job, one module per Horos window, so people who know Horos find th
 | `crates/ruthos-ui` | The windows: `browser.rs` (database window), `viewer.rs` (2D viewer), `report.rs`, `prefs.rs`, plus `widgets.rs`, `theme.rs`, `icons.rs` |
 | `crates/ruthos` | The binary: logging, GPU selection, startup |
 | `assets/horos` | CLUTs, annotation defaults and icons taken from Horos under the LGPL |
+| `assets/icon` | The Ruthos application icon: `ruthos.ico` for the Windows executable and PNGs for the macOS bundle |
 | `testdata/pydicom` | Sample files (MIT) that the codec tests run over |
 
 ## Ground rules

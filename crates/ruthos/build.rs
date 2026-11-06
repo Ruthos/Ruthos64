@@ -1,11 +1,16 @@
-//! Embeds the Windows version resource in ruthos.exe: product name,
-//! description, version and original file name, which the SignPath
-//! Foundation requires on every binary it signs and which Explorer shows
-//! under Properties > Details. Nothing happens on other platforms.
+//! Embeds the Windows resources in ruthos.exe: the application icon,
+//! which Explorer, the taskbar and the signing request show, and the
+//! version resource (product name, description, version and original file
+//! name), which the SignPath Foundation requires on every binary it signs
+//! and which Explorer shows under Properties > Details. Nothing happens on
+//! other platforms.
 
 fn main() {
     #[cfg(windows)]
     {
+        let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/icon/ruthos.ico");
+        println!("cargo:rerun-if-changed={}", icon.display());
         let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
         // FileVersion is numeric (major.minor.patch.0); ProductVersion
         // keeps the full text, such as 0.1.0-alpha.
@@ -16,7 +21,8 @@ fn main() {
             .collect();
         let packed = numeric.iter().fold(0u64, |acc, v| (acc << 16) | v) << 16;
         let mut res = winresource::WindowsResource::new();
-        res.set("ProductName", "Ruthos")
+        res.set_icon(&icon.to_string_lossy())
+            .set("ProductName", "Ruthos")
             .set("FileDescription", "Ruthos DICOM viewer and patient archive")
             .set("CompanyName", "The Ruthos contributors")
             .set("LegalCopyright", "The Ruthos contributors, LGPL-3.0-only")
@@ -29,7 +35,7 @@ fn main() {
         if let Err(e) = res.compile() {
             // A missing resource compiler must not stop a developer build;
             // the release workflow checks the result.
-            println!("cargo:warning=version resource not embedded: {e}");
+            println!("cargo:warning=icon and version resource not embedded: {e}");
         }
     }
 }
