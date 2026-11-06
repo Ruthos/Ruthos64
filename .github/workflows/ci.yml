@@ -58,7 +58,7 @@ jobs:
       - run: cargo test --workspace
 
   orthanc:
-    name: DICOMweb against Orthanc
+    name: Interoperability (Orthanc, dciodvfy, highdicom)
     runs-on: ubuntu-latest
     services:
       orthanc:
@@ -68,6 +68,7 @@ jobs:
           ORTHANC__AUTHENTICATION_ENABLED: "true"
           ORTHANC__REGISTERED_USERS: '{"orthanc": "orthanc"}'
           ORTHANC__DICOM_ALWAYS_ALLOW_FIND: "true"
+          ORTHANC__DICOM_ALWAYS_ALLOW_GET: "true"
         ports:
           - 8042:8042
           - 4242:4242
@@ -82,6 +83,26 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Other tools for checking a SEG
+        run: |
+          sudo apt-get install -y dicom3tools
+          pip install highdicom
+      - name: Ruthos writes a SEG of three segments
+        run: |
+          mkdir -p "$RUNNER_TEMP/seg"
+          cargo test -p ruthos-dicom --test seg interoperates
+        env:
+          RUTHOS_SEG_INTEROP: ${{ runner.temp }}/seg
+      - name: dciodvfy finds no errors in it
+        run: |
+          dciodvfy "$RUNNER_TEMP/seg/ruthos-seg.dcm" 2>&1 | tee "$RUNNER_TEMP/dciodvfy.txt"
+          ! grep -q '^Error' "$RUNNER_TEMP/dciodvfy.txt"
+      - name: highdicom reads every voxel, then writes a SEG of its own
+        run: python scripts/seg_interop.py "$RUNNER_TEMP/seg"
+      - name: Ruthos reads highdicom's SEG, voxel for voxel
+        run: cargo test -p ruthos-dicom --test seg interoperates -- --nocapture
+        env:
+          RUTHOS_SEG_INTEROP: ${{ runner.temp }}/seg
       - name: Wait for Orthanc and its DICOMweb plugin
         run: |
           for i in $(seq 1 30); do
@@ -89,10 +110,11 @@ jobs:
             sleep 2
           done
           exit 1
-      - run: cargo test -p ruthos-net --test orthanc -- --nocapture
+      - run: cargo test -p ruthos-net --test orthanc -- --nocapture --test-threads=1
         env:
           RUTHOS_ORTHANC_WEB: http://localhost:8042/dicom-web
           RUTHOS_ORTHANC_DIMSE: localhost:4242:ORTHANC
+          RUTHOS_ORTHANC_SEG: ${{ runner.temp }}/seg/ruthos-seg.dcm
 
   windows:
     name: Windows (test)

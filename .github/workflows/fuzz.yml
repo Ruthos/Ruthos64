@@ -96,6 +96,7 @@ jobs:
               jpeg_codestream|guard_headers) dict="-dict=dict/codecs.dict" ;;
             esac
             echo "::group::$t"
+            mkdir -p "corpus/$t"
             if ! cargo fuzz run -O --debug-assertions $t corpus/$t -- -max_total_time=$SECONDS_PER_TARGET -rss_limit_mb=4096 -malloc_limit_mb=512 -timeout=30 $dict; then
               failed="$failed $t"
             fi

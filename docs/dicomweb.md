@@ -76,6 +76,8 @@ permission problem or a server that doesn't speak DICOMweb.
 | Server | Status |
 |---|---|
 | Orthanc with its DICOMweb plugin | Tested in CI |
+| A gateway behind Cloudflare Access | Not yet tested |
+| OpenID Connect sign-in | Not yet tested |
 | dcm4chee-arc 5 | Not yet tested |
 | A cloud DICOMweb service | Not yet tested |
 

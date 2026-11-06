@@ -12,7 +12,8 @@
 #            variable MACOS_RELEASE is "true", also in "release".
 #   Linux    AppImage, when LINUX_RELEASE is "true".
 # Every artefact gets a SHA-256 checksum and a build-provenance attestation.
-# A failure on any platform that was asked for stops the draft.
+# A failure on any platform that was asked for stops the draft. Only an
+# alpha may go out unsigned: any other tag stops at once without SignPath.
 name: Release
 
 on:
@@ -33,6 +34,12 @@ jobs:
     outputs:
       artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
     steps:
+      - name: Only an alpha may be unsigned
+        if: ${{ !contains(github.ref_name, '-alpha') && vars.SIGNPATH_ORGANIZATION_ID == '' }}
+        shell: bash
+        run: |
+          echo "::error::$GITHUB_REF_NAME needs Windows signing, and SIGNPATH_ORGANIZATION_ID is not set"
+          exit 1
       - uses: actions/checkout@v7
       - uses: ilammy/setup-nasm@v1
       - uses: dtolnay/rust-toolchain@stable

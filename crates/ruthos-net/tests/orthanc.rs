@@ -1,13 +1,15 @@
 //! Against a real Orthanc with its DICOMweb plugin. `RUTHOS_ORTHANC_WEB` is the
 //! service root (`http://localhost:8042/dicom-web`) and `RUTHOS_ORTHANC_DIMSE` is
-//! `host:port:AE`. CI runs an Orthanc; elsewhere these tests pass without one.
+//! `host:port:AE`. `RUTHOS_ORTHANC_SEG` is a SEG Ruthos wrote. CI runs an Orthanc;
+//! elsewhere these tests pass without one.
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use dicom_dictionary_std::tags;
 use ruthos_net::dicomweb::{Basic, Transfer, WebClient, WebNode};
-use ruthos_net::{find_studies, Node, RetrieveProgress, StudyQuery};
+use ruthos_net::{find_studies, retrieve_series, send_files, Node, RetrieveMethod, RetrieveProgress, StudyQuery};
 
 fn web() -> Option<WebClient> {
     let url = std::env::var("RUTHOS_ORTHANC_WEB").ok()?;
@@ -121,8 +123,56 @@ fn send_search_and_retrieve_agree_with_classic_dicom() {
     std::fs::remove_dir_all(out).ok();
 }
 
+fn pixel_data(path: &PathBuf) -> Vec<u8> {
+    let obj = dicom_object::open_file(path).unwrap();
+    obj.element(tags::PIXEL_DATA).unwrap().to_bytes().unwrap().into_owned()
+}
+
+/// SEG acceptance 8: sent by C-STORE and fetched by C-GET, with pixel data
+/// identical to the byte.
 #[test]
-fn a_transfer_syntax_the_server_cannot_give_falls_back() {
+fn a_seg_comes_back_from_orthanc_byte_for_byte() {
+    let (Some(node), Some(seg)) = (dimse(), std::env::var_os("RUTHOS_ORTHANC_SEG")) else {
+        eprintln!("no Orthanc set up: skipped");
+        return;
+    };
+    let seg = PathBuf::from(seg);
+    let never = AtomicBool::new(false);
+    let sent = send_files(&node, "RUTHOS", std::slice::from_ref(&seg), &|_, _| {}, &never).unwrap();
+    assert_eq!(sent.sent, 1, "{:?}", sent.failed);
+
+    let obj = dicom_object::open_file(&seg).unwrap();
+    let uid = |tag| {
+        obj.element(tag)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .trim_end_matches('\0')
+            .to_string()
+    };
+    let out = std::env::temp_dir().join(format!("ruthos-orthanc-seg-{}", std::process::id()));
+    std::fs::create_dir_all(&out).unwrap();
+    let back = retrieve_series(
+        &node,
+        "RUTHOS",
+        &uid(tags::STUDY_INSTANCE_UID),
+        &uid(tags::SERIES_INSTANCE_UID),
+        RetrieveMethod::Get,
+        &out,
+        &|_: RetrieveProgress| {},
+        &never,
+    )
+    .unwrap();
+    assert_eq!(back.files.len(), 1, "{:?}", back.progress);
+    let (went, came) = (pixel_data(&seg), pixel_data(&back.files[0]));
+    assert!(!went.is_empty());
+    assert_eq!(went, came, "the pixel data changed on the way");
+    eprintln!("{} bytes of SEG pixel data came back identical", came.len());
+    std::fs::remove_dir_all(out).ok();
+}
+
+#[test]
+fn the_connection_test_passes() {
     let Some(client) = web() else {
         eprintln!("no Orthanc set up: skipped");
         return;
