@@ -67,10 +67,6 @@ jobs:
         ports:
           - 8042:8042
           - 4242:4242
-        options: >-
-          --health-cmd "curl -fsS -u orthanc:orthanc http://localhost:8042/system"
-          --health-interval 5s
-          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - name: System libraries for winit, wgpu and the file dialogs
@@ -82,6 +78,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Wait for Orthanc and its DICOMweb plugin
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS -u orthanc:orthanc http://localhost:8042/dicom-web/studies && exit 0
+            sleep 2
+          done
+          exit 1
       - run: cargo test -p ruthos-net --test orthanc -- --nocapture
         env:
           RUTHOS_ORTHANC_WEB: http://localhost:8042/dicom-web
