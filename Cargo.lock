@@ -5675,7 +5675,7 @@ name = "ruthos-net"
 version = "0.1.10-alpha"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "crossbeam-channel",
  "crypto_box",
@@ -5736,7 +5736,7 @@ dependencies = [
 name = "ruthos-session"
 version = "0.1.10-alpha"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "crossbeam-channel",
  "ed25519-dalek",

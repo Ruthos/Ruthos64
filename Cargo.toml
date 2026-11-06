@@ -94,7 +94,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 crypto_box = "0.9"
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
 ed25519-dalek = "2"
-base64 = "0.22"
+base64 = "0.23"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 url = "2.5"
 zip = { version = "9", default-features = false, features = ["deflate"] }
