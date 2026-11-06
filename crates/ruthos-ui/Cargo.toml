@@ -57,4 +57,4 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-core = "0.62"
-windows-collections = "0.3"
+windows-collections = "0.100"
