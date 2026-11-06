@@ -154,15 +154,17 @@ VISTA3D is trained on human CT, and NVIDIA's model card says it is for research 
 not for clinical use. It works at 1.5 mm and treats everything above about 1050 HU
 alike, so teeth and dense bone can run together.
 
-VISTA3D and nnInteractive are still being tested. For now they appear only in
-Research mode and are installed with **From a folder…**, as neither can be downloaded
-from Ruthos yet.
+VISTA3D and nnInteractive appear only in Research mode: VISTA3D because NVIDIA's
+model card and the NVIDIA Open Model License restrict it to research and non-clinical
+use, nnInteractive because its licence is non-commercial. Each shows its terms before
+first use. Both are still being tested, and are installed with **From a folder…**, as
+neither can be downloaded from Ruthos yet.
 
 ### Research mode
 
 **Research mode**, in Preferences under Viewer, offers models still being tested, and
-those whose licences allow only research and other non-commercial use. nnInteractive
-is one of those: its weights are
+those whose licences allow only research and other non-commercial use. VISTA3D is one
+of those, by NVIDIA's model card. nnInteractive is another: its weights are
 DKFZ's, under CC BY-NC-SA 4.0. It shows its terms before first use. Paid clinical
 work, including work in a practice that charges its clients, is not covered unless
 DKFZ has given you permission. Whether your use is allowed is your responsibility.

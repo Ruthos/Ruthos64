@@ -162,7 +162,11 @@ const FROM_A_FOLDER: &str = "";
 pub const VISTA3D: Manifest = Manifest {
     id: "vista3d",
     engine: Engine::Vista,
-    research: None,
+    research: Some(
+        "VISTA3D is for research and non-clinical use only, per NVIDIA's model card and the NVIDIA Open \
+         Model License. It must not be used to make clinical decisions. Whether your use is allowed is your \
+         responsibility. Agree only if your use is research, teaching or testing.",
+    ),
     name: "VISTA3D",
     version: "NV-Segment-CT",
     licence: "NVIDIA Open Model License",
