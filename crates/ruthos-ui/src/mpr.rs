@@ -1562,12 +1562,13 @@ impl MprState {
                 self.clut_menu(ui, shared);
             });
             toolbar_separator(ui);
-            if ToolbarButton::new(icons::SERIES, "Segments")
-                .enabled(ready)
-                .selected(self.segments.open)
-                .tooltip("Threshold, region grow, islands and AI, on the slices and in 3D")
-                .show(ui)
-                .clicked()
+            if !ruthos_core::portable::active()
+                && ToolbarButton::new(icons::SERIES, "Segments")
+                    .enabled(ready)
+                    .selected(self.segments.open)
+                    .tooltip("Threshold, region grow, islands and AI, on the slices and in 3D")
+                    .show(ui)
+                    .clicked()
             {
                 self.segments.open = !self.segments.open;
             }

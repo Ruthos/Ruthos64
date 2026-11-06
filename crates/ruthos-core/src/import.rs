@@ -188,7 +188,7 @@ pub(crate) fn is_ignorable(path: &Path) -> bool {
         .file_name()
         .map(|s| s.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    if name.starts_with('.') || name == "thumbs.db" || name == "desktop.ini" {
+    if name.starts_with('.') || name == "thumbs.db" || name == "desktop.ini" || name == "dicomdir" {
         return true;
     }
     // Files that are never DICOM; everything else is tried.
@@ -349,6 +349,7 @@ mod tests {
     fn ignorable_names() {
         assert!(is_ignorable(Path::new("x/.DS_Store")));
         assert!(is_ignorable(Path::new("x/readme.txt")));
+        assert!(is_ignorable(Path::new("x/DICOMDIR")));
         assert!(!is_ignorable(Path::new("x/IM000001")));
         assert!(!is_ignorable(Path::new("x/scan.dcm")));
     }

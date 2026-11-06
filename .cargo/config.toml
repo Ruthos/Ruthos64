@@ -1,0 +1,7 @@
+# Link the C runtime into the Windows executable. A package on a stick has to run
+# on a PC that has never had the Visual C++ Redistributable installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_msvc = { value = "packaging/windows-static-crt.cmake", relative = true }

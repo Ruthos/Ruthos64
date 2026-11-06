@@ -128,6 +128,10 @@ pub struct BrowserState {
     /// `Some(Some(dir))` to use that folder.
     horos_request: Option<Option<PathBuf>>,
     send: Option<SendDialog>,
+    share: Option<crate::package_ui::ShareDialog>,
+    disc: Option<crate::package_ui::DiscDialog>,
+    /// A package being imported, whose notes follow its images.
+    notes_from: Option<PathBuf>,
     preview: Preview,
     modalities: Vec<String>,
     dirty: bool,
@@ -167,6 +171,9 @@ impl BrowserState {
             horos: None,
             horos_request: None,
             send: None,
+            share: None,
+            disc: None,
+            notes_from: None,
             preview: Preview::default(),
             modalities: Vec::new(),
             dirty: true,
@@ -379,6 +386,11 @@ impl BrowserState {
                 ImportEvent::Started { total } => self.import_progress = Some((0, total, String::new())),
                 ImportEvent::Progress { done, total, current } => self.import_progress = Some((done, total, current)),
                 ImportEvent::Finished(summary) => {
+                    if let Some(root) = self.notes_from.take() {
+                        if let Err(e) = ruthos_core::package::apply_notes(&shared.db, &root) {
+                            tracing::warn!("the package's notes could not be read: {e}");
+                        }
+                    }
                     self.import_progress = None;
                     self.catalogue_cancel = None;
                     self.catalogue_checked = None;
@@ -465,8 +477,36 @@ impl BrowserState {
             .expect("spawn picture import thread");
     }
 
+    /// A DICOMDIR's contents, and what to do with them.
+    fn disc_dialog(&mut self, ctx: &Context, shared: &Shared) {
+        use crate::package_ui::DiscChoice;
+        let Some(choice) = self.disc.as_mut().and_then(|d| d.show(ctx)) else {
+            return;
+        };
+        self.disc = None;
+        match choice {
+            DiscChoice::Cancel => {}
+            DiscChoice::View(path) => {
+                if let Err(e) = crate::package_ui::view_separately(&path) {
+                    self.set_status(format!("Could not open a viewer: {e}"));
+                }
+            }
+            DiscChoice::Import(files, root) => {
+                // Always a copy: a disc or stick goes away again.
+                self.notes_from = Some(root);
+                let importer = Importer::new(shared.db.clone(), shared.paths.clone());
+                importer.spawn(files, ImportMode::Copy, shared.import_tx.clone());
+                self.import_progress = Some((0, 0, String::new()));
+            }
+        }
+    }
+
     fn start_import(&mut self, shared: &Shared, sources: Vec<PathBuf>) {
         if sources.is_empty() {
+            return;
+        }
+        if let Some(disc) = crate::package_ui::DiscDialog::for_sources(&sources) {
+            self.disc = Some(disc);
             return;
         }
         let mode = if shared.settings.lock().copy_files_on_import {
@@ -699,6 +739,12 @@ impl BrowserState {
 
         self.show_modal(&ctx, shared);
         self.send_dialog(&ctx, shared);
+        if let Some(share) = self.share.as_mut() {
+            if share.show(&ctx, shared) {
+                self.share = None;
+            }
+        }
+        self.disc_dialog(&ctx, shared);
         self.horos_window(&ctx, shared);
         if let Some(mut a) = self.anonymize.take() {
             if a.show(&ctx, shared) {
@@ -711,6 +757,14 @@ impl BrowserState {
     }
 
     /// Developer aid: open the anonymiser at a step without clicking.
+    /// Developer option: open the Share dialog, writing at once to `folder` if given.
+    pub fn dev_share(&mut self, shared: &Shared, study_id: i64, folder: Option<PathBuf>) {
+        self.share = crate::package_ui::ShareDialog::open(shared, study_id);
+        if let (Some(share), Some(folder)) = (self.share.as_mut(), folder) {
+            share.start_in(shared, folder);
+        }
+    }
+
     pub fn dev_open_anonymize(&mut self, shared: &Shared, study_id: i64, step: &str) {
         if self.dirty {
             self.reload(shared);
@@ -802,13 +856,15 @@ impl BrowserState {
                 }
             }
             let has_sel = self.selected_study.is_some();
-            if ToolbarButton::new(Bitmap::Export, "Export")
+            if ToolbarButton::new(Bitmap::Export, "Share")
                 .enabled(has_sel)
-                .tooltip("Export the selected study as DICOM files")
+                .tooltip("Put this patient's images on a stick or in a zip, ready for someone else to open")
                 .show(ui)
                 .clicked()
             {
-                self.export_selected(shared);
+                self.share = self
+                    .selected_study
+                    .and_then(|id| crate::package_ui::ShareDialog::open(shared, id));
             }
             if ToolbarButton::new(Bitmap::Query, "Query")
                 .tooltip("Search a PACS and retrieve studies from it")
@@ -1806,27 +1862,6 @@ impl BrowserState {
         });
     }
 
-    fn export_selected(&mut self, shared: &Shared) {
-        let Some(study_id) = self.selected_study else { return };
-        let Some(dir) = rfd::FileDialog::new().set_title("Export study to folder").pick_folder() else {
-            return;
-        };
-        let series = shared.db.series_for_study(study_id).unwrap_or_default();
-        let mut n = 0usize;
-        for s in series {
-            let sub = dir.join(sanitize(&s.display_name()));
-            let _ = std::fs::create_dir_all(&sub);
-            for img in shared.db.images_for_series(s.id).unwrap_or_default() {
-                let src = shared.resolve(&img.path);
-                let name = format!("{:04}.dcm", img.instance_number.unwrap_or(n as i64 + 1));
-                if std::fs::copy(&src, sub.join(name)).is_ok() {
-                    n += 1;
-                }
-            }
-        }
-        self.set_status(format!("Exported {n} files to {}", dir.display()));
-    }
-
     /// Start the Send dialog for a study.
     fn open_send(&mut self, shared: &Shared, study_id: i64) {
         let Ok(Some(study)) = shared.db.study(study_id) else {
@@ -2187,25 +2222,6 @@ fn unix_to_local(secs: i64) -> String {
     chrono::DateTime::from_timestamp(secs, 0)
         .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default()
-}
-
-fn sanitize(s: &str) -> String {
-    let out: String = s
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let out = out.trim().to_string();
-    if out.is_empty() {
-        "Series".to_string()
-    } else {
-        out
-    }
 }
 
 fn smart_album_name(f: &StudyFilter) -> String {

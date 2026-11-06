@@ -9,7 +9,18 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> eframe::Result {
-    let log_file = init_logging();
+    // First, as logging and settings touch the disk.
+    let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let viewing = ruthos_ui::package_ui::start_viewer(&mut args);
+    if !viewing && ruthos_ui::package_ui::stranded() {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Info)
+            .set_title("Open images")
+            .set_description(ruthos_ui::package_ui::STRANDED_TEXT)
+            .show();
+        return Ok(());
+    }
+    let log_file = init_logging(viewing);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -24,7 +35,6 @@ fn main() -> eframe::Result {
 
     // Files or folders on the command line are imported and opened. This is
     // what "Open with Ruthos" from Explorer hands us.
-    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     // Invitation links and profiles, which a running copy takes over.
     let startup_links: Vec<String> = args
         .iter()
@@ -32,10 +42,13 @@ fn main() -> eframe::Result {
         .filter(|a| ruthos_ui::platform::handover::is_session_argument(a))
         .map(str::to_string)
         .collect();
-    if !startup_links.is_empty() && ruthos_ui::platform::handover::hand_to_running(&startup_links) {
-        return Ok(());
+    if !viewing {
+        if !startup_links.is_empty() && ruthos_ui::platform::handover::hand_to_running(&startup_links) {
+            return Ok(());
+        }
+        // A viewer may be on a stick: links must not end up pointing at it.
+        std::thread::spawn(ruthos_ui::platform::handover::register_links);
     }
-    std::thread::spawn(ruthos_ui::platform::handover::register_links);
     let startup_paths: Vec<std::path::PathBuf> = args
         .into_iter()
         .filter(|a| {
@@ -74,19 +87,22 @@ fn main() -> eframe::Result {
             .set_description(format!("{}{where_logged}", startup_error_text(e)))
             .show();
     }
+    ruthos_core::portable::leave();
     result
 }
 
 /// Log to stderr and to `ruthos.log` in the data folder, so a failed start
 /// on a machine without a console still leaves a trace.
-fn init_logging() -> Option<std::path::PathBuf> {
+fn init_logging(viewing: bool) -> Option<std::path::PathBuf> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn,egui_wgpu=warn,eframe=warn,jpeg2k=warn")
     });
-    let root = ruthos_core::Settings::load().data_root();
-    let _ = std::fs::create_dir_all(&root);
-    let path = root.join("ruthos.log");
-    let file = std::fs::File::create(&path).ok();
+    // A viewer keeps no log: it might name a patient, and it leaves no trace.
+    let path = (!viewing).then(|| ruthos_core::Settings::load().data_root().join("ruthos.log"));
+    if let Some(root) = path.as_ref().and_then(|p| p.parent()) {
+        let _ = std::fs::create_dir_all(root);
+    }
+    let file = path.as_ref().and_then(|p| std::fs::File::create(p).ok());
     let file_layer = file.map(|f| {
         tracing_subscriber::fmt::layer()
             .with_ansi(false)
@@ -97,7 +113,7 @@ fn init_logging() -> Option<std::path::PathBuf> {
         .with(tracing_subscriber::fmt::layer())
         .with(file_layer)
         .init();
-    Some(path)
+    path
 }
 
 /// Plain words for the errors a clinic PC is likely to produce.

@@ -23,6 +23,8 @@ use crate::theme;
 use crate::viewer::ViewerState;
 
 pub struct RuthosApp {
+    /// A viewer run shows this in place of the database window.
+    home: Option<crate::package_ui::Home>,
     shared: Arc<Shared>,
     browser: BrowserState,
     viewers: Vec<Arc<Mutex<ViewerState>>>,
@@ -77,8 +79,12 @@ impl RuthosApp {
         crate::platform::apply_decode_limits(&settings);
         let paths = DataPaths::new(settings.data_root());
         paths.ensure()?;
-        let db = Database::open(&paths)?;
-        tracing::info!("database at {}", paths.database_file().display());
+        let viewing = ruthos_core::portable::run().cloned();
+        let db = if viewing.is_some() {
+            Database::open_in_memory(&paths)?
+        } else {
+            Database::open(&paths)?
+        };
         // Measurements named before definitions existed get their key.
         match db.assign_def_keys_by_label(&ruthos_core::measure::label_keys(&settings.library())) {
             Ok(0) => {}
@@ -133,22 +139,25 @@ impl RuthosApp {
         }
 
         let incoming_stop = Arc::new(AtomicBool::new(false));
-        *shared.watch.folders.lock() = settings.watch_folders.clone();
-        ruthos_core::watch::WatchScanner::spawn(
-            db.clone(),
-            paths.clone(),
-            shared.watch.clone(),
-            Duration::from_secs(5),
-            shared.import_tx.clone(),
-            incoming_stop.clone(),
-        );
-        IncomingScanner::spawn(
-            db,
-            paths,
-            Duration::from_secs(settings.incoming_scan_seconds.max(1)),
-            shared.import_tx.clone(),
-            incoming_stop.clone(),
-        );
+        if viewing.is_none() {
+            *shared.watch.folders.lock() = settings.watch_folders.clone();
+            ruthos_core::watch::WatchScanner::spawn(
+                db.clone(),
+                paths.clone(),
+                shared.watch.clone(),
+                Duration::from_secs(5),
+                shared.import_tx.clone(),
+                incoming_stop.clone(),
+            );
+            IncomingScanner::spawn(
+                db,
+                paths,
+                Duration::from_secs(settings.incoming_scan_seconds.max(1)),
+                shared.import_tx.clone(),
+                incoming_stop.clone(),
+            );
+        }
+        let home = viewing.as_ref().map(|run| crate::package_ui::Home::start(run, &shared));
 
         // Developer option: open a study's report at startup for screenshots.
         if let Some(v) = std::env::var("RUTHOS_OPEN_REPORT").ok().filter(|v| !v.is_empty()) {
@@ -213,6 +222,18 @@ impl RuthosApp {
             browser.request_horos_import(Some(std::path::PathBuf::from(v)));
         }
 
+        // Developer option: `RUTHOS_OPEN_SHARE=<study>[:<folder>]` opens the Share
+        // dialog, and with a folder starts writing there.
+        if let Some(v) = std::env::var("RUTHOS_OPEN_SHARE").ok().filter(|v| !v.is_empty()) {
+            let (id, folder) = match v.split_once(':') {
+                Some((id, folder)) => (id.to_string(), Some(std::path::PathBuf::from(folder))),
+                None => (v.clone(), None),
+            };
+            if let Ok(id) = id.trim().parse::<i64>() {
+                browser.dev_share(&shared, id, folder);
+            }
+        }
+
         // Developer option: `RUTHOS_OPEN_ANON=<study>[:pixels|verify]` opens the anonymiser.
         if let Some(v) = std::env::var("RUTHOS_OPEN_ANON").ok().filter(|v| !v.is_empty()) {
             let (who, step) = v
@@ -249,6 +270,7 @@ impl RuthosApp {
         });
 
         Ok(Self {
+            home,
             shared,
             browser,
             viewers: Vec::new(),
@@ -606,7 +628,12 @@ impl eframe::App for RuthosApp {
             tracing::warn!("{err}");
         }
 
-        if let Err(msg) = crate::crash::guarded(|| self.browser.show(ui, &self.shared)) {
+        if let Some(home) = self.home.as_mut() {
+            let wanted = home.show(ui, &self.shared);
+            if let Some(study) = wanted {
+                self.open_viewer(study, None);
+            }
+        } else if let Err(msg) = crate::crash::guarded(|| self.browser.show(ui, &self.shared)) {
             self.report_error(format!("The database window hit an internal error: {msg}"));
         }
 
@@ -709,7 +736,9 @@ impl eframe::App for RuthosApp {
             );
         }
 
-        self.guided_review(&ctx);
+        if self.home.is_none() {
+            self.guided_review(&ctx);
+        }
         crate::about::window(&ctx, &self.shared, &mut self.about_open);
         self.preferences(&ctx);
         self.query_window(&ctx);

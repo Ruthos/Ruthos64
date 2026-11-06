@@ -19,6 +19,7 @@ pub mod loader;
 pub mod loupe;
 pub mod measure_prefs;
 pub mod mpr;
+pub mod package_ui;
 pub mod pacs;
 pub mod platform;
 pub mod prefs;

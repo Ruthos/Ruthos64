@@ -643,8 +643,21 @@ impl ReportState {
         else {
             return;
         };
+        let doc = self.document(shared);
+        match write_pdf(&doc, &path) {
+            Ok(()) => {
+                self.set_status(format!("Exported {}", path.display()));
+                // Show it in the user's PDF reader.
+                crate::platform::open_path(&path);
+            }
+            Err(e) => self.set_status(format!("Export failed: {e}")),
+        }
+    }
+
+    /// The report as it would be written, for the PDF and for packages.
+    pub fn document(&self, shared: &Shared) -> ReportDocument {
         let images = self.render_key_images(shared);
-        let doc = ReportDocument {
+        ReportDocument {
             title: format!("Report: {}", self.study.patient_name),
             header: self.header_rows(),
             measurements: self
@@ -678,14 +691,6 @@ impl ReportState {
             conclusion: self.conclusion.clone(),
             images,
             footer: format!("Ruthos \u{2014} {}", chrono::Local::now().format("%Y-%m-%d %H:%M")),
-        };
-        match write_pdf(&doc, &path) {
-            Ok(()) => {
-                self.set_status(format!("Exported {}", path.display()));
-                // Show it in the user's PDF reader.
-                crate::platform::open_path(&path);
-            }
-            Err(e) => self.set_status(format!("Export failed: {e}")),
         }
     }
 

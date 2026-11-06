@@ -355,6 +355,15 @@ impl Settings {
     }
 
     pub fn load() -> Self {
+        // A viewer run takes nothing from any Ruthos on this computer.
+        if let Some(run) = crate::portable::run() {
+            return Self {
+                data_root: Some(run.temp.clone()),
+                listener_enabled: false,
+                watch_folders: Vec::new(),
+                ..Self::default()
+            };
+        }
         let path = Self::file_path();
         let mut settings: Self = match std::fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str::<Self>(&text).unwrap_or_else(|e| {
@@ -419,6 +428,9 @@ impl Settings {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
+        if crate::portable::active() {
+            return Ok(());
+        }
         let path = Self::file_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -430,6 +442,9 @@ impl Settings {
     /// The data root: `RUTHOS_DATA_ROOT` if set (handy for testing against a
     /// scratch archive), else the configured folder, else the platform default.
     pub fn data_root(&self) -> PathBuf {
+        if let Some(run) = crate::portable::run() {
+            return run.temp.clone();
+        }
         if let Some(env) = std::env::var_os("RUTHOS_DATA_ROOT").filter(|s| !s.is_empty()) {
             return PathBuf::from(env);
         }

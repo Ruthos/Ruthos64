@@ -37,6 +37,13 @@ openjpeg-sys = { path = "../vendor/openjpeg-sys" }
 debug = 1
 
 [[bin]]
+name = "dicomdir"
+path = "fuzz_targets/dicomdir.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "open_file"
 path = "fuzz_targets/open_file.rs"
 test = false

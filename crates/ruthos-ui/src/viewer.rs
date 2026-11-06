@@ -3595,14 +3595,17 @@ impl ViewerState {
 
     fn toolbar_inner(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.horizontal(|ui| {
-            if ToolbarButton::new(Bitmap::DatabaseWindow, "Database")
-                .tooltip("Show the database window")
-                .show(ui)
-                .clicked()
-            {
-                shared.focus_browser.store(true, std::sync::atomic::Ordering::Relaxed);
+            let viewing = ruthos_core::portable::active();
+            if !viewing {
+                if ToolbarButton::new(Bitmap::DatabaseWindow, "Database")
+                    .tooltip("Show the database window")
+                    .show(ui)
+                    .clicked()
+                {
+                    shared.focus_browser.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                toolbar_separator(ui);
             }
-            toolbar_separator(ui);
 
             // Series popup
             ui.vertical(|ui| {
@@ -3960,22 +3963,24 @@ impl ViewerState {
                 self.export_current(shared);
             }
             let writing = self.movie.is_some();
-            if ToolbarButton::new(Bitmap::Movie, if writing { "Stop" } else { "Movie" })
-                .enabled(writing || self.can_export_movie())
-                .tooltip(if writing {
-                    "Stop writing the movie"
-                } else {
-                    "Export the loop, or the series, as an MP4 movie at the cine speed"
-                })
-                .show(ui)
-                .clicked()
+            if !ruthos_core::portable::active()
+                && ToolbarButton::new(Bitmap::Movie, if writing { "Stop" } else { "Movie" })
+                    .enabled(writing || self.can_export_movie())
+                    .tooltip(if writing {
+                        "Stop writing the movie"
+                    } else {
+                        "Export the loop, or the series, as an MP4 movie at the cine speed"
+                    })
+                    .show(ui)
+                    .clicked()
             {
                 self.export_movie(&ui.ctx().clone(), shared, None);
             }
-            if ToolbarButton::new(Bitmap::ReportCustom, "Report")
-                .tooltip("The report for this study: measurements, findings, key images")
-                .show(ui)
-                .clicked()
+            if !ruthos_core::portable::active()
+                && ToolbarButton::new(Bitmap::ReportCustom, "Report")
+                    .tooltip("The report for this study: measurements, findings, key images")
+                    .show(ui)
+                    .clicked()
             {
                 shared.open_reports.lock().push(self.study.id);
             }

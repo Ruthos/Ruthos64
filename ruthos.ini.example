@@ -25,3 +25,10 @@ server = https://relay.example.org/teaching
 
 ; Optional: for networks that allow web traffic only through a proxy.
 ; proxy = http://proxy.example.org:3128
+
+; A package written by Share has its own ruthos.ini with this section, which makes the
+; program open those images as a viewer and touch nothing else. It only counts beside
+; the program. See docs/sharing.md.
+;
+; [viewer]
+; open = DICOMDIR

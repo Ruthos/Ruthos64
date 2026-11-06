@@ -51,6 +51,7 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_WinRT",
     "Win32_UI_Input_Radial",
+    "Win32_Storage_FileSystem",
     "Win32_System_SystemInformation",
     "Win32_UI_WindowsAndMessaging",
 ] }
