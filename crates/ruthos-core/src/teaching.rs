@@ -350,13 +350,13 @@ const OTHER_NAMES: &[&str] = &[
 
 fn random_u64() -> u64 {
     let mut b = [0u8; 8];
-    getrandom::getrandom(&mut b).expect("system randomness");
+    getrandom::fill(&mut b).expect("system randomness");
     u64::from_le_bytes(b)
 }
 
 fn random_secret() -> [u8; 32] {
     let mut s = [0u8; 32];
-    getrandom::getrandom(&mut s).expect("system randomness");
+    getrandom::fill(&mut s).expect("system randomness");
     s
 }
 

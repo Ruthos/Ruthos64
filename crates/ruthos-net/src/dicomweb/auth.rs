@@ -250,7 +250,7 @@ async fn post_token(http: &reqwest::Client, endpoint: &str, form: &[(&str, &str)
 
 fn random_text(bytes: usize) -> Result<String, NetError> {
     let mut raw = vec![0u8; bytes];
-    getrandom::getrandom(&mut raw).map_err(|e| NetError::Other(e.to_string()))?;
+    getrandom::fill(&mut raw).map_err(|e| NetError::Other(e.to_string()))?;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw))
 }
 
@@ -449,7 +449,7 @@ pub async fn access_sign_in(
     open: &(dyn Fn(&str) + Sync),
 ) -> Result<String, NetError> {
     let mut seed = [0u8; 32];
-    getrandom::getrandom(&mut seed).map_err(|e| NetError::Other(e.to_string()))?;
+    getrandom::fill(&mut seed).map_err(|e| NetError::Other(e.to_string()))?;
     let secret = crypto_box::SecretKey::from(seed);
     let public_key = base64::engine::general_purpose::URL_SAFE.encode(secret.public_key().as_bytes());
     open(&access_login_address(application, audience, &public_key)?);

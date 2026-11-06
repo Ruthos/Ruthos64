@@ -104,7 +104,7 @@ pub fn retry_delay(n: u32, first: Duration, ceiling: Duration, jitter: f32) -> D
 
 fn jitter() -> f32 {
     let mut b = [0u8; 1];
-    let _ = getrandom::getrandom(&mut b);
+    let _ = getrandom::fill(&mut b);
     b[0] as f32 / 127.5 - 1.0
 }
 

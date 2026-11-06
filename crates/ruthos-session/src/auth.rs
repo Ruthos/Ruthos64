@@ -124,7 +124,7 @@ pub type Store = Arc<dyn TokenStore>;
 /// At least 16 random bytes, base64url.
 pub fn new_state() -> String {
     let mut b = [0u8; 24];
-    getrandom::getrandom(&mut b).expect("the system random source");
+    getrandom::fill(&mut b).expect("the system random source");
     URL_SAFE_NO_PAD.encode(b)
 }
 
