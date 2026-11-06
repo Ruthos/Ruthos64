@@ -6,6 +6,10 @@
 <title>Ruthos: veterinary imaging, measurement and segmentation on Windows</title>
 <meta name="description" content="Ruthos is a free, open-source DICOM viewer and patient archive for Windows, inspired by Horos and written in Rust. Built for veterinary practice and teaching.">
 <link rel="canonical" href="https://ruthos.github.io/Ruthos64/">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="img/icon-32.png">
+<link rel="icon" type="image/png" sizes="256x256" href="img/icon-256.png">
+<link rel="apple-touch-icon" sizes="180x180" href="img/icon-180.png">
 <meta property="og:url" content="https://ruthos.github.io/Ruthos64/">
 <meta name="google-site-verification" content="NYyzrnPMD39sjFilrICsvr6kxvRsitJPSY0yZqsUS4A">
 <meta property="og:title" content="Ruthos: veterinary imaging, measurement and segmentation on Windows">
@@ -58,7 +62,8 @@
     border-bottom: 1px solid var(--line);
   }
   header.top .wrap { display: flex; align-items: center; gap: 24px; height: 58px; }
-  .brand { font-weight: 700; font-size: 19px; color: var(--text); letter-spacing: .2px; }
+  .brand { font-weight: 700; font-size: 19px; color: var(--text); letter-spacing: .2px; white-space: nowrap; }
+  .brand img { width: 28px; height: 28px; border-radius: 6px; vertical-align: -8px; margin-right: 10px; }
   .brand span { color: var(--accent); }
   nav { display: flex; gap: 20px; margin-left: auto; font-size: 15px; }
   nav a { color: var(--muted); }
@@ -138,7 +143,7 @@
 
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="#">Ruth<span>os</span></a>
+    <a class="brand" href="#"><img src="img/icon-256.png" width="28" height="28" alt="">Ruth<span>os</span></a>
     <nav>
       <a href="#features">Features</a>
       <a href="#measurements">Measurements</a>
