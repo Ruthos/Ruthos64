@@ -137,6 +137,51 @@ fn options() -> SegOptions {
     }
 }
 
+/// `dciodvfy` found these missing: the standard requires them, even empty, for
+/// any patient who is not human.
+#[test]
+fn a_seg_of_an_animal_carries_what_the_standard_asks_of_one() {
+    let required = [
+        tags::PATIENT_BREED_DESCRIPTION,
+        tags::PATIENT_BREED_CODE_SEQUENCE,
+        tags::BREED_REGISTRATION_SEQUENCE,
+        tags::RESPONSIBLE_PERSON,
+        tags::RESPONSIBLE_ORGANIZATION,
+        tags::PATIENT_SEX_NEUTERED,
+    ];
+    let segments = |side| {
+        vec![data(
+            segment(1, "Bone", [240, 200, 120], Algorithm::Manual, "Bone"),
+            side,
+            &[(1, 5)],
+        )]
+    };
+    let series = ct("animal", 8, 8, 3, 2.0);
+    let source = source_series(&series.files).unwrap();
+    let out = write_seg(&series.dir, &source, &segments(64), &options()).unwrap();
+    let written = dicom_object::open_file(&out.path).unwrap();
+    for tag in required {
+        assert!(written.get(tag).is_some(), "{tag}");
+    }
+
+    // A human patient's file does not gain them.
+    let human: Vec<PathBuf> = series
+        .files
+        .iter()
+        .map(|f| {
+            rewritten(f, |o| {
+                o.remove_element(tags::PATIENT_SPECIES_DESCRIPTION);
+            })
+        })
+        .collect();
+    let source = source_series(&human).unwrap();
+    let out = write_seg(&series.dir, &source, &segments(64), &options()).unwrap();
+    let written = dicom_object::open_file(&out.path).unwrap();
+    for tag in required {
+        assert!(written.get(tag).is_none(), "{tag}");
+    }
+}
+
 /// Three segments, one with a non-ASCII label: every voxel, label, colour and
 /// algorithm comes back (acceptance 4, at the level of the file).
 #[test]

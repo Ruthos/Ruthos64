@@ -411,6 +411,29 @@ pub fn write_seg(
             string(&mut obj, tag, vr, "");
         }
     }
+    // The standard asks more of an animal: these are Type 2C for any patient who
+    // is not human, so they are there even when nothing is known.
+    if obj.get(tags::PATIENT_SPECIES_DESCRIPTION).is_some() || obj.get(tags::PATIENT_SPECIES_CODE_SEQUENCE).is_some() {
+        for (tag, vr) in [
+            (tags::PATIENT_BREED_DESCRIPTION, VR::LO),
+            (tags::RESPONSIBLE_PERSON, VR::PN),
+            (tags::RESPONSIBLE_ORGANIZATION, VR::LO),
+            (tags::PATIENT_SEX_NEUTERED, VR::CS),
+        ] {
+            if obj.get(tag).is_none() {
+                string(&mut obj, tag, vr, "");
+            }
+        }
+        for tag in [tags::PATIENT_BREED_CODE_SEQUENCE, tags::BREED_REGISTRATION_SEQUENCE] {
+            if obj.get(tag).is_none() {
+                obj.put(DataElement::new(
+                    tag,
+                    VR::SQ,
+                    DataSetSequence::<InMemDicomObject>::empty(),
+                ));
+            }
+        }
+    }
     if obj.get(tags::FRAME_OF_REFERENCE_UID).is_none() {
         // A series with none still has one, shared with the SEG only through
         // the references, so a new one says no more than is known.
