@@ -1,12 +1,28 @@
-# Ruthos 0.1.10-alpha
+# Ruthos 0.2.0-beta.1
 
-Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
+Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. This is the first beta: the feature set planned for 1.0 is complete and in daily use, and what remains is finishing. It is not for diagnostic use.
 
-## New in 0.1.10-alpha
+## Read this first
+
+- **Ruthos is for veterinary, research and teaching use.** It is not for human patients and it is not a medical device. It has no regulatory clearance of any kind, and it must not be the basis of a clinical decision.
+- **Refine edges is experimental and off by default.** AI segments of thin bone can still come out thick, and teeth can pull the level up for the cortex beside them. Check every AI result against the slices before you use its volume.
+- **DICOMweb is tested against Orthanc and a Cloudflare Access gateway.** dcm4chee-arc and the cloud DICOMweb services are not yet tested; `docs/dicomweb.md` keeps the compatibility table.
+- **The AI tool runs on Windows only.** macOS and Linux builds have everything else.
+- **The archive format may change before 1.0.** Keep your original files.
+- **Research-mode models carry their own licences.** nnInteractive is non-commercial (CC BY-NC-SA 4.0) and VISTA3D is for research and non-clinical use only (NVIDIA's model card and the NVIDIA Open Model License). Each shows its terms before first use, and whether your use is allowed is your responsibility.
+
+## New since 0.1.10-alpha
+
+- **DICOMweb.** Search, retrieve and send over HTTPS, through a gateway such as Orthanc's DICOMweb plugin, with five sign-in methods: OpenID Connect, Cloudflare Access, an Access service token, Basic for testing, and none for a server on this computer. Secrets live in the system credential store. Replies are treated as untrusted input: same-host HTTPS redirects only, size and count limits, generated file names, and an interrupted retrieve picks up where it left off. See `docs/dicomweb.md`.
+- **Share.** Share in the database window writes a patient's studies as a folder or zip with a DICOMDIR, the key images, the report, a read-me page for any device and, on Windows, `Ruthos Viewer.exe`: Ruthos renamed, which opens the images beside it with an in-memory database and leaves no trace on the computer. Owner details can be left out. Importing a DICOMDIR from any system lists what is there first and can open it without importing. See `docs/sharing.md`.
+- **Application icon** on the program, the taskbar and the site.
+- **VISTA3D is research only**, as NVIDIA's model card requires, and a test keeps any restricted model out of general use even once it can be downloaded.
+
+## In 0.1.10-alpha
 
 - **Save segments to the study.** Save segments to study writes every segment on the panel as a DICOM Segmentation (SEG) in the study, which other programs can read. Saving again adds a version, and opening MPR offers the newest. A SEG from another program loads the same way, and one that does not line up with the series is refused with the reason. Closing MPR with unsaved changes asks first.
 - **Segments travel with the study.** Teaching copies include them with new UIDs and no creator's name, PACS can send and receive them, and reports list each with its volume and how it was made.
-- **Choose a model.** The AI section now has a Model list. SAM 2.1 Tiny remains the model you can download. Research mode, in Preferences under Viewer, offers VISTA3D and nnInteractive, 3D models still being tested. They cannot be downloaded from Ruthos yet: they install from a folder, and nnInteractive's licence is non-commercial, shown before first use.
+- **Choose a model.** The AI section now has a Model list. SAM 2.1 Tiny remains the model you can download. Research mode, in Preferences under Viewer, offers VISTA3D and nnInteractive, 3D models still being tested. They cannot be downloaded from Ruthos yet: they install from a folder, and each shows its licence terms before first use.
 - **A progress bar and Stop** while following through slices.
 - **Refine edges** can read a segment's edge from the image's own values. It is off by default: it does well on test objects but can drop thin bone on real anatomy.
 
@@ -36,7 +52,8 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - Saving cuts with the study, surface rendering in the 3D pane, and Horos's volume rendering opacity presets.
 - Downloading VISTA3D and nnInteractive from within Ruthos.
 - macOS and Linux for the AI tool, which runs on Windows only for now.
-- A signed installer. This build is an unsigned zip: Windows SmartScreen will warn on first run, and a PC with Smart App Control in enforce mode will refuse it. Building from source avoids both.
+- An installer and a Microsoft Store listing. This build is a zip; see below for signing.
+- dcm4chee-arc and cloud DICOMweb services, IHE AIW-I and UPS-RS, and surface rendering.
 
 ## Running
 
@@ -53,10 +70,10 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.10-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.2.0-beta.1-win64.zip --repo Ruthos/Ruthos64
 ```
 
-This alpha is not code-signed yet: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
+This beta is not code-signed unless the release page says so: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
 
 ## Code signing policy
 
@@ -71,4 +88,4 @@ Team roles:
 
 ## Privacy
 
-Ruthos does not transmit any data to its developers or to third parties. It makes network connections only when the user configures them: the DICOM listener, which is off by default and receives only what the user's own devices send it, and DICOM connections the user initiates.
+Ruthos does not transmit any data to its developers or to third parties. It makes network connections only when the user configures them or asks for them: the DICOM listener, which is off by default and accepts only devices the user has listed; DICOM and DICOMweb connections the user initiates; a guided review server the user chooses to join, which receives the view state of a teaching copy and the participant's name; the optional AI model, fetched once on request; and Cisco's video encoder, fetched once from Cisco with the user's consent, the first time a movie is exported. AI segmentation runs on the user's own computer, and no image data leaves it. A Share package's viewer makes no network connection at all.
