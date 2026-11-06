@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ruthos: a Horos-style DICOM viewer for Windows</title>
+<title>Ruthos: veterinary imaging, measurement and segmentation on Windows</title>
 <meta name="description" content="Ruthos is a free, open-source DICOM viewer and patient archive for Windows, inspired by Horos and written in Rust. Built for veterinary practice and teaching.">
 <link rel="canonical" href="https://ruthos.github.io/Ruthos64/">
 <meta property="og:url" content="https://ruthos.github.io/Ruthos64/">
 <meta name="google-site-verification" content="NYyzrnPMD39sjFilrICsvr6kxvRsitJPSY0yZqsUS4A">
-<meta property="og:title" content="Ruthos: a Horos-style DICOM viewer for Windows">
+<meta property="og:title" content="Ruthos: veterinary imaging, measurement and segmentation on Windows">
 <meta property="og:description" content="A free, open-source DICOM viewer and patient archive inspired by Horos. Archive, GPU viewer, calibrated measurements, LV M-mode, reports and teaching anonymisation.">
 <meta property="og:image" content="https://ruthos.github.io/Ruthos64/img/colour-doppler.jpg">
 <meta property="og:type" content="website">
@@ -65,7 +65,8 @@
   nav a:hover { color: var(--text); text-decoration: none; }
 
   .hero { padding: 72px 0 40px; }
-  .hero h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.1; margin: 0 0 18px; letter-spacing: -.5px; }
+  .hero h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.1; margin: 0 0 10px; letter-spacing: -.5px; }
+  .hero p.strap { font-size: clamp(20px, 2.6vw, 26px); font-weight: 500; color: var(--accent); margin: 0 0 18px; letter-spacing: -.2px; }
   .hero p.lead { font-size: clamp(18px, 2.2vw, 21px); color: var(--muted); max-width: 760px; margin: 0 0 28px; }
   .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 28px; }
   .badge { font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
@@ -158,7 +159,8 @@
       <span class="badge">macOS in preparation</span>
       <span class="badge">Free and open source, LGPL-3.0</span>
     </div>
-    <h1>The Horos workflow, on Windows.</h1>
+    <h1>Veterinary imaging, measurement and segmentation.</h1>
+    <p class="strap">The familiar Horos workflow, on Windows.</p>
     <p class="lead">
       Ruthos is a free DICOM viewer and patient archive inspired by Horos and written in Rust.
       The database window, the 2D viewer, the tools and the corner annotations work the way a
@@ -334,14 +336,13 @@
     <div class="wrap two">
       <div>
         <h2>Code signing policy</h2>
-        <p>Free code signing on Windows is provided by <a href="https://about.signpath.io">SignPath.io</a>, with a certificate by the <a href="https://signpath.org">SignPath Foundation</a>. macOS builds are signed with an Apple Developer ID and notarised by Apple.</p>
-        <p>Every signed release is built from this repository by the release workflow on GitHub-hosted runners, from a tagged commit. Each release carries SHA256 checksums and a GitHub build-provenance attestation; verify a download with <code>gh attestation verify &lt;file&gt; --repo Ruthos/Ruthos64</code>.</p>
+        <p>Ruthos has applied to the <a href="https://signpath.org">SignPath Foundation</a> for free code signing of its Windows releases, and the application is pending. Until it is accepted, releases are unsigned: Windows SmartScreen warns on first run, and a PC with Smart App Control switched on refuses to run them.</p>
+        <p>Once accepted, free code signing on Windows will be provided by <a href="https://about.signpath.io">SignPath.io</a>, with a certificate by the SignPath Foundation, and macOS builds will be signed with an Apple Developer ID and notarised by Apple. Every release, signed or not, is built from this repository by the release workflow on GitHub-hosted runners, from a tagged commit, and carries SHA256 checksums and a GitHub build-provenance attestation; verify a download with <code>gh attestation verify &lt;file&gt; --repo Ruthos/Ruthos64</code>.</p>
         <p>Team roles:</p>
         <ul>
           <li>Committers and reviewers: Mark Bowen</li>
           <li>Approvers of signing requests: Mark Bowen</li>
         </ul>
-        <p class="sub" style="font-size:15px">Code signing is not set up yet: current alpha releases are unsigned, so Windows SmartScreen warns on first run and Smart App Control refuses them. Signed builds through the SignPath Foundation follow once the project is accepted.</p>
       </div>
       <div>
         <h2>Privacy</h2>
