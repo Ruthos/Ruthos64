@@ -8,8 +8,7 @@
 fn main() {
     #[cfg(windows)]
     {
-        let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/icon/ruthos.ico");
+        let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/icon/ruthos.ico");
         println!("cargo:rerun-if-changed={}", icon.display());
         let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
         // FileVersion is numeric (major.minor.patch.0); ProductVersion
