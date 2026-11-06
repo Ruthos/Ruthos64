@@ -8,6 +8,7 @@
 //! standards-based behaviour of dicom-rs. Anything vendor specific belongs in
 //! [`quirks`] behind one trait and never leaks into feature code.
 
+pub mod amm;
 pub mod clut;
 pub mod deid;
 pub mod dicomdir;

@@ -28,6 +28,25 @@ and a length that crosses two regions is refused. The Measurements menu's
 "Show calibration basis" panel lists the attributes read and the basis
 chosen for the current image.
 
+## Anatomical M-mode
+
+On a 2D ultrasound loop, **Anat. M-mode** in the toolbar reads a time and depth
+strip along a line you draw, at any angle, after the study. Click two points for a
+straight line and more for a curve through them. Drag a dot and the strip follows,
+right-click a dot to remove it, and click or drag in the strip to move the loop to
+that frame.
+
+A strip has only the frames of its loop: at 50 frames a second that is 20 ms between
+columns, where a true M-mode takes about 1 ms. Time is never smoothed, so each frame
+shows as a block. Peak systole can fall between frames, and small fast structures can
+be missed, so the strip suits dimensions better than fine timing, and the 2D loop
+stays the reference. Below 30 frames a second it says so.
+
+It needs a calibrated 2D region and the loop's frame time, and refuses a line that
+leaves the region. **Save to study** makes a new series, named with the rate it was
+derived at. That is an M-mode image like any other, so the caliper, LV dimensions and
+other M-mode tools measure it there.
+
 ## Editing
 
 Every measurement has handles: its points, or the four corners of a

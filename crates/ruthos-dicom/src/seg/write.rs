@@ -20,7 +20,7 @@ const SEGMENT_ALGORITHM_NAME: Tag = Tag(0x0062, 0x0009);
 
 /// What a study's objects share, copied from a source image so that a SEG files
 /// under the same patient and study.
-const COPIED: &[Tag] = &[
+pub(crate) const COPIED: &[Tag] = &[
     tags::PATIENT_NAME,
     tags::PATIENT_ID,
     tags::PATIENT_BIRTH_DATE,
@@ -165,6 +165,53 @@ pub struct SegWritten {
     pub series_uid: String,
     pub frames: usize,
 }
+
+/// What a generated object must carry for a patient and a study, even empty.
+pub(crate) fn add_required_empty(obj: &mut InMemDicomObject) {
+    // Required even when empty, whatever the source left out.
+    for (tag, vr) in [
+        (tags::PATIENT_NAME, VR::PN),
+        (tags::PATIENT_ID, VR::LO),
+        (tags::PATIENT_BIRTH_DATE, VR::DA),
+        (tags::PATIENT_SEX, VR::CS),
+        (tags::STUDY_DATE, VR::DA),
+        (tags::STUDY_TIME, VR::TM),
+        (tags::STUDY_ID, VR::SH),
+        (tags::ACCESSION_NUMBER, VR::SH),
+        (tags::REFERRING_PHYSICIAN_NAME, VR::PN),
+        (tags::POSITION_REFERENCE_INDICATOR, VR::LO),
+    ] {
+        if obj.get(tag).is_none() {
+            string(obj, tag, vr, "");
+        }
+    }
+    // The standard asks more of an animal: these are Type 2C for any patient who
+    // is not human, so they are there even when nothing is known.
+    if obj.get(tags::PATIENT_SPECIES_DESCRIPTION).is_some() || obj.get(tags::PATIENT_SPECIES_CODE_SEQUENCE).is_some() {
+        for (tag, vr) in [
+            (tags::PATIENT_BREED_DESCRIPTION, VR::LO),
+            (tags::RESPONSIBLE_PERSON, VR::PN),
+            (tags::RESPONSIBLE_ORGANIZATION, VR::LO),
+            (tags::PATIENT_SEX_NEUTERED, VR::CS),
+        ] {
+            if obj.get(tag).is_none() {
+                string(obj, tag, vr, "");
+            }
+        }
+        for tag in [tags::PATIENT_BREED_CODE_SEQUENCE, tags::BREED_REGISTRATION_SEQUENCE] {
+            if obj.get(tag).is_none() {
+                obj.put(DataElement::new(
+                    tag,
+                    VR::SQ,
+                    DataSetSequence::<InMemDicomObject>::empty(),
+                ));
+            }
+        }
+    }
+}
+
+/// An element of an object in memory.
+pub(crate) type Element = dicom_object::mem::InMemElement;
 
 fn string(obj: &mut InMemDicomObject, tag: Tag, vr: VR, value: &str) {
     obj.put(DataElement::new(tag, vr, dicom_value!(Str, value)));
@@ -394,46 +441,7 @@ pub fn write_seg(
     for element in source.shared.iter() {
         obj.put(element.clone());
     }
-    // Required even when empty, whatever the source left out.
-    for (tag, vr) in [
-        (tags::PATIENT_NAME, VR::PN),
-        (tags::PATIENT_ID, VR::LO),
-        (tags::PATIENT_BIRTH_DATE, VR::DA),
-        (tags::PATIENT_SEX, VR::CS),
-        (tags::STUDY_DATE, VR::DA),
-        (tags::STUDY_TIME, VR::TM),
-        (tags::STUDY_ID, VR::SH),
-        (tags::ACCESSION_NUMBER, VR::SH),
-        (tags::REFERRING_PHYSICIAN_NAME, VR::PN),
-        (tags::POSITION_REFERENCE_INDICATOR, VR::LO),
-    ] {
-        if obj.get(tag).is_none() {
-            string(&mut obj, tag, vr, "");
-        }
-    }
-    // The standard asks more of an animal: these are Type 2C for any patient who
-    // is not human, so they are there even when nothing is known.
-    if obj.get(tags::PATIENT_SPECIES_DESCRIPTION).is_some() || obj.get(tags::PATIENT_SPECIES_CODE_SEQUENCE).is_some() {
-        for (tag, vr) in [
-            (tags::PATIENT_BREED_DESCRIPTION, VR::LO),
-            (tags::RESPONSIBLE_PERSON, VR::PN),
-            (tags::RESPONSIBLE_ORGANIZATION, VR::LO),
-            (tags::PATIENT_SEX_NEUTERED, VR::CS),
-        ] {
-            if obj.get(tag).is_none() {
-                string(&mut obj, tag, vr, "");
-            }
-        }
-        for tag in [tags::PATIENT_BREED_CODE_SEQUENCE, tags::BREED_REGISTRATION_SEQUENCE] {
-            if obj.get(tag).is_none() {
-                obj.put(DataElement::new(
-                    tag,
-                    VR::SQ,
-                    DataSetSequence::<InMemDicomObject>::empty(),
-                ));
-            }
-        }
-    }
+    add_required_empty(&mut obj);
     if obj.get(tags::FRAME_OF_REFERENCE_UID).is_none() {
         // A series with none still has one, shared with the SEG only through
         // the references, so a new one says no more than is known.

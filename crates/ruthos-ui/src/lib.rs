@@ -6,6 +6,7 @@
 //! windows as native viewports.
 
 pub mod about;
+pub mod amm_ui;
 pub mod annotations;
 pub mod anonymize;
 pub mod app;

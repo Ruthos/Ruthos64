@@ -575,6 +575,8 @@ pub struct ViewerState {
 
     pub rois: HashMap<FrameKey, Vec<Roi>>,
     /// Frames whose stored ROIs have been read from the archive.
+    /// A line on a loop and its anatomical M-mode strip.
+    amm: Option<crate::amm_ui::AmmView>,
     /// The slice scrolled to, shown as soon as it has been read.
     scroll_target: Option<i64>,
     scroll_direction: i64,
@@ -865,6 +867,7 @@ impl ViewerState {
             annotations,
             bilinear: true,
             rois: HashMap::new(),
+            amm: None,
             scroll_target: None,
             scroll_direction: 1,
             rois_loaded: HashSet::new(),
@@ -3188,6 +3191,70 @@ impl ViewerState {
 
     // ------------------------------------------------------------ caches
 
+    /// The anatomical M-mode strip of the loop on screen.
+    fn amm_window(&mut self, ctx: &egui::Context, shared: &Shared) {
+        let Some(mut amm) = self.amm.take() else { return };
+        let Some(image) = self.current_image().cloned().filter(|i| i.number_of_frames > 1) else {
+            return;
+        };
+        if amm.image_id != image.id {
+            amm = crate::amm_ui::AmmView::new(image.id);
+        }
+        let n = image.number_of_frames.max(1) as u32;
+        let frames: Vec<Arc<ruthos_dicom::Frame>> = (0..n)
+            .filter_map(|frame| {
+                self.frames
+                    .get(&FrameKey {
+                        image_id: image.id,
+                        frame,
+                    })
+                    .cloned()
+            })
+            .collect();
+        let p = &self.panes[self.active];
+        if frames.len() == n as usize {
+            amm.refresh(ctx, &frames, (p.view.window_center, p.view.window_width));
+        }
+        let can_save = !ruthos_core::portable::active();
+        match amm.window(ctx, p.frame_idx as usize, can_save, self.id) {
+            crate::amm_ui::Action::Nothing => {}
+            crate::amm_ui::Action::Close => return,
+            crate::amm_ui::Action::Jump(frame) => {
+                self.playing = false;
+                self.panes[self.active].frame_idx = frame.min(n as usize - 1) as u32;
+            }
+            crate::amm_ui::Action::Save => {
+                amm.message = Some(match self.save_amm(shared, &amm, &image) {
+                    Ok(()) => {
+                        "Saved to the study. Open the new series from the database window to measure it.".to_string()
+                    }
+                    Err(e) => format!("Not saved: {e}"),
+                });
+            }
+        }
+        self.amm = Some(amm);
+    }
+
+    fn save_amm(&self, shared: &Shared, amm: &crate::amm_ui::AmmView, image: &ImageRow) -> anyhow::Result<()> {
+        let Some(strip) = &amm.strip else { return Ok(()) };
+        let view = &self.panes[self.active].view;
+        let window = (view.window_center, view.window_width);
+        let folder = shared.paths.temp_dir();
+        let file = ruthos_dicom::amm::write_strip(&shared.resolve(&image.path), strip, window, &folder)?;
+        let outcome =
+            ruthos_core::import::import_file(&shared.db, &shared.paths, &file, ruthos_core::import::ImportMode::Move)?;
+        if let ruthos_core::import::FileOutcome::Imported { image_id, study_id, .. } = outcome {
+            let summary = ruthos_core::import::ImportSummary {
+                imported: 1,
+                image_ids: vec![image_id],
+                touched_study_ids: vec![study_id],
+                ..Default::default()
+            };
+            let _ = shared.import_tx.send(ruthos_core::ImportEvent::Finished(summary));
+        }
+        Ok(())
+    }
+
     /// Move to the slice scrolled to, once it is there.
     fn settle_scroll(&mut self) {
         let Some(id) = self.scroll_target else { return };
@@ -3409,6 +3476,7 @@ impl ViewerState {
         self.dev_options(ui);
         let ctx = ui.ctx().clone();
         self.text_prompt_window(&ctx);
+        self.amm_window(&ctx, shared);
         self.roi_manager_window(&ctx);
         self.roi_info_window(&ctx, shared);
         self.histogram_window(&ctx);
@@ -3958,6 +4026,24 @@ impl ViewerState {
                 }
             });
 
+            let looping = self.current_image().is_some_and(|i| i.number_of_frames > 1);
+            if ToolbarButton::new(icons::TOOL_LENGTH, "Anat. M-mode")
+                .width(76.0)
+                .enabled(looping)
+                .selected(self.amm.is_some())
+                .tooltip(if looping {
+                    "Draw a line or curve on this loop to read a time and depth strip along it"
+                } else {
+                    "Anatomical M-mode needs a loop"
+                })
+                .show(ui)
+                .clicked()
+            {
+                self.amm = match (&self.amm, self.current_image()) {
+                    (None, Some(image)) => Some(crate::amm_ui::AmmView::new(image.id)),
+                    _ => None,
+                };
+            }
             let mpr_ok = crate::mpr::series_suits_mpr(&self.panes[self.active].images);
             if ToolbarButton::new(Bitmap::Mpr, "MPR")
                 .enabled(mpr_ok)
@@ -4938,7 +5024,9 @@ impl ViewerState {
         }
 
         let mut transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.panes[k].view);
-        if active && !self.session.following {
+        if let (true, Some(amm)) = (active, self.amm.as_mut()) {
+            amm.input(ui, &response, &transform);
+        } else if active && !self.session.following {
             self.handle_input(ui, &response, &mut transform, &frame, &key);
             self.panes[k].view = transform.state;
             // Input may have scrolled this cell to another image (or past the
@@ -4983,6 +5071,10 @@ impl ViewerState {
                 clut,
                 inverted: frame.inverted,
             });
+        }
+
+        if let (true, Some(amm)) = (active, self.amm.as_ref()) {
+            amm.draw(&painter, &transform);
         }
 
         // ROIs and drafts.
