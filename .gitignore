@@ -13,3 +13,7 @@
 ruthos.ini
 *.local.ini
 policy.json
+
+# Python
+__pycache__/
+*.pyc

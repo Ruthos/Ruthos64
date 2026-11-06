@@ -28,6 +28,10 @@ jobs:
           python3 scripts/notices.py check --target aarch64-apple-darwin x86_64-apple-darwin
       - name: The vendored C is upstream's, plus only what codecs.toml records
         run: python3 scripts/check_codecs.py --verify-vendor
+      - name: Version, download size and dates agree (Cargo.toml, Packager.toml, release notes, site)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/stamp_release.py check --online
       - name: The notices, for a reviewer to read
         run: python3 scripts/notices.py build --target x86_64-pc-windows-msvc --out notices
       - uses: actions/upload-artifact@v4
