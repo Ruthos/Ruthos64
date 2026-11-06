@@ -64,7 +64,7 @@ pub fn stranded() -> bool {
 
 pub const STRANDED_TEXT: &str = "This program opens the images in its own folder, and it can't find them.\n\n\
      If this came in a zip file, close this message, right-click the zip file and choose Extract All. \
-     Then open the extracted folder and double-click Open images.";
+     Then open the extracted folder and double-click Ruthos Viewer.";
 
 fn patient_label(study: &StudyRow) -> String {
     study.patient_name.replace('^', " ").trim().to_string()

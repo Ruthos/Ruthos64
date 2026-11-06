@@ -7,7 +7,7 @@ that an owner or a referring vet can open, with no installation and no database.
 
 | In the folder | What it is for |
 |---|---|
-| `Open images.exe` | Ruthos, renamed and otherwise unchanged. Opens the images in this folder on Windows. |
+| `Ruthos Viewer.exe` | Ruthos, renamed and otherwise unchanged. Opens the images in this folder on Windows. |
 | `Read me first.html` | Opens on any device. Shows the studies, key images and a link to the report. |
 | `Report.pdf` | The report, if the study has one. |
 | `Key images\` | The key images as JPEG. |

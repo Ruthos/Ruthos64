@@ -94,15 +94,15 @@ mod tests {
     #[test]
     fn a_program_inside_an_unextracted_zip_is_recognised() {
         let temp = Path::new("C:/Users/a/AppData/Local/Temp");
-        let inside = temp.join("Temp1_Bella CT.zip/Bella CT/Open images.exe");
+        let inside = temp.join("Temp1_Bella CT.zip/Bella CT/Ruthos Viewer.exe");
         assert!(run_from_unextracted_zip(&inside, temp));
         assert!(!run_from_unextracted_zip(
-            Path::new("E:/Bella CT/Open images.exe"),
+            Path::new("E:/Bella CT/Ruthos Viewer.exe"),
             temp
         ));
         assert!(!run_from_unextracted_zip(&temp.join("build/ruthos.exe"), temp));
         assert!(!run_from_unextracted_zip(
-            Path::new("C:/Users/a/Downloads/Bella.zip/Open images.exe"),
+            Path::new("C:/Users/a/Downloads/Bella.zip/Ruthos Viewer.exe"),
             temp
         ));
     }

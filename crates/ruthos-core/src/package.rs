@@ -34,8 +34,11 @@ use crate::teaching::{SidecarCalibration, SidecarMeasurement};
 use crate::{CoreError, ImageRow, Result, SeriesRow, StudyRow};
 
 /// The program in a package. Windows hides the extension, so people read
-/// "Open images".
-pub const PROGRAM_NAME: &str = "Open images.exe";
+/// "Ruthos Viewer". It is named as a program, not as an action on the files
+/// beside it: an executable on a stick named like a command to open them is
+/// the shape of USB malware, which antivirus heuristics flag and practice
+/// staff are trained not to run.
+pub const PROGRAM_NAME: &str = "Ruthos Viewer.exe";
 pub const NOTES_NAME: &str = "ruthos-package.json";
 pub const READ_ME_NAME: &str = "Read me first.html";
 pub const KEY_IMAGES_DIR: &str = "Key images";
@@ -508,7 +511,7 @@ fn read_me(spec: &Spec, plan: &Plan, pictures: &[String], reports: &[String]) ->
     }
     let open = if spec.program.is_some() {
         "<h2>See every image</h2>\n\
-         <p><b>On a Windows computer:</b> double-click <b>Open images</b> in this folder. You don't need to install \
+         <p><b>On a Windows computer:</b> double-click <b>Ruthos Viewer</b> in this folder. You don't need to install \
          anything, and it changes nothing on your computer.</p>\n\
          <p>If this came as a zip file, choose <b>Extract All</b> first and open the extracted folder.</p>\n\
          <p>If Windows says it protected your PC, choose <b>More info</b>, then <b>Run anyway</b>. If your computer \
@@ -559,7 +562,7 @@ fn write_extras(spec: &Spec, plan: &Plan, work: &Path, notes: &Notes) -> Result<
         std::fs::create_dir_all(&licences)?;
         std::fs::write(
             licences.join("About this program.txt"),
-            "\"Open images\" is Ruthos, a free and open-source DICOM viewer, under another file name.\r\n\
+            "\"Ruthos Viewer\" is Ruthos, a free and open-source DICOM viewer, under another file name.\r\n\
              Source code: https://github.com/Ruthos/Ruthos64\r\n",
         )?;
         for file in &spec.licences {

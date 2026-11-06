@@ -15,7 +15,7 @@ fn main() -> eframe::Result {
     if !viewing && ruthos_ui::package_ui::stranded() {
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Info)
-            .set_title("Open images")
+            .set_title("Ruthos Viewer")
             .set_description(ruthos_ui::package_ui::STRANDED_TEXT)
             .show();
         return Ok(());
