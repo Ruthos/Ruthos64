@@ -185,6 +185,23 @@ impl InstanceMeta {
         self.samples_per_pixel > 1 || self.photometric_interpretation == "PALETTE COLOR"
     }
 
+    /// When this image was stored by the machine, as text that sorts by time
+    /// across days: `YYYYMMDDHHMMSS.FFFFFF`. Content Time is on every echo seen
+    /// so far, so one clock orders a whole study.
+    pub fn acquired(&self) -> Option<String> {
+        let dates = [
+            self.content_date.as_deref(),
+            self.acquisition_date.as_deref(),
+            self.series_date.as_deref(),
+            self.study_date.as_deref(),
+        ];
+        let date = dates
+            .into_iter()
+            .flatten()
+            .find(|d| d.chars().filter(char::is_ascii_digit).count() >= 8)?;
+        moment(date, self.content_time.as_deref().or(self.acquisition_time.as_deref())?)
+    }
+
     pub fn is_monochrome1(&self) -> bool {
         self.photometric_interpretation == "MONOCHROME1"
     }
@@ -202,6 +219,15 @@ pub fn dicom_date_to_iso(da: &str) -> Option<String> {
         return None;
     }
     Some(format!("{}-{}-{}", &digits[0..4], &digits[4..6], &digits[6..8]))
+}
+
+/// A DICOM date and time as one sortable text, or nothing if they are not whole.
+fn moment(date: &str, time: &str) -> Option<String> {
+    let date: String = date.chars().filter(char::is_ascii_digit).take(8).collect();
+    let (whole, fraction) = time.trim().split_once('.').unwrap_or((time.trim(), ""));
+    let whole: String = whole.chars().filter(char::is_ascii_digit).take(6).collect();
+    let fraction: String = fraction.chars().filter(char::is_ascii_digit).take(6).collect();
+    (date.len() == 8 && whole.len() >= 2).then(|| format!("{date}{whole:0<6}.{fraction:0<6}"))
 }
 
 /// Convert a DICOM TM value (`HHMMSS.FFFFFF`) to `HH:MM:SS`.
@@ -600,6 +626,25 @@ impl Getter<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_image_time_sorts_as_text() {
+        let at = |date: &str, time: &str| {
+            let meta = super::InstanceMeta {
+                content_date: Some(date.into()),
+                content_time: Some(time.into()),
+                ..Default::default()
+            };
+            meta.acquired()
+        };
+        assert_eq!(at("20261105", "101530").unwrap(), "20261105101530.000000");
+        assert_eq!(at("20261105", "1015").unwrap(), "20261105101500.000000");
+        assert_eq!(at("20261105", "101530.25").unwrap(), "20261105101530.250000");
+        assert_eq!(at("2026.11.05", "10:15:30").unwrap(), "20261105101530.000000");
+        assert!(at("20261105", "235959").unwrap() < at("20261106", "000001").unwrap());
+        assert_eq!(at("2026", "101530"), None);
+        assert_eq!(super::InstanceMeta::default().acquired(), None);
+    }
+
     use super::*;
 
     #[test]

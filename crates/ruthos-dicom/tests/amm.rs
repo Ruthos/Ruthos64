@@ -166,7 +166,7 @@ fn a_slow_loop_says_so() {
 fn a_saved_strip_is_an_m_mode_image_with_its_scale() {
     let strip = read_strip(&loop_frames(), &LINE, SCALE);
     let folder = std::env::temp_dir().join(format!("ruthos-amm-{}", std::process::id()));
-    let file = write_strip(&sample(), &strip, (105.0, 190.0), &folder).unwrap();
+    let file = write_strip(&sample(), &strip, (105.0, 190.0), false, &folder).unwrap();
 
     let meta = read_meta(&file).unwrap();
     assert_eq!(meta.modality, "US");
@@ -199,5 +199,38 @@ fn a_saved_strip_is_an_m_mode_image_with_its_scale() {
     if let Some(interop) = std::env::var_os("RUTHOS_SEG_INTEROP") {
         std::fs::copy(&file, PathBuf::from(interop).join("ruthos-amm.dcm")).unwrap();
     }
+    std::fs::remove_dir_all(folder).ok();
+}
+
+#[test]
+fn a_smoothed_strip_blends_between_frames_and_keeps_its_scale() {
+    let strip = read_strip(&loop_frames(), &LINE, SCALE);
+    let folder = std::env::temp_dir().join(format!("ruthos-amm-smooth-{}", std::process::id()));
+    let file_of = |smooth| write_strip(&sample(), &strip, (105.0, 190.0), smooth, &folder).unwrap();
+    let (blocks, blended) = (file_of(false), file_of(true));
+
+    let (a, b) = (read_meta(&blocks).unwrap(), read_meta(&blended).unwrap());
+    assert_eq!(a.us_regions[0].delta_x, b.us_regions[0].delta_x);
+    assert_eq!(a.us_regions[0].delta_y, b.us_regions[0].delta_y);
+
+    let pixels = |file: &PathBuf| match decode_frame(file, 0).unwrap().pixels {
+        FramePixels::Gray(v) => v,
+        _ => panic!("a strip is greyscale"),
+    };
+    let (blocks, blended) = (pixels(&blocks), pixels(&blended));
+    assert_eq!(blocks.len(), blended.len());
+    let width = FRAMES * COLUMNS_PER_FRAME;
+    let mut softened = false;
+    for (hard, soft) in blocks.chunks(width).zip(blended.chunks(width)) {
+        let tallest = hard.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        let widest = soft.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        // A step between frames is shared out over the columns of a frame.
+        assert!(
+            widest <= tallest / COLUMNS_PER_FRAME as f32 + 1.0,
+            "{widest} against {tallest}"
+        );
+        softened |= tallest > 16.0 && widest < tallest / 2.0;
+    }
+    assert!(softened, "the wall's edge should have softened somewhere");
     std::fs::remove_dir_all(folder).ok();
 }

@@ -18,6 +18,8 @@ pub struct Settings {
     pub save_unrefined_masks: bool,
     /// Load the newest saved segments on opening MPR, without asking.
     pub load_newest_segments: bool,
+    /// Show an echo's images by series, not on the study timeline.
+    pub series_grouped: bool,
     /// The MPR tools on the left and right mouse buttons.
     pub mpr_left_tool: String,
     pub mpr_right_tool: String,
@@ -354,6 +356,7 @@ impl Default for Settings {
             refine_band: 3,
             save_unrefined_masks: false,
             load_newest_segments: false,
+            series_grouped: false,
             mpr_left_tool: String::new(),
             mpr_right_tool: String::new(),
             research_mode: false,

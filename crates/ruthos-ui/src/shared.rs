@@ -28,6 +28,9 @@ pub struct NetStatus {
     pub last_error: Option<String>,
 }
 
+/// Longer than the main window's half-second heartbeat.
+const MAIN_WINDOW_LATE: std::time::Duration = std::time::Duration::from_millis(700);
+
 pub struct Shared {
     pub db: Arc<Database>,
     pub paths: DataPaths,
@@ -44,6 +47,11 @@ pub struct Shared {
     pub thumb_textures: Mutex<HashMap<i64, TextureHandle>>,
     pub import_tx: Sender<ImportEvent>,
     pub import_rx: Receiver<ImportEvent>,
+    /// Counts finished imports that touched a study, so open viewers can
+    /// show series that arrived after they opened.
+    pub series_revision: AtomicU64,
+    /// When the main window last ran a frame.
+    main_frame: Mutex<std::time::Instant>,
     pub net_status: Mutex<NetStatus>,
     /// Set by a viewer's Database button; the app focuses the browser window.
     pub focus_browser: AtomicBool,
@@ -92,6 +100,18 @@ pub struct Shared {
 }
 
 impl Shared {
+    /// The main window ran a frame.
+    pub fn main_window_ran(&self) {
+        *self.main_frame.lock() = std::time::Instant::now();
+    }
+
+    /// Has the main window missed its regular frame? Windows paints one window
+    /// at a time, so a viewer repainting without a pause can keep it out for
+    /// as long as a loop plays, and closing windows and imports wait on it.
+    pub fn main_window_waiting(&self) -> bool {
+        self.main_frame.lock().elapsed() > MAIN_WINDOW_LATE
+    }
+
     pub fn new(
         db: Arc<Database>,
         paths: DataPaths,
@@ -116,6 +136,8 @@ impl Shared {
             thumb_textures: Mutex::new(HashMap::new()),
             import_tx,
             import_rx,
+            series_revision: AtomicU64::new(0),
+            main_frame: Mutex::new(std::time::Instant::now()),
             net_status: Mutex::new(NetStatus::default()),
             focus_browser: AtomicBool::new(false),
             open_requests: Mutex::new(Vec::new()),
@@ -164,6 +186,17 @@ impl Shared {
             let frame = (img.number_of_frames / 2).max(0) as u32;
             self.thumbs.request(series_id, self.resolve(&img.path), frame);
         }
+        None
+    }
+
+    /// One still's own thumbnail. Thumbnails are kept by series id, so a
+    /// still uses its negated image id, which no series can have.
+    pub fn image_thumbnail(&self, image: &ruthos_core::ImageRow) -> Option<TextureHandle> {
+        let key = -image.id;
+        if let Some(t) = self.thumb_textures.lock().get(&key) {
+            return Some(t.clone());
+        }
+        self.thumbs.request(key, self.resolve(&image.path), 0);
         None
     }
 }

@@ -35,6 +35,8 @@ pub struct AmmView {
     pub strip: Option<Strip>,
     problem: Option<String>,
     texture: Option<egui::TextureHandle>,
+    /// Blend between frames on screen and in a saved strip.
+    pub smooth: bool,
     pub message: Option<String>,
 }
 
@@ -48,6 +50,7 @@ impl AmmView {
             strip: None,
             problem: None,
             texture: None,
+            smooth: true,
             message: None,
         }
     }
@@ -123,8 +126,13 @@ impl AmmView {
                     }
                 }
                 let image = egui::ColorImage::new([strip.frames, strip.samples], pixels);
-                // Nearest: a frame is a block, and must not look like more.
-                self.texture = Some(ctx.load_texture("ruthos-amm", image, egui::TextureOptions::NEAREST));
+                // Only the picture blends: each frame is still one reading.
+                let options = if self.smooth {
+                    egui::TextureOptions::LINEAR
+                } else {
+                    egui::TextureOptions::NEAREST
+                };
+                self.texture = Some(ctx.load_texture("ruthos-amm", image, options));
                 self.strip = Some(strip);
             }
             Err(e) => self.problem = Some(e),
@@ -209,6 +217,16 @@ impl AmmView {
                     }
                     if ui.add_enabled(!self.points.is_empty(), egui::Button::new("Clear line")).clicked() {
                         self.points.clear();
+                    }
+                    if ui
+                        .checkbox(&mut self.smooth, "Smooth")
+                        .on_hover_text(
+                            "Blends between frames on screen and in the saved strip. \
+                             Each frame is still one reading: nothing is measured between them.",
+                        )
+                        .changed()
+                    {
+                        self.read = None;
                     }
                 });
             });

@@ -15,8 +15,8 @@ use ruthos_dicom::meta::{dicom_date_to_iso, dicom_time_to_hms, InstanceMeta};
 
 use crate::mmode::MmodeRow;
 use crate::model::{
-    AlbumRow, DateFilter, ImageRow, MeasurementInput, MeasurementRow, ReportRow, RoiRecord, RoiValue, SeriesRow,
-    StudyRow,
+    timeline_order, AlbumRow, DateFilter, ImageRow, MeasurementInput, MeasurementRow, ReportRow, RoiRecord, RoiValue,
+    SeriesRow, StudyRow, TimelineEntry,
 };
 use crate::paths::DataPaths;
 use crate::teaching::TeachingCase;
@@ -244,8 +244,8 @@ impl Database {
         tx.execute(
             "INSERT INTO image (series_id, sop_instance_uid, sop_class_uid, instance_number, number_of_frames,
                 rows, columns, path, stored_in_database_folder, file_size, transfer_syntax, is_key_image,
-                slice_location, comment, date_added)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, '', ?13)",
+                slice_location, comment, date_added, acquired)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, '', ?13, ?14)",
             params![
                 series_id,
                 meta.sop_instance_uid,
@@ -260,6 +260,7 @@ impl Database {
                 meta.transfer_syntax,
                 meta.slice_location,
                 now,
+                meta.acquired().unwrap_or_default(),
             ],
         )?;
         let image_id = tx.last_insert_rowid();
@@ -1216,6 +1217,49 @@ impl Database {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// Every image of a study in the order it was taken.
+    pub fn timeline(&self, study_id: i64) -> Result<Vec<TimelineEntry>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT i.id, i.series_id, i.sop_instance_uid, i.sop_class_uid, i.instance_number, i.number_of_frames,
+                    i.rows, i.columns, i.path, i.stored_in_database_folder, i.file_size, i.transfer_syntax,
+                    i.is_key_image, i.slice_location, i.comment, i.date_added, i.acquired
+             FROM image i JOIN series s ON s.id = i.series_id WHERE s.study_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![study_id], |r| {
+            Ok(TimelineEntry {
+                image: image_from_row(r)?,
+                acquired: r.get::<_, Option<String>>(16)?.filter(|t| !t.is_empty()),
+            })
+        })?;
+        let mut entries = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        timeline_order(&mut entries);
+        Ok(entries)
+    }
+
+    /// Images of a study whose time has not been read from their files yet.
+    pub fn images_without_time(&self, study_id: i64) -> Result<Vec<ImageRow>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT i.id, i.series_id, i.sop_instance_uid, i.sop_class_uid, i.instance_number, i.number_of_frames,
+                    i.rows, i.columns, i.path, i.stored_in_database_folder, i.file_size, i.transfer_syntax,
+                    i.is_key_image, i.slice_location, i.comment, i.date_added
+             FROM image i JOIN series s ON s.id = i.series_id
+             WHERE s.study_id = ?1 AND i.acquired IS NULL",
+        )?;
+        let rows = stmt.query_map(params![study_id], image_from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Record an image's time. Empty means its file has none.
+    pub fn set_image_time(&self, image_id: i64, acquired: &str) -> Result<()> {
+        self.conn.lock().execute(
+            "UPDATE image SET acquired = ?1 WHERE id = ?2",
+            params![acquired, image_id],
+        )?;
+        Ok(())
+    }
+
     pub fn image(&self, id: i64) -> Result<Option<ImageRow>> {
         let conn = self.conn.lock();
         Ok(conn
@@ -1705,6 +1749,8 @@ fn migrate(conn: &Connection) -> Result<()> {
     // Columns added after the first schema; SQLite has no IF NOT EXISTS for them.
     add_column_if_missing(conn, "study", "teaching_reference", "TEXT")?;
     add_column_if_missing(conn, "study", "teaching_answer_key", "INTEGER NOT NULL DEFAULT 0")?;
+    // When an image was taken: NULL until looked for, empty if the file has none.
+    add_column_if_missing(conn, "image", "acquired", "TEXT")?;
     add_column_if_missing(conn, "roi", "concept_code", "TEXT")?;
     add_column_if_missing(conn, "roi", "basis", "TEXT")?;
     add_column_if_missing(conn, "roi", "def_key", "TEXT")?;
@@ -2052,6 +2098,60 @@ mod tests {
 
     /// An archive written on Windows before 0.1.0-alpha holds backslashes;
     /// opening it rewrites them so the same file resolves on a Mac.
+    #[test]
+    fn a_timeline_mixes_stills_and_loops_by_time() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let add = |sop: &str, n: i64, frames: u32, time: &str| {
+            let mut m = meta("1", "1.1", sop);
+            m.instance_number = Some(n);
+            m.number_of_frames = frames;
+            m.content_date = Some("20261105".into());
+            m.content_time = Some(time.into());
+            db.insert_instance(&m, sop, true, 10).unwrap();
+        };
+        add("s1", 1, 1, "100000");
+        add("l1", 2, 40, "100010");
+        add("s2", 3, 1, "100020");
+        add("l2", 4, 40, "100030");
+        let study = db.list_studies(&StudyFilter::default()).unwrap()[0].id;
+        assert_eq!(
+            db.series_for_study(study).unwrap().len(),
+            3,
+            "each loop is still its own series"
+        );
+
+        let timeline = db.timeline(study).unwrap();
+        let order: Vec<&str> = timeline.iter().map(|e| e.image.path.as_str()).collect();
+        assert_eq!(order, ["s1", "l1", "s2", "l2"]);
+        assert_eq!(timeline[1].clock().as_deref(), Some("10:00:10"));
+        assert_eq!(timeline[1].gap_since(&timeline[0]), None, "seconds apart is no gap");
+        let at = |time: &str| TimelineEntry {
+            acquired: Some(time.to_string()),
+            ..timeline[0].clone()
+        };
+        let start = at("20261105100000.000000");
+        assert_eq!(at("20261105101800.000000").gap_since(&start).unwrap(), "18 min later");
+        assert_eq!(
+            at("20261105121100.000000").gap_since(&start).unwrap(),
+            "2 h 11 min later"
+        );
+        assert_eq!(at("20261108100000.000000").gap_since(&start).unwrap(), "3 days later");
+
+        // An older archive: nothing read yet, then read from the files.
+        db.conn.lock().execute("UPDATE image SET acquired = NULL", []).unwrap();
+        assert_eq!(db.images_without_time(study).unwrap().len(), 4);
+        let timeline = db.timeline(study).unwrap();
+        let by_number: Vec<&str> = timeline.iter().map(|e| e.image.path.as_str()).collect();
+        assert_eq!(by_number, ["s1", "l1", "s2", "l2"], "instance numbers stand in");
+        for image in db.images_without_time(study).unwrap() {
+            db.set_image_time(image.id, "").unwrap();
+        }
+        assert!(
+            db.images_without_time(study).unwrap().is_empty(),
+            "a file with no time is not read twice"
+        );
+    }
+
     #[test]
     fn stored_paths_migrate_to_forward_slashes() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();

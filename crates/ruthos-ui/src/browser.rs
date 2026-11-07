@@ -422,6 +422,11 @@ impl BrowserState {
                             tracing::warn!("import error for {}: {err}", path.display());
                         }
                     }
+                    if !summary.touched_study_ids.is_empty() {
+                        shared
+                            .series_revision
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     for id in &summary.touched_study_ids {
                         self.series_cache.remove(id);
                         if let Ok(series) = shared.db.series_for_study(*id) {

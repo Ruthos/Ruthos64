@@ -692,6 +692,20 @@ pub struct ViewerState {
     session: session_view::SessionView,
 
     pub close_requested: bool,
+    /// An echo's images in the order they were taken. Empty for other studies.
+    timeline: Vec<ruthos_core::model::TimelineEntry>,
+    timeline_read: bool,
+    /// The image the timeline last scrolled to.
+    timeline_shown: Option<i64>,
+    /// Show the series list, not the timeline.
+    grouped: bool,
+    /// Opened on the study, not on a chosen series: start at its first image.
+    timeline_from_start: bool,
+    /// The `series_revision` this window's series list was read at.
+    series_seen: u64,
+    /// This frame leaves a gap so the main window can paint.
+    give_way: bool,
+    gave_way_at: Option<Instant>,
     /// Teaching copy with an answer key: measurements hidden until revealed.
     pub reveal_answers: bool,
     mouse_pixel: Option<(i64, i64)>,
@@ -828,6 +842,9 @@ fn lock_chip_rect(cell: Rect) -> Rect {
     )
 }
 const GPU_CACHE: usize = 8;
+/// How long a playing viewer pauses for the main window, and how often at most.
+const GIVE_WAY: std::time::Duration = std::time::Duration::from_millis(40);
+const GIVE_WAY_EVERY: std::time::Duration = std::time::Duration::from_millis(300);
 
 impl ViewerState {
     pub fn open(shared: &Shared, study: StudyRow, series_id: Option<i64>) -> anyhow::Result<Self> {
@@ -849,6 +866,7 @@ impl ViewerState {
             1 => AnnotationLevel::Partial,
             _ => AnnotationLevel::Full,
         };
+        let grouped = settings.series_grouped;
         drop(settings);
         let mut viewer = Self {
             id,
@@ -937,6 +955,14 @@ impl ViewerState {
             gpu_order: VecDeque::new(),
             session: Default::default(),
             close_requested: false,
+            timeline: Vec::new(),
+            timeline_read: false,
+            timeline_shown: None,
+            grouped,
+            timeline_from_start: series_id.is_none(),
+            series_seen: shared.series_revision.load(std::sync::atomic::Ordering::Relaxed),
+            give_way: false,
+            gave_way_at: None,
             reveal_answers: false,
             mouse_pixel: None,
             status: None,
@@ -3226,7 +3252,8 @@ impl ViewerState {
             crate::amm_ui::Action::Save => {
                 amm.message = Some(match self.save_amm(shared, &amm, &image) {
                     Ok(()) => {
-                        "Saved to the study. Open the new series from the database window to measure it.".to_string()
+                        "Saved to the study. It is in this window's series list, where the M-mode tools measure it."
+                            .to_string()
                     }
                     Err(e) => format!("Not saved: {e}"),
                 });
@@ -3240,7 +3267,7 @@ impl ViewerState {
         let view = &self.panes[self.active].view;
         let window = (view.window_center, view.window_width);
         let folder = shared.paths.temp_dir();
-        let file = ruthos_dicom::amm::write_strip(&shared.resolve(&image.path), strip, window, &folder)?;
+        let file = ruthos_dicom::amm::write_strip(&shared.resolve(&image.path), strip, window, amm.smooth, &folder)?;
         let outcome =
             ruthos_core::import::import_file(&shared.db, &shared.paths, &file, ruthos_core::import::ImportMode::Move)?;
         if let ruthos_core::import::FileOutcome::Imported { image_id, study_id, .. } = outcome {
@@ -3528,6 +3555,20 @@ impl ViewerState {
         if ui.input(|i| i.viewport().close_requested()) {
             self.persist_series_display(shared);
             self.close_requested = true;
+            // The main window removes this one, so leave it room to.
+            self.playing = false;
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
+        if shared.main_window_waiting() && self.gave_way_at.is_none_or(|t| t.elapsed() > GIVE_WAY_EVERY) {
+            self.gave_way_at = Some(Instant::now());
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
+        // Held for more than one frame: egui follows any immediate repaint
+        // with one more, which would fill a single frame's gap.
+        self.give_way = self.gave_way_at.is_some_and(|t| t.elapsed() < GIVE_WAY);
+        self.reload_series(shared);
+        if !self.timeline_read {
+            self.load_timeline(shared);
         }
         self.pump_loader(shared);
         self.settle_scroll();
@@ -3595,9 +3636,108 @@ impl ViewerState {
             }
         }
 
-        if shared.loader.has_pending() || self.playing {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        if !self.close_requested && (shared.loader.has_pending() || self.playing) {
+            self.repaint_after(ui, std::time::Duration::from_millis(16));
         }
+    }
+
+    /// Ask for the next frame, leaving a gap if the main window needs one.
+    fn repaint_after(&self, ui: &Ui, wanted: std::time::Duration) {
+        ui.ctx()
+            .request_repaint_after(if self.give_way { wanted.max(GIVE_WAY) } else { wanted });
+    }
+
+    /// Show series that reached this study after the window opened.
+    fn reload_series(&mut self, shared: &Shared) {
+        let revision = shared.series_revision.load(std::sync::atomic::Ordering::Relaxed);
+        if revision == self.series_seen {
+            return;
+        }
+        self.series_seen = revision;
+        let Ok(mut series) = shared.db.series_for_study(self.study.id) else {
+            return;
+        };
+        series.retain(|s| s.modality != ruthos_core::seg::MODALITY);
+        let moved: Option<Vec<usize>> = self
+            .panes
+            .iter()
+            .map(|p| {
+                let id = self.series.get(p.series_idx)?.id;
+                series.iter().position(|s| s.id == id)
+            })
+            .collect();
+        // A series shown here has gone: leave the list until the window closes.
+        let Some(moved) = moved else { return };
+        for (pane, index) in self.panes.iter_mut().zip(moved) {
+            pane.series_idx = index;
+        }
+        self.series = series;
+        self.timeline_read = false;
+    }
+
+    /// Put an echo's images in order, reading the time of any image imported
+    /// before times were kept.
+    fn load_timeline(&mut self, shared: &Shared) {
+        self.timeline_read = true;
+        self.timeline.clear();
+        if !self.series.iter().any(|s| s.modality == "US") {
+            return;
+        }
+        for image in shared.db.images_without_time(self.study.id).unwrap_or_default() {
+            // A file that cannot be reached now may be back later.
+            if let Ok(meta) = ruthos_dicom::read_meta(&shared.resolve(&image.path)) {
+                let time = meta.acquired().unwrap_or_default();
+                if let Err(e) = shared.db.set_image_time(image.id, &time) {
+                    tracing::warn!("an image time could not be saved: {e}");
+                }
+            }
+        }
+        let mut entries = shared.db.timeline(self.study.id).unwrap_or_default();
+        entries.retain(|e| self.series.iter().any(|s| s.id == e.image.series_id));
+        if entries.len() > 1 {
+            self.timeline = entries;
+        }
+        if std::mem::take(&mut self.timeline_from_start) && self.on_timeline() {
+            self.show_timeline_entry(shared, 0);
+        }
+    }
+
+    fn on_timeline(&self) -> bool {
+        !self.timeline.is_empty() && !self.grouped
+    }
+
+    /// Show an image of the timeline in the active cell.
+    fn show_timeline_entry(&mut self, shared: &Shared, index: usize) {
+        let Some(entry) = self.timeline.get(index) else { return };
+        let (series_id, image_id) = (entry.image.series_id, entry.image.id);
+        let still = entry.image.number_of_frames <= 1;
+        let Some(series) = self.series.iter().position(|s| s.id == series_id) else {
+            return;
+        };
+        self.scroll_target = None;
+        self.select_series(shared, series);
+        if self.panes[self.active].series_idx != series {
+            return; // A locked cell.
+        }
+        if still {
+            self.playing = false;
+        }
+        let pane = &self.panes[self.active];
+        if pane.images.len() > 1 {
+            if let Some(position) = pane.images.iter().position(|i| i.id == image_id) {
+                self.set_active_position(position);
+            }
+        }
+    }
+
+    /// Move along the timeline, across stills and loops alike.
+    fn step_timeline(&mut self, shared: &Shared, delta: i64) {
+        let current = self.current_image().map(|i| i.id);
+        let Some(here) = self.timeline.iter().position(|e| Some(e.image.id) == current) else {
+            return;
+        };
+        let last = self.timeline.len() as i64 - 1;
+        self.show_timeline_entry(shared, (here as i64 + delta).clamp(0, last) as usize);
     }
 
     /// Pixel length of the selected Length ROI on the current frame, if any.
@@ -4270,7 +4410,80 @@ impl ViewerState {
         });
     }
 
+    /// An echo's images one by one, in the order they were taken.
+    fn timeline_drawer(&mut self, ui: &mut Ui, shared: &Shared) {
+        let current = self.current_image().map(|i| i.id);
+        let follow = current != self.timeline_shown;
+        self.timeline_shown = current;
+        let mut clicked = None;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            let mut earlier = None;
+            for (i, entry) in self.timeline.iter().enumerate() {
+                let gap = earlier.and_then(|e| entry.gap_since(e));
+                if let Some(gap) = gap {
+                    ui.label(
+                        egui::RichText::new(gap)
+                            .size(11.0)
+                            .color(Color32::from_rgb(240, 190, 90)),
+                    );
+                }
+                earlier = Some(entry);
+                let image = &entry.image;
+                let looping = image.number_of_frames > 1;
+                let tex = if looping {
+                    shared.thumbnail(image.series_id)
+                } else {
+                    shared.image_thumbnail(image)
+                };
+                let caption = entry
+                    .clock()
+                    .unwrap_or_else(|| format!("Image {}", image.instance_number.unwrap_or(i as i64 + 1)));
+                let sub = if looping {
+                    format!("Loop, {} frames", image.number_of_frames)
+                } else {
+                    "Still".to_string()
+                };
+                let selected = current == Some(image.id);
+                let r = thumbnail_cell(ui, tex.as_ref(), &caption, &sub, selected, theme::THUMB_SIZE);
+                if selected && follow {
+                    r.scroll_to_me(None);
+                }
+                if r.clicked() {
+                    clicked = Some(i);
+                }
+            }
+        });
+        if let Some(i) = clicked {
+            self.show_timeline_entry(shared, i);
+        }
+    }
+
     fn drawer(&mut self, ui: &mut Ui, shared: &Shared) {
+        if !self.timeline.is_empty() {
+            ui.horizontal(|ui| {
+                let mut grouped = self.grouped;
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().button_padding.x = 4.0;
+                let word = |text: &str| egui::RichText::new(text).size(11.5);
+                ui.selectable_value(&mut grouped, false, word("Timeline"))
+                    .on_hover_text("Stills and loops in the order they were taken. Page Up and Down move along it.");
+                ui.selectable_value(&mut grouped, true, word("Grouped"))
+                    .on_hover_text("By series, with the stills together");
+                if grouped != self.grouped {
+                    self.grouped = grouped;
+                    let mut settings = shared.settings.lock();
+                    settings.series_grouped = grouped;
+                    if let Err(e) = settings.save() {
+                        tracing::warn!("the series view could not be saved: {e}");
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            if !self.grouped {
+                self.timeline_drawer(ui, shared);
+                return;
+            }
+        }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             let mut clicked = None;
             for (i, s) in self.series.iter().enumerate() {
@@ -4380,8 +4593,7 @@ impl ViewerState {
                     self.last_tick = Some(now);
                 }
             }
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_secs_f32(period / 2.0));
+            self.repaint_after(ui, std::time::Duration::from_secs_f32(period / 2.0));
             return;
         }
 
@@ -4441,12 +4653,11 @@ impl ViewerState {
         }
 
         // Fast loops ask for every screen frame; slow ones just in time.
-        if fastest > 20.0 {
+        if fastest > 20.0 && !self.give_way {
             ui.ctx().request_repaint();
         } else {
             let period = 1.0 / fastest.max(0.5);
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_secs_f32(period / 2.0));
+            self.repaint_after(ui, std::time::Duration::from_secs_f32(period / 2.0));
         }
     }
 
@@ -4707,10 +4918,18 @@ impl ViewerState {
             self.step_image(-1);
         }
         if pgdown {
-            self.step_image(10);
+            if self.on_timeline() {
+                self.step_timeline(shared, 1);
+            } else {
+                self.step_image(10);
+            }
         }
         if pgup {
-            self.step_image(-10);
+            if self.on_timeline() {
+                self.step_timeline(shared, -1);
+            } else {
+                self.step_image(-10);
+            }
         }
         if home {
             self.set_active_position(0);

@@ -2,8 +2,9 @@
 //! the user draws, straight or curved, after the study.
 //!
 //! A true M-mode samples about a thousand times a second, and this has only the
-//! frames of the loop. So time is never interpolated: each frame is one block of
-//! identical columns, and a strip cannot look sharper than its loop. Everything
+//! frames of the loop. So a strip holds one reading a frame, and a saved strip
+//! gives each frame a block of columns, blended between frames only if asked.
+//! Everything
 //! that shows or saves a strip says the rate it was derived at.
 //!
 //! A saved strip is an ordinary ultrasound image with an M-mode region, so the
@@ -240,8 +241,15 @@ fn region(strip: &Strip, columns: usize) -> InMemDicomObject {
 }
 
 /// Write a strip as an ultrasound image of the study `template` belongs to,
-/// through the given window, and return its file.
-pub fn write_strip(template: &Path, strip: &Strip, window: (f32, f32), folder: &Path) -> Result<std::path::PathBuf> {
+/// through the given window, and return its file. With `smooth` the columns
+/// blend from one frame to the next, and the file says so.
+pub fn write_strip(
+    template: &Path,
+    strip: &Strip,
+    window: (f32, f32),
+    smooth: bool,
+    folder: &Path,
+) -> Result<std::path::PathBuf> {
     let source: InMemDicomObject = open_any(template, Some(tags::PIXEL_DATA))?.into_inner();
     let columns = strip.frames * COLUMNS_PER_FRAME;
     if columns > u16::MAX as usize || strip.samples > u16::MAX as usize {
@@ -269,10 +277,11 @@ pub fn write_strip(template: &Path, strip: &Strip, window: (f32, f32), folder: &
         "a straight line"
     };
     let derivation = format!(
-        "Anatomical M-mode in Ruthos, read along {path_kind} of {:.1} mm through {} frames at {:.0} frames a second",
+        "Anatomical M-mode in Ruthos, read along {path_kind} of {:.1} mm through {} frames at {:.0} frames a second{}",
         strip.length_mm(),
         strip.frames,
-        strip.frames_per_second()
+        strip.frames_per_second(),
+        if smooth { ", blended between frames" } else { "" }
     );
     string(&mut obj, tags::SOP_CLASS_UID, VR::UI, uids::ULTRASOUND_IMAGE_STORAGE);
     string(&mut obj, tags::SOP_INSTANCE_UID, VR::UI, &sop);
@@ -323,10 +332,19 @@ pub fn write_strip(template: &Path, strip: &Strip, window: (f32, f32), folder: &
 
     let (centre, width) = (window.0, window.1.max(1.0));
     let mut pixels = Vec::with_capacity(columns * strip.samples + 1);
+    let last = (strip.frames - 1) as f32;
     for sample in 0..strip.samples {
-        for frame in 0..strip.frames {
-            let shade = (((strip.at(frame, sample) - centre) / width + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
-            pixels.extend(std::iter::repeat_n(shade, COLUMNS_PER_FRAME));
+        for column in 0..columns {
+            let value = if smooth {
+                // The middle of each block stays on its frame.
+                let at = ((column as f32 + 0.5) / COLUMNS_PER_FRAME as f32 - 0.5).clamp(0.0, last);
+                let (frame, t) = (at.floor() as usize, at.fract());
+                let next = (frame + 1).min(strip.frames - 1);
+                strip.at(frame, sample) * (1.0 - t) + strip.at(next, sample) * t
+            } else {
+                strip.at(column / COLUMNS_PER_FRAME, sample)
+            };
+            pixels.push((((value - centre) / width + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8);
         }
     }
     if pixels.len() % 2 == 1 {

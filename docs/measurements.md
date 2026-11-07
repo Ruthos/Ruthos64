@@ -28,6 +28,17 @@ and a length that crosses two regions is refused. The Measurements menu's
 "Show calibration basis" panel lists the attributes read and the basis
 chosen for the current image.
 
+## Echo studies in order
+
+A machine numbers stills and loops in one sequence, but each loop opens as a series of
+its own, which would leave the stills stacked apart. So for ultrasound the viewer's
+drawer offers **Timeline** and **Grouped**. Timeline lists every image in the order it
+was stored, by its Content Time, with the instance number settling images of the same
+second, and it marks a pause of ten minutes or more. Page Up and Page Down move along
+it. If any image has no time, the instance numbers order them all. Times are read when
+a study is imported, or the first time an older one opens. Files and series do not
+change, and the choice is remembered.
+
 ## Anatomical M-mode
 
 On a 2D ultrasound loop, **Anat. M-mode** in the toolbar reads a time and depth
@@ -37,14 +48,15 @@ right-click a dot to remove it, and click or drag in the strip to move the loop 
 that frame.
 
 A strip has only the frames of its loop: at 50 frames a second that is 20 ms between
-columns, where a true M-mode takes about 1 ms. Time is never smoothed, so each frame
-shows as a block. Peak systole can fall between frames, and small fast structures can
+columns, where a true M-mode takes about 1 ms. **Smooth**, on by default, blends between
+frames on screen and in a saved strip, and it adds no readings: untick it to see and
+save each frame as a block. A saved strip records which it was. Peak systole can fall between frames, and small fast structures can
 be missed, so the strip suits dimensions better than fine timing, and the 2D loop
 stays the reference. Below 30 frames a second it says so.
 
 It needs a calibrated 2D region and the loop's frame time, and refuses a line that
-leaves the region. **Save to study** makes a new series, named with the rate it was
-derived at. That is an M-mode image like any other, so the caliper, LV dimensions and
+leaves the region. **Save to study** adds a new series to the viewer's list, named with
+the rate it was derived at. That is an M-mode image like any other, so the caliper, LV dimensions and
 other M-mode tools measure it there. A report holding a strip's values or picture
 says so, with the rate, including for values calculated from them.
 

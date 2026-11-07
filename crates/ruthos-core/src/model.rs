@@ -148,6 +148,57 @@ pub struct ImageRow {
     pub date_added: i64,
 }
 
+/// One image of a study, placed in the order the study was performed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimelineEntry {
+    pub image: ImageRow,
+    /// `YYYYMMDDHHMMSS.FFFFFF`, when the file gives one.
+    pub acquired: Option<String>,
+}
+
+impl TimelineEntry {
+    fn moment(&self) -> Option<chrono::NaiveDateTime> {
+        let text = self.acquired.as_deref()?.get(..14)?;
+        chrono::NaiveDateTime::parse_from_str(text, "%Y%m%d%H%M%S").ok()
+    }
+
+    /// The time of day, for a caption.
+    pub fn clock(&self) -> Option<String> {
+        self.moment().map(|m| m.format("%H:%M:%S").to_string())
+    }
+
+    /// Words for a pause since an earlier image, if it was long enough to
+    /// matter: a second session, or something added afterwards.
+    pub fn gap_since(&self, earlier: &TimelineEntry) -> Option<String> {
+        let minutes = (self.moment()? - earlier.moment()?).num_minutes();
+        match minutes {
+            m if m < TIMELINE_GAP_MINUTES => None,
+            m if m < 60 => Some(format!("{m} min later")),
+            m if m < 48 * 60 => Some(format!("{} h {} min later", m / 60, m % 60)),
+            m => Some(format!("{} days later", m / (24 * 60))),
+        }
+    }
+}
+
+/// A pause this long shows between two images of a timeline.
+const TIMELINE_GAP_MINUTES: i64 = 10;
+
+/// Order by time, with the instance number settling images of the same second.
+/// If any image has no time, times cannot be compared with it, so the instance
+/// numbers order them all.
+pub fn timeline_order(entries: &mut [TimelineEntry]) {
+    let timed = entries.iter().all(|e| e.acquired.is_some());
+    entries.sort_by(|a, b| {
+        let time = if timed {
+            a.acquired.cmp(&b.acquired)
+        } else {
+            std::cmp::Ordering::Equal
+        };
+        time.then(a.image.instance_number.cmp(&b.image.instance_number))
+            .then(a.image.id.cmp(&b.image.id))
+    });
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AlbumRow {
     pub id: i64,

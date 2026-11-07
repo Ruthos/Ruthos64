@@ -1247,6 +1247,8 @@ impl PrefsState {
         {
             let now = shared.settings.lock();
             self.draft.hidden_smart_albums = now.hidden_smart_albums.clone();
+            // Set from a viewer's series drawer.
+            self.draft.series_grouped = now.series_grouped;
             // Set from the MPR Tool menu.
             self.draft.mpr_left_tool = now.mpr_left_tool.clone();
             self.draft.mpr_right_tool = now.mpr_right_tool.clone();

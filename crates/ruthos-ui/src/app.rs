@@ -620,6 +620,7 @@ impl RuthosApp {
 
 impl eframe::App for RuthosApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.shared.main_window_ran();
         let ctx = ui.ctx().clone();
         ctx.set_visuals(theme::browser_visuals());
         self.shared.pump_thumbnails(&ctx);
