@@ -94,10 +94,10 @@ secrets from fork workflows, and the environment accepts only `v*` tags.
 ## Cutting a release
 
 1. Update `RELEASE_NOTES.md` (its heading and its `gh attestation verify` line name the version) and the workspace version in `Cargo.toml` and `Packager.toml`, so `ruthos.exe` reports the same version as the tag. `python3 scripts/stamp_release.py check` confirms they agree; CI runs the same check.
-2. Push the commit, wait for CI to pass, then `git tag v0.1.13-alpha && git push origin v0.1.13-alpha`, using the version just set. An alpha may go out unsigned; any other tag stops at once unless SignPath is set up. A beta also needs [docs/beta-gate.md](beta-gate.md) complete.
+2. Push the commit, wait for CI to pass, then `git tag v0.1.14-alpha && git push origin v0.1.14-alpha`, using the version just set. An alpha may go out unsigned; any other tag stops at once unless SignPath is set up. A beta also needs [docs/beta-gate.md](beta-gate.md) complete.
 3. Approve the `release` environment run in GitHub Actions, then the signing request in SignPath.
 4. Review the draft release: download each artefact on a clean machine, check `SHA256SUMS.txt` and `gh attestation verify`, then publish.
-5. Point the site at it: `python3 scripts/stamp_release.py stamp v0.1.13-alpha` rewrites the download links, version, zip size and sitemap date from the published release; commit `site/`. Update the status line in the README by hand.
+5. Point the site at it: `python3 scripts/stamp_release.py stamp v0.1.14-alpha` rewrites the download links, version, zip size and sitemap date from the published release; commit `site/`. Update the status line in the README by hand.
 
 ## Acceptance
 

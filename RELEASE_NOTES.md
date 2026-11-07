@@ -1,4 +1,4 @@
-# Ruthos 0.1.12-alpha
+# Ruthos 0.1.13-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
@@ -11,25 +11,16 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - **The archive format may change before 1.0.** Keep your original files.
 - **Research-mode models carry their own licences.** nnInteractive is non-commercial (CC BY-NC-SA 4.0) and VISTA3D is for research and non-clinical use only (NVIDIA's model card and the NVIDIA Open Model License). Each shows its terms before first use, and whether your use is allowed is your responsibility.
 
-## New in 0.1.12-alpha
+## New in 0.1.13-alpha
+
+- **Echo timeline.** Stills and loops of an echo are numbered in one sequence, but each loop is its own series, so the stills used to stack apart from them. The viewer's drawer now offers Timeline, which lists every image in the order it was stored, with its time and any long pause, and Grouped, the old view. Page Up and Page Down move along the timeline. Times are read on import, or the first time an older study opens. Files and series do not change. See `docs/measurements.md`.
+- **Smooth in anatomical M-mode.** A new option, on by default, blends between frames on screen and in a saved strip, and the saved file records it. It adds no readings: untick it to see and save each frame as a block.
+- **A saved strip appears straight away.** Open viewers now show new series as soon as an import finishes, so a study arriving over the network appears too.
+- **A playing loop no longer holds up the app.** On Windows a viewer playing a loop kept the database window from updating at all, and a viewer could not close until the loop stopped. Both are fixed. Playback pauses very briefly about every 0.7 seconds to let the main window paint.
+
+## Previously, in 0.1.12-alpha
 
 - **Anatomical M-mode.** On a 2D ultrasound loop, draw a straight line at any angle, or a curve through several points, and a time and depth strip follows live as you move it. Click the strip to move the loop to that frame. Save to study makes an M-mode image that the caliper and LV dimension tools measure. A strip has only the frames of its loop, so it suits dimensions better than fine timing: each frame shows as a block, every strip and report states the rate it was derived at, and below 30 frames a second it warns you. See `docs/measurements.md`.
-
-## Previously, in 0.1.11-alpha
-
-- **The 3D pane no longer shows a mirror image.** In every earlier version it drew the patient left to right reversed, from every angle, and dragging turned the view the wrong way. It is correct now. Do not rely on left and right in any 3D view made with an earlier version.
-- **Live cuts in 3D.** A Cuts menu holds the standard half, quarter and eighth cuts. Every face of the box has a dot to drag, and the view follows as you drag, with nothing lost until you choose to make a cut permanent.
-- **One Tool menu in MPR.** The left and right buttons work the same in every pane, and in 3D any tool that cannot act on the picture turns it. The 3D controls are now two menus, 3D and Cuts.
-- **Better turning in 3D.** The 3D menu looks from each side and turns by 90 degrees. The view turns around the middle of the volume or of the cut, or around a point you click.
-- **Colour maps you can see.** The colour menu draws every map as a strip, grouped as Classic, Scientific and Rendering. On CT it adds five maps whose colours stand for fixed Hounsfield ranges: Tissues, Lung Density, Calcium, Body Composition and Bone Density. Choosing one sets the window it is true at, hovering shows what each colour means, and moving the window shows a warning with a way back. The lung, calcium and bone thresholds come from human CT and are not validated in animals.
-- **Steadier 3D.** A fine 3D picture is built in bands over many frames, after a quick one, so that opening 3D on a segmented study no longer risks a graphics driver reset that closes Ruthos.
-- **Smoother scrolling.** The image stays on screen until the next slice is ready, with no blank frame between slices, slices are read ahead in the direction you are scrolling, and two open viewers no longer take each other's slices.
-- **Saved segments follow the standard for animals.** A SEG now carries the breed, responsible person and other fields DICOM requires for any patient who is not human, as an independent checker found they were missing.
-- **Segment colours.** Click a segment's colour square to choose a colour by RGB, HSL or hex code.
-- **DICOMweb.** Search, retrieve and send over HTTPS, through a gateway such as Orthanc's DICOMweb plugin, with five sign-in methods: OpenID Connect, Cloudflare Access, an Access service token, Basic for testing, and none for a server on this computer. Secrets live in the system credential store. Replies are treated as untrusted input: same-host HTTPS redirects only, size and count limits, generated file names, and an interrupted retrieve picks up where it left off. See `docs/dicomweb.md`.
-- **Share.** Share in the database window writes a patient's studies as a folder or zip with a DICOMDIR, the key images, the report, a read-me page for any device and, on Windows, `Ruthos Viewer.exe`: Ruthos renamed, which opens the images beside it with an in-memory database and leaves no trace on the computer. Owner details can be left out. Importing a DICOMDIR from any system lists what is there first and can open it without importing. See `docs/sharing.md`.
-- **Application icon** on the program, the taskbar and the site.
-- **VISTA3D is research only**, as NVIDIA's model card requires, and a test keeps any restricted model out of general use even once it can be downloaded.
 
 ## What works
 
@@ -70,7 +61,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.12-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.13-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed unless the release page says so: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
