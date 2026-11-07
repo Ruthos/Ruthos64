@@ -551,6 +551,16 @@ impl ReportState {
             ui.add_space(14.0);
         }
 
+        let places = self
+            .measurements
+            .iter()
+            .map(|m| m.location())
+            .chain(self.mmode.iter().map(|m| m.location.clone()));
+        let places: Vec<String> = places.collect();
+        if let Some(note) = ruthos_core::report::strip_note(places.iter().map(String::as_str)) {
+            ui.label(RichText::new(note).color(Color32::from_rgb(180, 110, 20)));
+            ui.add_space(6.0);
+        }
         ui.label(RichText::new("Findings").size(15.0).strong());
         ui.add_space(4.0);
         ui.add(

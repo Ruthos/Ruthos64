@@ -53,6 +53,39 @@ pub struct ReportDocument {
     pub footer: String,
 }
 
+/// What marks a series as an anatomical M-mode strip, before its rate.
+const STRIP: &str = "Anatomical M-mode, derived at ";
+
+/// A plain warning when any of these places names an anatomical M-mode strip.
+/// Calculations made from a strip's values name no series of their own, so the
+/// report says this once for all of them.
+pub fn strip_note<'a>(places: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut rates: Vec<&str> = places
+        .filter_map(|place| {
+            let after = &place[place.find(STRIP)? + STRIP.len()..];
+            after.split(" fps").next()
+        })
+        .collect();
+    rates.sort_unstable();
+    rates.dedup();
+    if rates.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Includes anatomical M-mode, derived at {} fps. A strip has only the frames of its loop, so fast events \
+         can fall between frames, and values calculated from it share that limit. The 2D loop is the reference.",
+        rates.join(" and ")
+    ))
+}
+
+impl ReportDocument {
+    /// The note for this report, if a strip is in it.
+    pub fn strip_note(&self) -> Option<String> {
+        let rows = self.measurements.iter().chain(&self.mmode).map(|m| m.location.as_str());
+        strip_note(rows.chain(self.images.iter().map(|i| i.caption.as_str())))
+    }
+}
+
 /// Format a stored measurement value the way the viewer shows it.
 pub fn format_value(value: Option<f64>, unit: &str) -> String {
     match (value, unit) {
@@ -402,6 +435,11 @@ pub fn write_pdf(report: &ReportDocument, path: &Path) -> std::io::Result<()> {
         }
     }
 
+    if let Some(note) = report.strip_note() {
+        w.gap(2.0);
+        w.text(&note, 9.5, true);
+    }
+
     if !report.findings.trim().is_empty() {
         w.heading("Findings");
         w.text(report.findings.trim(), 10.5, false);
@@ -458,6 +496,45 @@ mod tests {
         assert_eq!(format_value(Some(31.26), "deg"), "31.3\u{00b0}");
         assert_eq!(format_value(Some(250.0), "mm2"), "2.50 cm\u{00b2}");
         assert_eq!(format_value(None, "mm"), "\u{2014}");
+    }
+
+    #[test]
+    fn a_report_says_when_it_holds_a_strip() {
+        let row = |location: &str| ReportMeasurement {
+            name: "LVIDd".into(),
+            value: "3.1 cm".into(),
+            location: location.into(),
+            basis: "Ultrasound region".into(),
+            patient_scale: true,
+        };
+        let plain = ReportDocument {
+            measurements: vec![row("US 3 Long axis, image 1")],
+            ..Default::default()
+        };
+        assert_eq!(plain.strip_note(), None);
+
+        let strip = ReportDocument {
+            mmode: vec![
+                row("US 9500 Anatomical M-mode, derived at 50 fps, image 1"),
+                row("US 9500 Anatomical M-mode, derived at 50 fps, image 1"),
+            ],
+            ..Default::default()
+        };
+        let note = strip.strip_note().unwrap();
+        assert!(note.contains("derived at 50 fps"), "{note}");
+        assert!(note.contains("2D loop is the reference"));
+
+        let picture = ReportDocument {
+            images: vec![ReportImage {
+                caption: "Anatomical M-mode, derived at 25 fps \u{2014} image 1".into(),
+                width: 1,
+                height: 1,
+                rgb: vec![0; 3],
+            }],
+            mmode: vec![row("Anatomical M-mode, derived at 50 fps")],
+            ..Default::default()
+        };
+        assert!(picture.strip_note().unwrap().contains("derived at 25 and 50 fps"));
     }
 
     #[test]

@@ -45,7 +45,8 @@ stays the reference. Below 30 frames a second it says so.
 It needs a calibrated 2D region and the loop's frame time, and refuses a line that
 leaves the region. **Save to study** makes a new series, named with the rate it was
 derived at. That is an M-mode image like any other, so the caliper, LV dimensions and
-other M-mode tools measure it there.
+other M-mode tools measure it there. A report holding a strip's values or picture
+says so, with the rate, including for values calculated from them.
 
 ## Editing
 

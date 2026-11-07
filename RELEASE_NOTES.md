@@ -1,4 +1,4 @@
-# Ruthos 0.1.11-alpha
+# Ruthos 0.1.12-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
@@ -11,7 +11,11 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - **The archive format may change before 1.0.** Keep your original files.
 - **Research-mode models carry their own licences.** nnInteractive is non-commercial (CC BY-NC-SA 4.0) and VISTA3D is for research and non-clinical use only (NVIDIA's model card and the NVIDIA Open Model License). Each shows its terms before first use, and whether your use is allowed is your responsibility.
 
-## New in 0.1.11-alpha
+## New in 0.1.12-alpha
+
+- **Anatomical M-mode.** On a 2D ultrasound loop, draw a straight line at any angle, or a curve through several points, and a time and depth strip follows live as you move it. Click the strip to move the loop to that frame. Save to study makes an M-mode image that the caliper and LV dimension tools measure. A strip has only the frames of its loop, so it suits dimensions better than fine timing: each frame shows as a block, every strip and report states the rate it was derived at, and below 30 frames a second it warns you. See `docs/measurements.md`.
+
+## Previously, in 0.1.11-alpha
 
 - **The 3D pane no longer shows a mirror image.** In every earlier version it drew the patient left to right reversed, from every angle, and dragging turned the view the wrong way. It is correct now. Do not rely on left and right in any 3D view made with an earlier version.
 - **Live cuts in 3D.** A Cuts menu holds the standard half, quarter and eighth cuts. Every face of the box has a dot to drag, and the view follows as you drag, with nothing lost until you choose to make a cut permanent.
@@ -26,14 +30,6 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - **Share.** Share in the database window writes a patient's studies as a folder or zip with a DICOMDIR, the key images, the report, a read-me page for any device and, on Windows, `Ruthos Viewer.exe`: Ruthos renamed, which opens the images beside it with an in-memory database and leaves no trace on the computer. Owner details can be left out. Importing a DICOMDIR from any system lists what is there first and can open it without importing. See `docs/sharing.md`.
 - **Application icon** on the program, the taskbar and the site.
 - **VISTA3D is research only**, as NVIDIA's model card requires, and a test keeps any restricted model out of general use even once it can be downloaded.
-
-## Previously, in 0.1.10-alpha
-
-- **Save segments to the study.** Save segments to study writes every segment on the panel as a DICOM Segmentation (SEG) in the study. Saving again adds a version, and opening MPR offers the newest. A SEG that does not line up with the series is refused with the reason. Closing MPR with unsaved changes asks first.
-- **Segments travel with the study.** Teaching copies include them with new UIDs and no creator's name, PACS can send and receive them, and reports list each with its volume and how it was made.
-- **Choose a model.** The AI section now has a Model list. SAM 2.1 Tiny remains the model you can download. Research mode, in Preferences under Viewer, offers VISTA3D and nnInteractive, 3D models still being tested. They cannot be downloaded from Ruthos yet: they install from a folder, and each shows its licence terms before first use.
-- **A progress bar and Stop** while following through slices.
-- **Refine edges** can read a segment's edge from the image's own values. It is off by default: it does well on test objects but can drop thin bone on real anatomy.
 
 ## What works
 
@@ -74,7 +70,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.11-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.12-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed unless the release page says so: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
