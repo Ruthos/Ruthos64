@@ -27,7 +27,12 @@ pub struct Stop {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransferFunction {
     pub name: String,
+    /// Where a menu lists it: empty for Ruthos's own, else Horos's group.
+    pub group: String,
     pub stops: Vec<Stop>,
+    /// Clear at the volume's lowest and highest values, sloping to them from
+    /// the outer stops, as Horos's curve presets are.
+    pub ends_clear: bool,
 }
 
 impl TransferFunction {
@@ -40,6 +45,8 @@ impl TransferFunction {
         };
         Self {
             name: self.name.clone(),
+            group: self.group.clone(),
+            ends_clear: self.ends_clear,
             stops: self
                 .stops
                 .iter()
@@ -54,6 +61,8 @@ impl TransferFunction {
     pub fn new(name: &str, stops: &[(f32, [f32; 4])]) -> Self {
         Self {
             name: name.to_string(),
+            group: String::new(),
+            ends_clear: false,
             stops: stops
                 .iter()
                 .map(|(value, rgba)| Stop {
@@ -83,14 +92,51 @@ impl TransferFunction {
 
     /// The function over a volume's range, as the shader reads it.
     pub fn bake(&self, min: f32, max: f32) -> Vec<u8> {
+        let ended = self.with_clear_ends(min, max);
+        let f = ended.as_ref().unwrap_or(self);
         let mut out = Vec::with_capacity(TRANSFER_WIDTH * 4);
         for i in 0..TRANSFER_WIDTH {
             let value = min + (max - min) * i as f32 / (TRANSFER_WIDTH - 1) as f32;
-            for c in self.at(value) {
+            for c in f.at(value) {
                 out.push((c.clamp(0.0, 1.0) * 255.0).round() as u8);
             }
         }
         out
+    }
+
+    /// For a function clear at the ends, the same with clear stops at the
+    /// volume's lowest and highest values, keeping the outer colours.
+    fn with_clear_ends(&self, min: f32, max: f32) -> Option<Self> {
+        let (first, last) = (self.stops.first()?, self.stops.last()?);
+        if !self.ends_clear {
+            return None;
+        }
+        let clear = |s: &Stop, value: f32| Stop {
+            value,
+            rgba: [s.rgba[0], s.rgba[1], s.rgba[2], 0.0],
+        };
+        let mut stops = Vec::with_capacity(self.stops.len() + 2);
+        if min < first.value {
+            stops.push(clear(first, min));
+        }
+        stops.extend(&self.stops);
+        if max > last.value {
+            stops.push(clear(last, max));
+        }
+        Some(Self {
+            stops,
+            ends_clear: false,
+            ..self.clone()
+        })
+    }
+
+    /// Horos's preset as a transfer function.
+    pub fn from_horos(preset: &ruthos_dicom::vr_presets::VrPreset) -> Self {
+        Self {
+            group: preset.group.clone(),
+            ends_clear: preset.ends_clear,
+            ..Self::new(&preset.name, &preset.stops)
+        }
     }
 
     /// The presets, in Hounsfield units. Opacity ramps follow the attenuation
@@ -1091,6 +1137,25 @@ impl CallbackTrait for VolumeCallback {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_horos_curve_fades_to_clear_at_the_ends_of_the_range() {
+        let t = TransferFunction {
+            ends_clear: true,
+            ..TransferFunction::new("t", &[(0.0, [1.0, 0.0, 0.0, 0.0]), (100.0, [0.0, 0.0, 1.0, 0.5])])
+        };
+        // From 100 to the top of the range at 300, the opacity slopes to clear.
+        let baked = t.bake(-100.0, 300.0);
+        let at = |value: f32| {
+            let i = ((value + 100.0) / 400.0 * (TRANSFER_WIDTH - 1) as f32).round() as usize;
+            [baked[i * 4], baked[i * 4 + 2], baked[i * 4 + 3]]
+        };
+        assert!(at(100.0)[2] > 120, "{:?}", at(100.0));
+        assert!(at(200.0)[2] > 50 && at(200.0)[2] < 80, "half way down: {:?}", at(200.0));
+        assert_eq!(at(300.0)[2], 0);
+        assert_eq!(at(300.0)[1], 255, "the colour carries on");
+        assert_eq!(at(-100.0)[2], 0);
+    }
+
     use super::*;
 
     fn placement() -> Placement {

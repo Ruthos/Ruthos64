@@ -37,6 +37,7 @@ pub mod segments_ai;
 pub mod session;
 pub mod shared;
 pub mod theme;
+pub mod transfer_edit;
 pub mod viewer;
 pub mod widgets;
 

@@ -46,7 +46,7 @@ pub const ACCEPTED_TRANSFER_SYNTAXES: &[&str] = &[
     uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN,
 ];
 
-fn connect<'a>(
+pub(crate) fn connect<'a>(
     options: ClientAssociationOptions<'a>,
     node: &Node,
     me_ae: &'a str,
@@ -669,6 +669,9 @@ pub struct SendOutcome {
     pub failed: Vec<(PathBuf, String)>,
     /// Stored, with a warning from the server.
     pub warned: Vec<(PathBuf, String)>,
+    /// SOP Class and SOP Instance UID of each image the server took, to ask
+    /// it later to confirm it holds them.
+    pub stored: Vec<(String, String)>,
 }
 
 fn is_uncompressed(ts: &str) -> bool {
@@ -800,6 +803,7 @@ pub fn send_files(
                 let s = m.status();
                 if is_success(s) || is_warning(s) {
                     outcome.sent += 1;
+                    outcome.stored.push((sop.clone(), sop_instance.clone()));
                 } else {
                     outcome.failed.push((path.clone(), crate::error::status_words(s)));
                 }

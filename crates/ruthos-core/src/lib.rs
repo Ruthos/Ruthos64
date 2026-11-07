@@ -6,7 +6,9 @@
 
 pub mod catalogue;
 pub mod credentials;
+pub mod cuts;
 pub mod db;
+pub mod export_data;
 pub mod horos;
 pub mod import;
 pub mod incoming;

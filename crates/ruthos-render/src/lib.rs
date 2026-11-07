@@ -8,6 +8,7 @@
 //! exact same numbers the shader uses.
 
 pub mod gpu;
+pub mod surface;
 pub mod view;
 pub mod volume3d;
 

@@ -1029,6 +1029,48 @@ pub fn evaluate(lib: &Library, c: &Calculation, values: &BTreeMap<String, Input>
 }
 
 /// Evaluate every calculation whose inputs are all present.
+/// Every calculation a study's measurements allow, each input the mean of its
+/// values, with how many values each mean holds. Pixel values are left out, and
+/// fractional shortening is left to the M-mode block when the study has one.
+pub fn study_calculations(
+    lib: &Library,
+    inputs: &[crate::model::MeasurementInput],
+    has_mmode: bool,
+) -> (Vec<CalcResult>, BTreeMap<String, usize>) {
+    // Sum, count and scale of each definition's values.
+    let mut acc: BTreeMap<String, (f64, usize, bool)> = BTreeMap::new();
+    for m in inputs.iter().filter(|m| m.unit != "px") {
+        let patient_scale = m
+            .basis
+            .as_deref()
+            .and_then(ruthos_dicom::SpacingBasis::from_key)
+            .map(|b| b.is_patient_scale())
+            .unwrap_or(true);
+        let e = acc.entry(m.def_key.clone()).or_insert((0.0, 0, true));
+        e.0 += m.value;
+        e.1 += 1;
+        e.2 &= patient_scale;
+    }
+    let counts = acc.iter().map(|(k, v)| (k.clone(), v.1)).collect();
+    let values: BTreeMap<String, Input> = acc
+        .into_iter()
+        .map(|(k, (sum, n, patient_scale))| {
+            (
+                k,
+                Input {
+                    value: sum / n as f64,
+                    patient_scale,
+                },
+            )
+        })
+        .collect();
+    let results = evaluate_all(lib, &values)
+        .into_iter()
+        .filter(|r| !(has_mmode && r.key == "lv.fs"))
+        .collect();
+    (results, counts)
+}
+
 pub fn evaluate_all(lib: &Library, values: &BTreeMap<String, Input>) -> Vec<CalcResult> {
     lib.calculations
         .iter()

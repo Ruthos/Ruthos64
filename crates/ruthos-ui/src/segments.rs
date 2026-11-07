@@ -12,7 +12,9 @@ use rayon::prelude::*;
 use ruthos_core::seg::Saved;
 use ruthos_core::volume::{Plane, Volume};
 use ruthos_dicom::seg::{SegmentData, Term, TERMS};
+use ruthos_segment::decimate::Detail;
 use ruthos_segment::mesh::{passes, surface_nets, Smoothing};
+use ruthos_segment::mesh_io::MeshFormat;
 use ruthos_segment::store::{self, Unrefined};
 use ruthos_segment::tools::{self, Grow};
 use ruthos_segment::{Field, Mask, Provenance, Segmentation, Statistics};
@@ -67,13 +69,21 @@ enum Morphology {
     SliceGaps,
 }
 
+/// How a surface is made and written.
+#[derive(Debug, Clone, Copy)]
+struct MeshExport {
+    strength: Smoothing,
+    detail: Detail,
+    format: MeshFormat,
+}
+
 /// Build a mesh and write it, reporting what came out. A long job on a large
 /// segment, so it runs apart from the window.
-fn export_stl(
+fn export_mesh(
     mask: Mask,
-    strength: Smoothing,
+    how: MeshExport,
     volume: &Volume,
-    note: &str,
+    (note, name, colour): (&str, &str, [u8; 3]),
     path: &std::path::Path,
 ) -> Result<String, String> {
     let mut mesh = surface_nets(&mask);
@@ -81,10 +91,13 @@ fn export_stl(
         return Err("That segment is empty".to_string());
     }
     let sound = mesh.soundness();
-    mesh.taubin(passes(strength));
+    mesh.taubin(passes(how.strength));
+    mesh.decimate(how.detail.share());
     let size = mesh.extent();
     mesh.to_patient(volume.origin, volume.axes);
-    std::fs::write(path, mesh.to_stl(note)).map_err(|e| e.to_string())?;
+    mesh.orient_outward();
+    let bytes = mesh.encode(how.format, note, name, colour)?;
+    std::fs::write(path, bytes).map_err(|e| e.to_string())?;
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -148,6 +161,8 @@ pub struct SegmentPanel {
     made: u32,
     pub note: Option<String>,
     smoothing: Smoothing,
+    detail: Detail,
+    format: MeshFormat,
     /// Exports running, each reporting when it is done.
     exports: Vec<crossbeam_channel::Receiver<Result<String, String>>>,
     /// The model's own masks, by label.
@@ -190,6 +205,8 @@ impl Default for SegmentPanel {
             made: 0,
             note: None,
             smoothing: Smoothing::Medium,
+            detail: Detail::Full,
+            format: MeshFormat::Stl,
             exports: Vec::new(),
             model_masks: HashMap::new(),
             jump: None,
@@ -337,7 +354,7 @@ impl SegmentPanel {
         self.split_active(volume);
     }
 
-    /// Write segments as STL, in patient coordinates, each file naming its
+    /// Write segments as meshes, in patient coordinates, each file naming its
     /// source and the tool that made it.
     fn start_export(&mut self, volume: &Arc<Volume>, labels: Vec<u8>, to: ExportTo) {
         let Some(seg) = self.seg.as_ref() else { return };
@@ -353,13 +370,19 @@ impl SegmentPanel {
             let note = format!("{}, {}, {tool}. Planning and education only", self.source, s.name);
             let path = match &to {
                 ExportTo::File(p) => p.clone(),
-                ExportTo::Folder(d) => d.join(format!("{}.stl", file_stem(&s.name))),
+                ExportTo::Folder(d) => d.join(format!("{}.{}", file_stem(&s.name), self.format.extension())),
             };
-            let (mask, strength, v) = (seg.mask(label), self.smoothing, volume.clone());
+            let how = MeshExport {
+                strength: self.smoothing,
+                detail: self.detail,
+                // A file name chosen with another extension decides.
+                format: MeshFormat::of(&path).unwrap_or(self.format),
+            };
+            let (mask, v, name, colour) = (seg.mask(label), volume.clone(), s.name.clone(), s.colour);
             let (tx, rx) = crossbeam_channel::bounded(1);
             self.exports.push(rx);
             std::thread::spawn(move || {
-                let _ = tx.send(export_stl(mask, strength, &v, &note, &path));
+                let _ = tx.send(export_mesh(mask, how, &v, (&note, &name, colour), &path));
             });
         }
         self.note = Some("Exporting\u{2026}".to_string());
@@ -890,10 +913,36 @@ impl SegmentPanel {
                     }
                 });
         });
+        ui.horizontal(|ui| {
+            ui.label("Triangles");
+            egui::ComboBox::from_id_salt("segment-detail")
+                .selected_text(self.detail.label())
+                .show_ui(ui, |ui| {
+                    for d in Detail::ALL {
+                        ui.selectable_value(&mut self.detail, d, d.label());
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "Fewer triangles make a smaller file with nearly the same shape. It stays closed for printing.",
+                );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Format");
+            egui::ComboBox::from_id_salt("segment-format")
+                .selected_text(self.format.extension().to_uppercase())
+                .show_ui(ui, |ui| {
+                    for f in MeshFormat::ALL {
+                        ui.selectable_value(&mut self.format, f, f.label());
+                    }
+                });
+        });
+        let extension = self.format.extension();
+        let kind = extension.to_uppercase();
         ui.horizontal_wrapped(|ui| {
             let selected = self.active;
             if ui
-                .add_enabled(selected.is_some(), egui::Button::new("Export STL\u{2026}"))
+                .add_enabled(selected.is_some(), egui::Button::new(format!("Export {kind}\u{2026}")))
                 .on_hover_text("The selected segment, as a mesh in patient coordinates")
                 .clicked()
             {
@@ -907,8 +956,8 @@ impl SegmentPanel {
                 if let (Some(label), Some(path)) = (
                     selected,
                     rfd::FileDialog::new()
-                        .set_file_name(format!("{name}.stl"))
-                        .add_filter("STL", &["stl"])
+                        .set_file_name(format!("{name}.{extension}"))
+                        .add_filter(kind.as_str(), &[extension])
                         .save_file(),
                 ) {
                     self.start_export(volume, vec![label], ExportTo::File(path));

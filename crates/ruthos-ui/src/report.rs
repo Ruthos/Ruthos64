@@ -242,46 +242,14 @@ impl ReportState {
     /// Every library calculation whose inputs this study has, from the
     /// mean of every value measured for each definition.
     fn calculations_block(&self, shared: &Shared) -> Vec<ReportMeasurement> {
-        use ruthos_core::measure::{evaluate_all, Input};
         let library = shared.library.lock().clone();
         let inputs = shared
             .db
             .measurement_inputs_for_study(self.study.id)
             .unwrap_or_default();
-        // Sum, count and scale of each definition's values.
-        let mut acc: std::collections::BTreeMap<String, (f64, usize, bool)> = std::collections::BTreeMap::new();
-        for m in inputs {
-            if m.unit == "px" {
-                continue;
-            }
-            let patient_scale = m
-                .basis
-                .as_deref()
-                .and_then(ruthos_dicom::SpacingBasis::from_key)
-                .map(|b| b.is_patient_scale())
-                .unwrap_or(true);
-            let e = acc.entry(m.def_key).or_insert((0.0, 0, true));
-            e.0 += m.value;
-            e.1 += 1;
-            e.2 &= patient_scale;
-        }
-        let counts: std::collections::BTreeMap<String, usize> = acc.iter().map(|(k, v)| (k.clone(), v.1)).collect();
-        let values: std::collections::BTreeMap<String, Input> = acc
+        let (results, counts) = ruthos_core::measure::study_calculations(&library, &inputs, !self.mmode.is_empty());
+        results
             .into_iter()
-            .map(|(k, (sum, n, patient_scale))| {
-                (
-                    k,
-                    Input {
-                        value: sum / n as f64,
-                        patient_scale,
-                    },
-                )
-            })
-            .collect();
-        let has_mmode = !self.mmode.is_empty();
-        evaluate_all(&library, &values)
-            .into_iter()
-            .filter(|r| !(has_mmode && r.key == "lv.fs"))
             .map(|r| ReportMeasurement {
                 name: r.label.clone(),
                 value: r.text.clone(),

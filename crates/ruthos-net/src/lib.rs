@@ -10,6 +10,7 @@ pub mod dimse;
 pub mod error;
 pub mod scp;
 pub mod scu;
+pub mod workflow;
 
 pub use error::{explain, local_address, Me, NetError, Node, Problem};
 pub use scp::{ListenerConfig, NetEvent, StoreScp};
@@ -17,3 +18,4 @@ pub use scu::{
     echo, find_series, find_studies, retrieve_series, retrieve_study, send_files, RetrieveMethod, RetrieveOutcome,
     RetrieveProgress, SendOutcome, SeriesResult, StudyQuery, StudyResult,
 };
+pub use workflow::{find_worklist, request_commitment, CommitOutcome, Commitment, WorkItem, WorklistQuery};

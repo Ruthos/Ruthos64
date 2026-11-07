@@ -73,6 +73,24 @@ format it is stored in when the PACS accepts it; when the PACS accepts
 only uncompressed images, compressed ones are converted first. Images the
 PACS refuses are listed with the reason, and the rest are still sent.
 
+## Confirming what a PACS holds
+
+Tick **After sending, ask it to confirm it holds every image** on a classic node
+and, once a send finishes, Ruthos asks the PACS to confirm it holds each image it
+took (DICOM Storage Commitment). The send window then says it holds them all, or
+names how many it does not, to send again. Some PACS answer at once; others answer
+later by connecting to Ruthos, which needs the listener on and the PACS to know
+Ruthos's AE title, address and port. A later answer shows in Preferences under the
+listener. Ruthos does not delete anything on the strength of an answer.
+
+## Worklist
+
+Tick **Worklist server** on a classic node that lists scheduled procedures (DICOM
+Modality Worklist). **Import Pictures** then has **Today's worklist**: search by
+part of a name, or list everything for today, and click a procedure to fill in the
+patient, owner, accession and description. The pictures join the study the
+worklist ordered, by its Study Instance UID.
+
 ## Routing
 
 Preferences > Routing sends images on to a PACS as they arrive, as Horos's

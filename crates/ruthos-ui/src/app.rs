@@ -114,6 +114,12 @@ impl RuthosApp {
                     &render_state.device,
                     render_state.target_format,
                 ));
+            renderer
+                .callback_resources
+                .insert(ruthos_render::surface::SurfaceRenderer::new(
+                    &render_state.device,
+                    render_state.target_format,
+                ));
         }
 
         let shared = Shared::new(db.clone(), paths.clone(), settings.clone(), render_state);
@@ -605,6 +611,9 @@ impl RuthosApp {
                 NetEvent::Stored { .. } => status.received += 1,
                 NetEvent::Echo { peer_ae } => status.last_peer = Some(format!("{peer_ae} (echo)")),
                 NetEvent::Released { .. } => {}
+                NetEvent::Committed { peer_ae, commitment } => {
+                    status.last_commitment = Some(format!("{peer_ae}: {}", commitment.summary()));
+                }
                 NetEvent::Refused { peer_ae, peer_addr } => {
                     let when = chrono::Local::now().format("%H:%M:%S").to_string();
                     status.refused.retain(|(a, d, _)| !(a == &peer_ae && d == &peer_addr));

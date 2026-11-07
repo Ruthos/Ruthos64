@@ -583,6 +583,14 @@ impl PrefsState {
                 ui.radio_value(&mut n.retrieve, value.to_string(), label);
                 ui.label(RichText::new(format!("    {explain}")).size(11.5).color(Color32::from_gray(110)));
             }
+            ui.add_space(6.0);
+            ui.checkbox(&mut n.worklist, "Worklist server: it lists scheduled procedures")
+                .on_hover_text("Import Pictures can then fill in the patient and accession from it");
+            ui.checkbox(&mut n.commit, "After sending, ask it to confirm it holds every image")
+                .on_hover_text(
+                    "Storage commitment. The PACS answers at once or later; to answer later it connects \
+                     to Ruthos, so the listener must be on and the PACS must know Ruthos's address.",
+                );
             if n.retrieve == "move" && !self.draft.listener_enabled {
                 ui.label(
                     RichText::new("The listener is off, so C-MOVE cannot work. Turn it on under Listener.")
@@ -1071,6 +1079,11 @@ impl PrefsState {
             self.draft.listener_allow.push(ListenerPeer::default());
         }
 
+        if let Some(answer) = shared.net_status.lock().last_commitment.clone() {
+            ui.add_space(10.0);
+            ui.label(RichText::new("Last confirmation from a PACS").strong());
+            ui.label(answer);
+        }
         let refused = shared.net_status.lock().refused.clone();
         if !refused.is_empty() {
             ui.add_space(10.0);
@@ -1247,6 +1260,8 @@ impl PrefsState {
         {
             let now = shared.settings.lock();
             self.draft.hidden_smart_albums = now.hidden_smart_albums.clone();
+            // Saved from the 3D colour editor.
+            self.draft.vr_presets = now.vr_presets.clone();
             // Set from the study list's headings.
             self.draft.study_order = now.study_order;
             // Set from a viewer's series drawer.

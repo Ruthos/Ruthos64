@@ -42,6 +42,13 @@ pub struct StudyRow {
 
 impl StudyRow {
     /// Age at study date, formatted the way Horos shows it ("4Y", "7M", "12D").
+    /// Days between birth and the study, when both dates are known.
+    pub fn age_in_days(&self) -> Option<i64> {
+        let dob = parse_iso_or_dicom(self.patient_birth_date.as_deref()?)?;
+        let study = parse_iso_or_dicom(self.study_date.as_deref()?)?;
+        Some((study - dob).num_days()).filter(|d| *d >= 0)
+    }
+
     pub fn age_at_study(&self) -> Option<String> {
         let dob = parse_iso_or_dicom(self.patient_birth_date.as_deref()?)?;
         let study = parse_iso_or_dicom(self.study_date.as_deref()?)?;

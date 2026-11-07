@@ -30,6 +30,8 @@ pub struct PictureInfo {
     pub species: String,
     pub breed: String,
     pub responsible_person: String,
+    /// From the practice system or a worklist, so the pictures join its order.
+    pub accession: String,
     pub study_description: String,
     pub series_description: String,
     /// `YYYY-MM-DD` or `YYYYMMDD`; empty means today.
@@ -214,6 +216,7 @@ fn build_object(
     put_str(tags::CONVERSION_TYPE, VR::CS, "WSD");
     put_str(tags::MANUFACTURER, VR::LO, "Ruthos");
     put_str(tags::STUDY_DESCRIPTION, VR::LO, &info.study_description);
+    put_str(tags::ACCESSION_NUMBER, VR::SH, info.accession.trim());
     put_str(
         tags::SERIES_DESCRIPTION,
         VR::LO,

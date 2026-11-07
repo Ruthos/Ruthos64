@@ -23,6 +23,7 @@ pub mod sc;
 pub mod scale;
 pub mod seg;
 pub mod structure;
+pub mod vr_presets;
 
 pub use clut::{Clut, ClutLibrary};
 pub use meta::{read_meta, InstanceMeta, PatientName, UsRegion};

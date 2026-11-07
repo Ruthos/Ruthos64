@@ -26,6 +26,8 @@ pub struct NetStatus {
     pub last_peer: Option<String>,
     pub received: u64,
     pub last_error: Option<String>,
+    /// The last answer from a PACS about what it holds.
+    pub last_commitment: Option<String>,
 }
 
 /// Longer than the main window's half-second heartbeat.

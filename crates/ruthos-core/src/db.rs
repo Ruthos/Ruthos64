@@ -1086,6 +1086,107 @@ impl Database {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// Every measurement of a study that has a value, or values worked out
+    /// from it, with where it was taken: for exporting as data.
+    pub fn export_rois(&self, study_id: i64) -> Result<Vec<crate::export_data::ExportedRoi>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.kind, r.name, r.def_key, r.value, r.unit, r.basis, r.frame, i.instance_number,
+                    s.modality, s.series_number, s.series_description, s.series_instance_uid, i.sop_instance_uid
+             FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
+             WHERE s.study_id = ?1 AND r.kind <> 'text'
+               AND (r.value IS NOT NULL OR EXISTS (SELECT 1 FROM roi_value v WHERE v.roi_id = r.id))
+             ORDER BY s.series_number, s.id, i.instance_number, r.frame, r.id",
+        )?;
+        let rows = stmt.query_map(params![study_id], |row| {
+            let series_uid: String = row.get(12)?;
+            Ok(crate::export_data::ExportedRoi {
+                roi_id: row.get(0)?,
+                kind: row.get(1)?,
+                name: row.get(2)?,
+                def_key: row.get(3)?,
+                value: row.get(4)?,
+                unit: row.get(5)?,
+                basis: row.get(6)?,
+                frame: row.get(7)?,
+                instance_number: row.get(8)?,
+                modality: row.get(9)?,
+                series_number: row.get(10)?,
+                series_description: row.get(11)?,
+                // A loop has a series of its own here: give the file's series.
+                series_uid: series_uid.split('#').next().unwrap_or_default().to_string(),
+                sop_instance_uid: row.get(13)?,
+                derived: Vec::new(),
+            })
+        })?;
+        let mut out = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut values =
+            conn.prepare("SELECT def_key, value, unit, basis FROM roi_value WHERE roi_id = ?1 ORDER BY def_key")?;
+        for roi in &mut out {
+            let rows = values.query_map(params![roi.roi_id], |row| {
+                Ok(RoiValue {
+                    def_key: row.get(0)?,
+                    value: row.get(1)?,
+                    unit: row.get(2)?,
+                    basis: row.get(3)?,
+                })
+            })?;
+            roi.derived = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        }
+        Ok(out)
+    }
+
+    /// Keep what was cut in a series's 3D view, or forget it when nothing is.
+    pub fn save_cuts(&self, series_id: i64, cuts: &crate::cuts::SavedCuts) -> Result<()> {
+        let conn = self.conn.lock();
+        if cuts.is_empty() {
+            conn.execute("DELETE FROM cuts WHERE series_id = ?1", params![series_id])?;
+            return Ok(());
+        }
+        let dims = serde_json::to_string(&cuts.dims).unwrap_or_default();
+        let clip = cuts.clip.map(|c| serde_json::to_string(&c).unwrap_or_default());
+        conn.execute(
+            "INSERT OR REPLACE INTO cuts (series_id, dims, count, clip, mask, date_modified)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                series_id,
+                dims,
+                cuts.count as i64,
+                clip,
+                crate::cuts::pack(&cuts.mask),
+                now_unix()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// What was cut in a series's 3D view, if it was on a grid of these dims.
+    pub fn load_cuts(&self, series_id: i64, dims: [usize; 3]) -> Result<Option<crate::cuts::SavedCuts>> {
+        let conn = self.conn.lock();
+        let row: Option<(String, i64, Option<String>, Vec<u8>)> = conn
+            .query_row(
+                "SELECT dims, count, clip, mask FROM cuts WHERE series_id = ?1",
+                params![series_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let Some((saved_dims, count, clip, packed)) = row else {
+            return Ok(None);
+        };
+        if serde_json::from_str::<[usize; 3]>(&saved_dims).ok() != Some(dims) {
+            return Ok(None);
+        }
+        let Some(mask) = crate::cuts::unpack(&packed, dims.iter().product()) else {
+            return Ok(None);
+        };
+        Ok(Some(crate::cuts::SavedCuts {
+            dims,
+            mask,
+            count: count.clamp(0, 254) as u8,
+            clip: clip.and_then(|c| serde_json::from_str(&c).ok()),
+        }))
+    }
+
     /// Give stored measurements their definition key from their name:
     /// a row named "LVIDd" without a key gets `lv.lvidd`. Returns how many
     /// rows changed.
@@ -1840,6 +1941,14 @@ fn migrate(conn: &Connection) -> Result<()> {
             PRIMARY KEY (album_id, study_id)
          );
 
+         CREATE TABLE IF NOT EXISTS cuts (
+            series_id INTEGER PRIMARY KEY REFERENCES series(id) ON DELETE CASCADE,
+            dims TEXT NOT NULL,
+            count INTEGER NOT NULL,
+            clip TEXT,
+            mask BLOB NOT NULL,
+            date_modified INTEGER NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS calibration (
             image_id INTEGER PRIMARY KEY REFERENCES image(id) ON DELETE CASCADE,
             row_mm REAL NOT NULL,
@@ -2130,6 +2239,95 @@ mod tests {
         assert!(db.rois(image_id, 0).unwrap().is_empty());
     }
 
+    #[test]
+    fn measurements_export_as_rows_with_and_without_identity() {
+        use crate::export_data::gather;
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let mut m = meta("1", "1.1", "1.1.1");
+        m.patient_birth_date = Some("20200101".into());
+        m.study_date = Some("20260101".into());
+        m.accession_number = "ACC9".into();
+        let InsertOutcome::Inserted { image_id, study_id, .. } = db.insert_instance(&m, "a.dcm", true, 10).unwrap()
+        else {
+            panic!()
+        };
+        let line = |key: &str, name: &str, value: f64| RoiRecord {
+            id: 0,
+            image_id,
+            frame: 2,
+            kind: "length".into(),
+            points: vec![[0.0, 0.0], [1.0, 1.0]],
+            name: Some(name.into()),
+            value: Some(value),
+            unit: "mm".into(),
+            basis: Some("ultrasound-region".into()),
+            def_key: Some(key.into()),
+        };
+        let mut recs = vec![
+            line("lv.lvidd", "LVIDd", 40.0),
+            line("lv.lvids", "LVIDs", 30.0),
+            RoiRecord {
+                kind: "text".into(),
+                value: None,
+                ..line("", "=cmd|' /C calc'!A0", 0.0)
+            },
+        ];
+        db.sync_rois(image_id, 2, &mut recs).unwrap();
+        db.set_roi_values(
+            recs[0].id,
+            &[RoiValue {
+                def_key: "lv.ivsd".into(),
+                value: Some(9.5),
+                unit: "mm".into(),
+                basis: Some("ultrasound-region".into()),
+            }],
+        )
+        .unwrap();
+        db.set_report(study_id, "Normal, \"thin\" walls", "No change").unwrap();
+        let library = crate::measure::builtin();
+
+        let full = gather(&db, &library, &[study_id], true).unwrap();
+        let values = &full.studies[0].values;
+        let kinds: Vec<&str> = values.iter().map(|v| v.kind).collect();
+        assert_eq!(kinds[..3], ["measurement", "derived", "measurement"], "{values:#?}");
+        assert!(kinds.len() > 3 && kinds[3..].iter().all(|k| *k == "calculation"));
+        let fs = values.iter().find(|v| v.key == "lv.fs").unwrap();
+        assert!((fs.value.unwrap() - 25.0).abs() < 1e-9, "(40 - 30) / 40");
+        assert_eq!(fs.inputs, "lv.lvidd x1; lv.lvids x1");
+        assert_eq!(full.studies[0].patient.age_days, Some(2192));
+        let csv = full.to_csv();
+        assert!(csv.starts_with("\u{feff}case,patient_name,"));
+        assert_eq!(
+            csv.lines().count(),
+            1 + values.len() + 2,
+            "a header, the values and two report rows"
+        );
+        assert!(csv.contains("ACC9") && csv.contains("1.1.1") && csv.contains("\"Normal, \"\"thin\"\" walls\""));
+        assert!(!csv.contains("cmd|"), "text notes are not values");
+        let json: serde_json::Value = serde_json::from_str(&full.to_json()).unwrap();
+        assert_eq!(json["studies"][0]["values"][0]["at"]["frame"], 2);
+        assert_eq!(json["studies"][0]["report"]["conclusion"], "No change");
+
+        let bare = gather(&db, &library, &[study_id], false).unwrap();
+        let csv = bare.to_csv();
+        for gone in [
+            "REX",
+            "V123",
+            "ACC9",
+            "2026-01-01",
+            "2020-01-01",
+            "1.1.1",
+            "Normal",
+            "No change",
+        ] {
+            assert!(!csv.contains(gone), "{gone} should be left out:\n{csv}");
+        }
+        assert!(csv.contains(",2192,"), "age in days stays");
+        let json = bare.to_json();
+        assert!(!json.contains("REX") && !json.contains("\"report\"") && !json.contains("sop_instance_uid"));
+        assert_eq!(bare.value_count(), values.len());
+    }
+
     /// Acceptance test 5 (storage half): editing a measurement's points keeps
     /// its row id, name and creation time.
     #[test]
@@ -2245,6 +2443,60 @@ mod tests {
 
     /// An archive written on Windows before 0.1.0-alpha holds backslashes;
     /// opening it rewrites them so the same file resolves on a Mac.
+    #[test]
+    fn cuts_are_kept_with_the_series_and_go_with_it() {
+        use crate::cuts::{SavedClip, SavedCuts};
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let InsertOutcome::Inserted {
+            series_id, study_id, ..
+        } = db
+            .insert_instance(&meta("1", "1.1", "1.1.1"), "a.dcm", true, 10)
+            .unwrap()
+        else {
+            panic!()
+        };
+        let dims = [4, 5, 6];
+        let mut mask = vec![0u8; 120];
+        mask[10..20].fill(1);
+        mask[50] = 2;
+        let cuts = SavedCuts {
+            dims,
+            mask,
+            count: 2,
+            clip: Some(SavedClip {
+                low: [0.0, 1.0, 2.0],
+                high: [3.0, 4.0, 5.0],
+                part: Some(3),
+                removes: true,
+            }),
+        };
+        db.save_cuts(series_id, &cuts).unwrap();
+        assert_eq!(db.load_cuts(series_id, dims).unwrap(), Some(cuts.clone()));
+        assert_eq!(
+            db.load_cuts(series_id, [4, 5, 7]).unwrap(),
+            None,
+            "another grid gets none"
+        );
+
+        let none = SavedCuts {
+            mask: vec![0; 120],
+            count: 0,
+            clip: None,
+            ..cuts.clone()
+        };
+        db.save_cuts(series_id, &none).unwrap();
+        assert_eq!(db.load_cuts(series_id, dims).unwrap(), None, "nothing cut is forgotten");
+
+        db.save_cuts(series_id, &cuts).unwrap();
+        db.delete_study(study_id).unwrap();
+        let left: i64 = db
+            .conn
+            .lock()
+            .query_row("SELECT COUNT(*) FROM cuts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "deleting the study takes its cuts");
+    }
+
     #[test]
     fn every_column_sorts_both_ways_with_blanks_last() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();

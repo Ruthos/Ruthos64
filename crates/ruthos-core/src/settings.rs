@@ -6,6 +6,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::measure::{self, Library};
 
+/// A 3D colour and opacity preset the user saved: value, then red, green, blue
+/// and opacity from 0 to 1.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedTransfer {
+    pub name: String,
+    pub stops: Vec<(f32, [f32; 4])>,
+    #[serde(default)]
+    pub ends_clear: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default = "Settings::file_defaults")]
 pub struct Settings {
@@ -18,6 +28,8 @@ pub struct Settings {
     pub save_unrefined_masks: bool,
     /// Load the newest saved segments on opening MPR, without asking.
     pub load_newest_segments: bool,
+    /// 3D colour and opacity presets the user saved.
+    pub vr_presets: Vec<SavedTransfer>,
     /// The heading the study list was last sorted on.
     pub study_order: Option<crate::db::StudyOrder>,
     /// Show an echo's images by series, not on the study timeline.
@@ -274,6 +286,12 @@ pub struct PacsNode {
     pub parallel: u32,
     /// Only teaching copies may be sent here.
     pub teaching_node: bool,
+    /// It answers worklist searches for scheduled procedures.
+    #[serde(default)]
+    pub worklist: bool,
+    /// After sending, ask it to confirm it holds every image (storage commitment).
+    #[serde(default)]
+    pub commit: bool,
 }
 
 impl PacsNode {
@@ -309,6 +327,8 @@ impl Default for PacsNode {
             include_all: None,
             parallel: 4,
             teaching_node: false,
+            worklist: false,
+            commit: false,
         }
     }
 }
@@ -358,6 +378,7 @@ impl Default for Settings {
             refine_band: 3,
             save_unrefined_masks: false,
             load_newest_segments: false,
+            vr_presets: Vec::new(),
             study_order: None,
             series_grouped: false,
             mpr_left_tool: String::new(),

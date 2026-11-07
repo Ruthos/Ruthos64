@@ -34,14 +34,16 @@ use ruthos_render::volume3d::{
     Camera, Clip, GpuVolume, Placement, RenderMode, Side, TransferFunction, VolumeCallback, SEGMENT_WIDTH,
 };
 use ruthos_segment::tools::{flood, Outline};
-use ruthos_segment::{Field, Grid};
+use ruthos_segment::{Field, Grid, Mask};
 
+use ruthos_core::cuts::{SavedClip, SavedCuts};
 use ruthos_core::mpr_export::{save_planes, stack, MprSaveResult, SavedPlane};
 use ruthos_core::volume::{
     cross, dot, norm, normalize, orientation_label, reslice, rotate, scale, sub, Plane, SlabMode, Volume, V3,
 };
 use ruthos_core::{SeriesRow, StudyRow};
 use ruthos_dicom::{Clut, Frame};
+use ruthos_render::surface::Surfaces;
 use ruthos_render::{GpuImage, ImageCallback, Interpolation, ViewState, ViewTransform};
 
 use crate::icons::{self, Bitmap};
@@ -310,6 +312,8 @@ pub struct MprState {
     frames_shown: u32,
     /// The 3D pane, in the fourth place of the 2x2 layout.
     three_d: Option<View3d>,
+    /// The last write of the cuts, which the next one waits for.
+    cut_saver: Option<std::thread::JoinHandle<()>>,
     segments: SegmentPanel,
     /// A save of the segments under way.
     seg_save: Option<crossbeam_channel::Receiver<Result<ruthos_dicom::seg::SegWritten, String>>>,
@@ -599,6 +603,67 @@ struct View3d {
     segment_labels: Option<Arc<Vec<u8>>>,
     segment_generation: u64,
     segment_only: bool,
+    editor: crate::transfer_edit::TransferEditor,
+    /// Counts changes to the cut mask, so the window knows to keep them.
+    cut_generation: u64,
+    /// The mask's generation and the clip as they were last kept.
+    kept: (u64, Option<SavedClip>),
+    /// Show the segments' surfaces instead of the volume.
+    surface_mode: bool,
+    /// The surfaces, and the segment and cut generations they were built from.
+    surfaces: Option<(Arc<Surfaces>, (u64, u64))>,
+    /// Surfaces being built, and what from.
+    surface_job: Option<(crossbeam_channel::Receiver<Surfaces>, (u64, u64))>,
+}
+
+/// The most triangles shown at once, so the surfaces turn smoothly.
+const SURFACE_TRIANGLES: usize = 400_000;
+
+/// Smooth surfaces of masks, less what is cut, in patient coordinates.
+fn surfaces_of(shown: Vec<(Mask, [u8; 3])>, cut: &[u8], volume: &Volume) -> Surfaces {
+    use ruthos_segment::mesh::{passes, surface_nets, Smoothing};
+    let mut meshes: Vec<(ruthos_segment::mesh::Mesh, [u8; 3])> = shown
+        .into_iter()
+        .map(|(mut mask, colour)| {
+            for (on, c) in mask.on.iter_mut().zip(cut) {
+                *on &= *c == 0;
+            }
+            let mut mesh = surface_nets(&mask);
+            mesh.taubin(passes(Smoothing::Light));
+            (mesh, colour)
+        })
+        .collect();
+    let total: usize = meshes.iter().map(|(m, _)| m.triangles.len()).sum();
+    let share = (SURFACE_TRIANGLES as f64 / total.max(1) as f64).min(1.0);
+    let mut out = Surfaces::default();
+    for (mesh, colour) in &mut meshes {
+        mesh.decimate(share);
+        mesh.to_patient(volume.origin, volume.axes);
+        mesh.orient_outward();
+        out.add(&mesh.vertices, &mesh.triangles, *colour);
+    }
+    out
+}
+
+/// The menu group of the user's own 3D presets.
+const SAVED: &str = "Saved";
+
+fn saved_transfer(p: &ruthos_core::settings::SavedTransfer) -> TransferFunction {
+    TransferFunction {
+        group: SAVED.to_string(),
+        ends_clear: p.ends_clear,
+        ..TransferFunction::new(&p.name, &p.stops)
+    }
+}
+
+/// About two million of a volume's values, spread through it, for a histogram.
+fn sampled(volume: &Volume) -> impl Iterator<Item = f32> + '_ {
+    let n = volume.dims.iter().product::<usize>();
+    let step = (n / 2_000_000).max(1);
+    (0..n).step_by(step).map(move |i| match &volume.data {
+        ruthos_core::volume::VoxelData::I16(v) => v[i] as f32,
+        ruthos_core::volume::VoxelData::F32(v) => v[i],
+    })
 }
 
 /// While rotating, rays take longer steps; when the user stops, the final
@@ -625,7 +690,13 @@ impl View3d {
             VOLUME_BYTES,
             |x, y, z| volume.voxel(x, y, z),
         );
-        let presets = TransferFunction::presets();
+        let mut presets = TransferFunction::presets();
+        presets.extend(
+            ruthos_dicom::vr_presets::horos_presets(&shared.cluts)
+                .iter()
+                .map(TransferFunction::from_horos),
+        );
+        presets.extend(shared.settings.lock().vr_presets.iter().map(saved_transfer));
         let baked = Arc::new(presets[0].bake(volume.min, volume.max));
         Self {
             gpu: Arc::new(gpu),
@@ -652,10 +723,68 @@ impl View3d {
             segment_labels: None,
             segment_generation: 0,
             segment_only: false,
+            editor: crate::transfer_edit::TransferEditor::new(),
+            cut_generation: 0,
+            kept: (0, None),
+            surface_mode: false,
+            surfaces: None,
+            surface_job: None,
+        }
+    }
+
+    /// The live clip box, as it is kept with the study.
+    fn clip_state(&self) -> Option<SavedClip> {
+        let b = self.cut_box.filter(|_| self.box_live)?;
+        Some(SavedClip {
+            low: b.low,
+            high: b.high,
+            part: self.cut_part,
+            removes: self.box_removes,
+        })
+    }
+
+    fn saved_cuts(&self) -> SavedCuts {
+        SavedCuts {
+            dims: self.placement.dims,
+            mask: self.labels.clone(),
+            count: self.cuts,
+            clip: self.clip_state(),
+        }
+    }
+
+    /// Put back what was cut the last time.
+    fn restore(&mut self, shared: &Shared, saved: SavedCuts) {
+        self.labels = saved.mask;
+        self.cuts = saved.count;
+        if let Some(c) = saved.clip {
+            self.cut_box = Some(CutBox {
+                low: c.low,
+                high: c.high,
+            });
+            self.box_live = true;
+            self.cut_part = c.part.filter(|i| *i < CUT_PARTS.len());
+            self.box_removes = c.removes;
+        }
+        self.send_labels(shared);
+        self.kept = (self.cut_generation, self.clip_state());
+    }
+
+    /// Open the colour and opacity editor on what is shown. The window
+    /// dragged so far becomes part of the points.
+    fn edit_transfer(&mut self, volume: Option<&Volume>) {
+        let f = self.transfer();
+        self.presets[self.preset] = f.clone();
+        self.shift = 0.0;
+        self.scale = 1.0;
+        let range = (self.gpu.min, self.gpu.max);
+        match volume {
+            Some(volume) => self.editor.begin(&f, sampled(volume), range),
+            None => self.editor.begin(&f, std::iter::empty(), range),
         }
     }
 
     fn set_preset(&mut self, i: usize) {
+        self.editor.open = false;
         self.preset = i;
         self.shift = 0.0;
         self.scale = 1.0;
@@ -707,6 +836,7 @@ impl View3d {
     /// Hide voxels as the next cut. The 254th cut joins the 253rd, which only
     /// means they undo together.
     fn cut(&mut self, shared: &Shared, voxels: impl IntoIterator<Item = usize>) {
+        self.cut_generation += 1;
         self.cuts = (self.cuts + 1).min(254);
         for i in voxels {
             if self.labels[i] == 0 {
@@ -721,12 +851,14 @@ impl View3d {
             return;
         }
         let cut = self.cuts;
+        self.cut_generation += 1;
         self.labels.par_iter_mut().filter(|l| **l == cut).for_each(|l| *l = 0);
         self.cuts -= 1;
         self.send_labels(shared);
     }
 
     fn restore_cuts(&mut self, shared: &Shared) {
+        self.cut_generation += 1;
         self.labels.fill(0);
         self.cuts = 0;
         self.send_labels(shared);
@@ -1161,6 +1293,7 @@ impl MprState {
             active: 0,
             frames_shown: 0,
             three_d: None,
+            cut_saver: None,
             segments: SegmentPanel::default(),
             seg_save: None,
             seg_offer: false,
@@ -1179,6 +1312,15 @@ impl MprState {
         if let Some(volume) = &self.volume {
             let mut view = View3d::new(shared, volume);
             view.set_segments(shared, &self.segments);
+            match shared.db.load_cuts(self.series.id, volume.dims) {
+                Ok(Some(saved)) => {
+                    view.restore(shared, saved);
+                    self.status =
+                        "The cuts from last time are back. Cuts > Restore everything cut shows it all.".to_string();
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("the saved cuts could not be read: {e}"),
+            }
             self.three_d = Some(view);
             self.layout = Layout::Grid;
         }
@@ -1551,6 +1693,9 @@ impl MprState {
         }
         self.keys(ui);
         self.remember_tools(shared);
+        self.transfer_window(ui.ctx(), shared);
+        self.keep_cuts(shared);
+        self.build_surfaces();
         ui.style_mut().visuals = crate::theme::viewer_visuals();
         egui::Panel::top(("mpr-toolbar", self.id))
             .exact_size(crate::theme::TOOLBAR_HEIGHT)
@@ -1625,8 +1770,15 @@ impl MprState {
                         }
                     }
                     self.set_3d(true, shared);
+                    let volume = self.volume.clone();
                     if let Some(v) = self.three_d.as_mut() {
                         v.set_preset(n.min(v.presets.len() - 1));
+                        // `RUTHOS_MPR_3D_SURFACE=1` shows the segments' surfaces.
+                        v.surface_mode = std::env::var_os("RUTHOS_MPR_3D_SURFACE").is_some();
+                        // `RUTHOS_MPR_3D_EDIT=1` opens the colour and opacity editor.
+                        if std::env::var_os("RUTHOS_MPR_3D_EDIT").is_some() {
+                            v.edit_transfer(volume.as_deref());
+                        }
                         if let Some(a) = std::env::var("RUTHOS_MPR_3D_TURN")
                             .ok()
                             .and_then(|t| t.parse::<f64>().ok())
@@ -2015,33 +2167,180 @@ impl MprState {
         }
     }
 
+    /// Build the shown segments' surfaces in the background when they or the
+    /// cuts have changed, while surfaces are on screen.
+    fn build_surfaces(&mut self) {
+        let Some(v) = self.three_d.as_mut() else { return };
+        if !v.surface_mode {
+            return;
+        }
+        if let Some((rx, from)) = &v.surface_job {
+            match rx.try_recv() {
+                Ok(surfaces) => {
+                    v.surfaces = Some((Arc::new(surfaces), *from));
+                    v.surface_job = None;
+                }
+                Err(crossbeam_channel::TryRecvError::Disconnected) => v.surface_job = None,
+                Err(crossbeam_channel::TryRecvError::Empty) => return,
+            }
+        }
+        let wanted = (self.segments.generation, v.cut_generation);
+        if v.surfaces.as_ref().is_some_and(|(_, from)| *from == wanted) {
+            return;
+        }
+        let Some(volume) = self.volume.clone() else { return };
+        let shown: Vec<(Mask, [u8; 3])> = self
+            .segments
+            .seg
+            .iter()
+            .flat_map(|seg| {
+                seg.segments
+                    .iter()
+                    .filter(|s| s.visible)
+                    .map(|s| (seg.mask(s.label), s.colour))
+            })
+            .collect();
+        let cut = Arc::new(v.labels.clone());
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        v.surface_job = Some((rx, wanted));
+        std::thread::spawn(move || {
+            let _ = tx.send(surfaces_of(shown, &cut, &volume));
+        });
+    }
+
+    /// Keep the cuts with the study once they have settled: after each cut,
+    /// Undo or Restore, and when a clip box stops moving. Written in the
+    /// background, one after another, so the newest is the one kept.
+    fn keep_cuts(&mut self, shared: &Shared) {
+        let Some(v) = self.three_d.as_mut() else { return };
+        if v.grabbed.is_some() {
+            return;
+        }
+        let now = (v.cut_generation, v.clip_state());
+        if v.kept == now {
+            return;
+        }
+        v.kept = now;
+        let (db, series_id, cuts) = (shared.db.clone(), self.series.id, v.saved_cuts());
+        let previous = self.cut_saver.take();
+        self.cut_saver = Some(std::thread::spawn(move || {
+            if let Some(previous) = previous {
+                let _ = previous.join();
+            }
+            if let Err(e) = db.save_cuts(series_id, &cuts) {
+                tracing::warn!("the cuts could not be kept: {e}");
+            }
+        }));
+    }
+
+    /// The 3D colour and opacity editor, while it is open.
+    fn transfer_window(&mut self, ctx: &egui::Context, shared: &Shared) {
+        let Some(v) = self.three_d.as_mut() else { return };
+        let range = (v.gpu.min, v.gpu.max);
+        let i = v.preset;
+        match v.editor.window(ctx, self.id, &mut v.presets[i], range) {
+            crate::transfer_edit::Outcome::Nothing => {}
+            crate::transfer_edit::Outcome::Changed => v.rebake(),
+            crate::transfer_edit::Outcome::Save(name) => {
+                let mut f = v.presets[i].clone();
+                f.name = name.clone();
+                f.group = SAVED.to_string();
+                let saved = ruthos_core::settings::SavedTransfer {
+                    name: name.clone(),
+                    stops: f.stops.iter().map(|s| (s.value, s.rgba)).collect(),
+                    ends_clear: f.ends_clear,
+                };
+                {
+                    let mut settings = shared.settings.lock();
+                    settings.vr_presets.retain(|p| p.name != name);
+                    settings.vr_presets.push(saved);
+                    if let Err(e) = settings.save() {
+                        tracing::warn!("the 3D preset could not be saved: {e}");
+                    }
+                }
+                v.presets.retain(|p| !(p.group == SAVED && p.name == name));
+                v.presets.push(f);
+                v.preset = v.presets.len() - 1;
+                v.editor.open = false;
+                v.rebake();
+            }
+            crate::transfer_edit::Outcome::Delete => {
+                let name = v.presets[i].name.clone();
+                {
+                    let mut settings = shared.settings.lock();
+                    settings.vr_presets.retain(|p| p.name != name);
+                    if let Err(e) = settings.save() {
+                        tracing::warn!("the 3D preset could not be removed: {e}");
+                    }
+                }
+                v.presets.remove(i);
+                v.set_preset(0);
+            }
+        }
+    }
+
     /// The 3D pane's own controls, shown only while it is open: how it looks,
     /// and what is cut away.
     fn three_d_controls(&mut self, ui: &mut Ui, shared: &Shared) {
         let mut close = false;
+        let volume = self.volume.clone();
         let Some(v) = self.three_d.as_mut() else { return };
         let caption = format!("3D: {}", crate::widgets::truncate(&v.presets[v.preset].name, 10));
         menu_with_caption(ui, Icon::Glyph(icons::THREE_D), &caption, |ui| {
             menu_heading(ui, "Picture");
             let mut chosen = None;
-            for (i, p) in v.presets.iter().enumerate() {
+            for (i, p) in v.presets.iter().enumerate().filter(|(_, p)| p.group.is_empty()) {
                 if menu_item(ui, p.name.as_str(), i == v.preset).clicked() {
                     chosen = Some(i);
                     ui.close();
                 }
             }
+            let mut groups: Vec<&str> = v
+                .presets
+                .iter()
+                .map(|p| p.group.as_str())
+                .filter(|g| !g.is_empty())
+                .collect();
+            groups.dedup();
+            for group in groups {
+                let title = if group == SAVED {
+                    group.to_string()
+                } else {
+                    format!("Horos: {group}")
+                };
+                ui.menu_button(title, |ui| {
+                    for (i, p) in v.presets.iter().enumerate().filter(|(_, p)| p.group == group) {
+                        if menu_item(ui, p.name.as_str(), i == v.preset).clicked() {
+                            chosen = Some(i);
+                            ui.close();
+                        }
+                    }
+                });
+            }
             if let Some(i) = chosen {
                 v.set_preset(i);
+            }
+            if menu_item(ui, "Edit colours and opacity\u{2026}", v.editor.open).clicked() {
+                v.edit_transfer(volume.as_deref());
+                ui.close();
             }
             for (mode, label) in [
                 (RenderMode::Shaded, "Shaded"),
                 (RenderMode::Maximum, "Maximum intensity (MIP)"),
                 (RenderMode::Minimum, "Minimum intensity (MinIP)"),
             ] {
-                if menu_item(ui, label, v.mode == mode).clicked() {
+                if menu_item(ui, label, v.mode == mode && !v.surface_mode).clicked() {
                     v.mode = mode;
+                    v.surface_mode = false;
                     ui.close();
                 }
+            }
+            if menu_item(ui, "Surfaces of segments", v.surface_mode)
+                .on_hover_text("The shown segments as smooth surfaces in their colours, with what is cut taken away")
+                .clicked()
+            {
+                v.surface_mode = true;
+                ui.close();
             }
             menu_heading(ui, "Look from");
             for side in Side::ALL {
@@ -2336,29 +2635,69 @@ impl MprState {
         let finest = v.gpu.spacing.iter().copied().fold(f64::MAX, f64::min) as f32;
         let step_mm = finest * if moving { 2.0 } else { 0.3 };
         let painter = ui.painter().with_clip_rect(rect);
-        painter.add(egui_wgpu::Callback::new_paint_callback(
-            rect,
-            VolumeCallback {
-                key,
-                volume: v.gpu.clone(),
-                transfer: v.baked.clone(),
-                segments: v.segments.clone(),
-                use_segments: v.cuts > 0 || v.segment_labels.is_some(),
-                placement: v.placement,
-                camera: v.camera,
-                aspect: (rect.width() / rect.height().max(1.0)) as f64,
-                mode: v.mode,
-                step_mm,
-                clip: v.clip(),
-                size_px: [
-                    (rect.width() * ui.pixels_per_point()).round() as u32,
-                    (rect.height() * ui.pixels_per_point()).round() as u32,
-                ],
-                settled: !moving,
-                context: ui.ctx().clone(),
-                viewport: ui.ctx().viewport_id(),
-            },
-        ));
+        let size_px = [
+            (rect.width() * ui.pixels_per_point()).round() as u32,
+            (rect.height() * ui.pixels_per_point()).round() as u32,
+        ];
+        let aspect = (rect.width() / rect.height().max(1.0)) as f64;
+        let surfaces = v.surfaces.as_ref().map(|(s, _)| s.clone()).filter(|_| v.surface_mode);
+        if v.surface_mode {
+            let note = match (&surfaces, &v.surface_job) {
+                (_, Some(_)) => Some("Building surfaces\u{2026}"),
+                (Some(s), None) if s.is_empty() => Some("No shown segment to make a surface of. Make one in Segments."),
+                (None, None) => Some("No shown segment to make a surface of. Make one in Segments."),
+                _ => None,
+            };
+            if let Some(note) = note {
+                painter.text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    note,
+                    FontId::proportional(14.0),
+                    Color32::from_gray(200),
+                );
+            }
+            if moving || v.surface_job.is_some() {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            }
+        }
+        if let Some(surfaces) = surfaces.filter(|s| !s.is_empty()) {
+            painter.add(egui_wgpu::Callback::new_paint_callback(
+                rect,
+                ruthos_render::surface::SurfaceCallback {
+                    key,
+                    surfaces,
+                    placement: v.placement,
+                    camera: v.camera,
+                    aspect,
+                    size_px,
+                },
+            ));
+        } else if !v.surface_mode {
+            painter.add(egui_wgpu::Callback::new_paint_callback(
+                rect,
+                VolumeCallback {
+                    key,
+                    volume: v.gpu.clone(),
+                    transfer: v.baked.clone(),
+                    segments: v.segments.clone(),
+                    use_segments: v.cuts > 0 || v.segment_labels.is_some(),
+                    placement: v.placement,
+                    camera: v.camera,
+                    aspect: (rect.width() / rect.height().max(1.0)) as f64,
+                    mode: v.mode,
+                    step_mm,
+                    clip: v.clip(),
+                    size_px: [
+                        (rect.width() * ui.pixels_per_point()).round() as u32,
+                        (rect.height() * ui.pixels_per_point()).round() as u32,
+                    ],
+                    settled: !moving,
+                    context: ui.ctx().clone(),
+                    viewport: ui.ctx().viewport_id(),
+                },
+            ));
+        }
         painter.text(
             rect.left_top() + Vec2::new(6.0, 6.0),
             Align2::LEFT_TOP,

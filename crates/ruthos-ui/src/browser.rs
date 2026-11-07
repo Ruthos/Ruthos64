@@ -67,6 +67,13 @@ enum RowKind {
 #[derive(Debug, Clone)]
 enum Modal {
     DeleteStudy(i64),
+    /// Measurements as CSV or JSON, for one study or the whole list.
+    ExportData {
+        study_id: i64,
+        whole_list: bool,
+        json: bool,
+        identifiers: bool,
+    },
     NewAlbum {
         name: String,
     },
@@ -93,10 +100,19 @@ enum Action {
     ToggleExpand(i64),
     Open(i64, Option<i64>),
     Delete(i64),
+    ExportData(i64),
     AddToAlbum(i64, i64),
     RemoveFromAlbum(i64, i64),
     SetState(i64, i64),
     EditComment(i64),
+}
+
+/// Today's worklist, as Import Pictures shows it.
+#[derive(Default)]
+struct WorklistPick {
+    name: String,
+    task: Option<crate::pacs::Task<Result<Vec<ruthos_net::WorkItem>, ruthos_net::NetError>>>,
+    found: Option<Result<Vec<ruthos_net::WorkItem>, ruthos_net::NetError>>,
 }
 
 pub struct BrowserState {
@@ -121,6 +137,7 @@ pub struct BrowserState {
     reports: HashSet<i64>,
     /// The saved order has been read from the settings.
     order_read: bool,
+    worklist: Option<WorklistPick>,
     shot_taken: bool,
     /// Source studies (by UID) that have teaching cases; shown only here.
     teaching_sources: HashSet<String>,
@@ -170,6 +187,7 @@ impl BrowserState {
             selected_builtin: None,
             reports: HashSet::new(),
             order_read: false,
+            worklist: None,
             shot_taken: false,
             teaching_sources: HashSet::new(),
             anonymize: None,
@@ -670,7 +688,20 @@ impl BrowserState {
         let ctx = ui.ctx().clone();
         // Developer option: `RUTHOS_DB_SCREENSHOT=<file.png>` saves this window
         // once it has studies to show.
-        if !self.shot_taken && !self.studies.is_empty() && ctx.input(|i| i.time) > 2.0 {
+        // `RUTHOS_OPEN_EXPORT=1` opens Export measurements on the first study.
+        if !self.shot_taken
+            && self.modal.is_none()
+            && !self.studies.is_empty()
+            && std::env::var_os("RUTHOS_OPEN_EXPORT").is_some()
+        {
+            self.modal = Some(Modal::ExportData {
+                study_id: self.studies[0].id,
+                whole_list: true,
+                json: false,
+                identifiers: false,
+            });
+        }
+        if !self.shot_taken && !self.studies.is_empty() && ctx.input(|i| i.time) > 3.0 {
             self.shot_taken = true;
             if let Some(path) = std::env::var_os("RUTHOS_DB_SCREENSHOT") {
                 ctx.request_screenshot(move |img| {
@@ -1503,6 +1534,10 @@ impl BrowserState {
                                     actions.push(Action::ToggleExpand(s.id));
                                     ui.close();
                                 }
+                                if menu_item(ui, "Export measurements\u{2026}", false).clicked() {
+                                    actions.push(Action::ExportData(s.id));
+                                    ui.close();
+                                }
                                 ui.separator();
                                 ui.menu_button("Add to album", |ui| {
                                     let plain: Vec<&AlbumRow> = albums.iter().filter(|a| !a.is_smart).collect();
@@ -1647,6 +1682,14 @@ impl BrowserState {
                     self.open_requests.push((id, series));
                 }
                 Action::Delete(id) => self.modal = Some(Modal::DeleteStudy(id)),
+                Action::ExportData(study_id) => {
+                    self.modal = Some(Modal::ExportData {
+                        study_id,
+                        whole_list: false,
+                        json: false,
+                        identifiers: true,
+                    })
+                }
                 Action::AddToAlbum(album, study) => {
                     let _ = shared.db.add_study_to_album(album, study);
                     self.dirty = true;
@@ -1934,6 +1977,8 @@ impl BrowserState {
             progress: Arc::new(parking_lot::Mutex::new((0, 0))),
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             outcome: None,
+            commit: None,
+            committed: None,
         });
     }
 
@@ -1945,7 +1990,37 @@ impl BrowserState {
         if let Some(t) = &d.task {
             if let Some(r) = t.take() {
                 d.task = None;
+                // A node that confirms what it holds is asked straight away.
+                let target = settings
+                    .pacs_nodes
+                    .get(d.node)
+                    .filter(|n| n.commit && !n.is_web())
+                    .cloned();
+                if let (Some(target), Ok(o)) = (target, &r) {
+                    if !o.stored.is_empty() {
+                        let (ae, items) = (settings.listener_ae_title.clone(), o.stored.clone());
+                        let transaction = ruthos_dicom::sc::new_uid();
+                        d.committed = None;
+                        d.commit = Some(Task::spawn(ctx, "ruthos-commit", move || {
+                            ruthos_net::request_commitment(
+                                &crate::pacs::node(&target),
+                                &ae,
+                                &transaction,
+                                &items,
+                                std::time::Duration::from_secs(10),
+                            )
+                        }));
+                    }
+                }
                 d.outcome = Some(r);
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            }
+        }
+        if let Some(t) = &d.commit {
+            if let Some(r) = t.take() {
+                d.commit = None;
+                d.committed = Some(r);
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(200));
             }
@@ -2028,6 +2103,37 @@ impl BrowserState {
                 Some(Err(e)) => show_problem(ui, "send-problem", &problem(e, &n, &me(&settings, listener_on))),
                 None => {}
             }
+            if d.commit.is_some() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Asking the PACS to confirm it holds them\u{2026}");
+                });
+            }
+            match &d.committed {
+                Some(Ok(ruthos_net::CommitOutcome::Answered(c))) => {
+                    let colour = if c.failed.is_empty() {
+                        Color32::from_rgb(30, 120, 50)
+                    } else {
+                        Color32::from_rgb(190, 40, 30)
+                    };
+                    ui.label(RichText::new(c.summary()).color(colour));
+                }
+                Some(Ok(ruthos_net::CommitOutcome::Later(_))) => {
+                    ui.label(if listener_on {
+                        "The PACS will confirm later. Its answer appears under the listener in Preferences."
+                    } else {
+                        "The PACS will confirm later, by connecting to Ruthos, but the listener is off, so its answer \
+                         will not arrive."
+                    });
+                }
+                Some(Err(e)) => {
+                    ui.label(
+                        RichText::new(format!("The PACS could not confirm what it holds: {e}"))
+                            .color(Color32::from_rgb(190, 40, 30)),
+                    );
+                }
+                None => {}
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if busy {
@@ -2048,6 +2154,7 @@ impl BrowserState {
                         c2.store(false, std::sync::atomic::Ordering::Relaxed);
                         *p2.lock() = (0, files.len());
                         d.outcome = None;
+                        d.committed = None;
                         d.task = Some(Task::spawn(ctx, "ruthos-send", move || {
                             crate::pacs::send(
                                 &target,
@@ -2071,6 +2178,108 @@ impl BrowserState {
         if close {
             self.send = None;
         }
+    }
+
+    /// The worklist picker in Import Pictures: today's scheduled procedures
+    /// from every worklist server, one click to fill the form.
+    fn worklist_picker(&mut self, ui: &mut Ui, shared: &Shared, info: &mut ruthos_dicom::sc::PictureInfo) -> bool {
+        use crate::pacs::Task;
+        let servers: Vec<_> = shared
+            .settings
+            .lock()
+            .pacs_nodes
+            .iter()
+            .filter(|n| n.worklist && !n.is_web())
+            .cloned()
+            .collect();
+        if servers.is_empty() {
+            return false;
+        }
+        let mut chosen = false;
+        let pick = self.worklist.get_or_insert_with(Default::default);
+        if let Some(task) = &pick.task {
+            if let Some(found) = task.take() {
+                pick.task = None;
+                pick.found = Some(found);
+            } else {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut pick.name)
+                    .hint_text("Patient name, or empty for all")
+                    .desired_width(200.0),
+            );
+            let busy = pick.task.is_some();
+            if ui.add_enabled(!busy, egui::Button::new("Today's worklist")).clicked() {
+                let query = ruthos_net::WorklistQuery {
+                    date: chrono::Local::now().format("%Y%m%d").to_string(),
+                    patient: pick.name.clone(),
+                    ..Default::default()
+                };
+                let ae = shared.settings.lock().listener_ae_title.clone();
+                pick.task = Some(Task::spawn(ui.ctx(), "ruthos-worklist", move || {
+                    let never = std::sync::atomic::AtomicBool::new(false);
+                    let mut all = Vec::new();
+                    for n in &servers {
+                        all.extend(ruthos_net::find_worklist(&crate::pacs::node(n), &ae, &query, &never)?);
+                    }
+                    Ok(all)
+                }));
+            }
+            if busy {
+                ui.spinner();
+            }
+        });
+        match &pick.found {
+            Some(Ok(items)) if items.is_empty() => {
+                ui.label(RichText::new("Nothing is scheduled for today.").size(12.0));
+            }
+            Some(Ok(items)) => {
+                egui::ScrollArea::vertical().max_height(130.0).show(ui, |ui| {
+                    for w in items {
+                        let time = w
+                            .time
+                            .get(..4)
+                            .map(|t| format!("{}:{}", &t[..2], &t[2..]))
+                            .unwrap_or_default();
+                        let line = format!(
+                            "{time}  {} ({})  {}  {}",
+                            w.patient_name.replace('^', ", "),
+                            w.patient_id,
+                            if w.procedure.is_empty() { &w.step } else { &w.procedure },
+                            w.accession
+                        );
+                        if ui.selectable_label(false, line).clicked() {
+                            info.patient_name = w.patient_name.replace('^', ", ");
+                            info.patient_id = w.patient_id.clone();
+                            info.birth_date = w.birth_date.clone();
+                            info.sex = w.sex.clone();
+                            info.species = w.species.clone();
+                            info.breed = w.breed.clone();
+                            info.responsible_person = w.owner.replace('^', ", ");
+                            info.accession = w.accession.clone();
+                            info.study_description = if w.procedure.is_empty() {
+                                w.step.clone()
+                            } else {
+                                w.procedure.clone()
+                            };
+                            // The pictures join the study the worklist ordered.
+                            info.existing_study_uid = Some(w.study_uid.clone()).filter(|u| !u.is_empty());
+                            chosen = true;
+                        }
+                    }
+                });
+            }
+            Some(Err(e)) => {
+                ui.label(
+                    RichText::new(format!("The worklist could not be read: {e}")).color(Color32::from_rgb(190, 40, 30)),
+                );
+            }
+            None => {}
+        }
+        chosen
     }
 
     fn show_modal(&mut self, ctx: &Context, shared: &Shared) {
@@ -2161,6 +2370,9 @@ impl BrowserState {
                         );
                         ui.add_space(4.0);
                     }
+                    if self.worklist_picker(ui, shared, info) {
+                        *add_to_selected = false;
+                    }
                     let locked = *add_to_selected && selected.is_some();
                     egui::Grid::new("picture-form").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                         let field = |ui: &mut Ui, label: &str, value: &mut String, hint: &str, enabled: bool| {
@@ -2187,6 +2399,7 @@ impl BrowserState {
                         ui.end_row();
                         field(ui, "Date of birth", &mut info.birth_date, "YYYY-MM-DD", !locked);
                         field(ui, "Owner", &mut info.responsible_person, "Responsible person", !locked);
+                        field(ui, "Accession", &mut info.accession, "From the practice system", !locked);
                         field(ui, "Study description", &mut info.study_description, "e.g. Dermatology photos", !locked);
                         field(ui, "Series description", &mut info.series_description, "Pictures", true);
                         field(ui, "Study date", &mut info.study_date, "Today", !locked);
@@ -2224,6 +2437,81 @@ impl BrowserState {
                             self.open_next_import = true;
                             self.start_picture_import(shared, files.clone(), info);
                             close = true;
+                        }
+                    });
+                }
+                Modal::ExportData {
+                    study_id,
+                    whole_list,
+                    json,
+                    identifiers,
+                } => {
+                    let listed = self.studies.len();
+                    ui.heading("Export measurements");
+                    ui.label(
+                        "Every measurement, the values worked out from it, the calculations and the report, \
+                         one row a value, for a spreadsheet or a program.",
+                    );
+                    ui.add_space(8.0);
+                    ui.radio_value(whole_list, false, "This study");
+                    ui.add_enabled_ui(listed > 1, |ui| {
+                        ui.radio_value(whole_list, true, format!("The {listed} studies in this list"));
+                    });
+                    ui.add_space(6.0);
+                    ui.radio_value(json, false, "CSV, for a spreadsheet");
+                    ui.radio_value(json, true, "JSON, for a program");
+                    ui.add_space(6.0);
+                    let mut leave_out = !*identifiers;
+                    ui.checkbox(&mut leave_out, "Leave out names, IDs, dates, UIDs and report text");
+                    *identifiers = !leave_out;
+                    if leave_out {
+                        ui.label(
+                            RichText::new(
+                                "Species, breed, sex and age in days stay. Study and series descriptions \
+                                 are exported as written, so check them for names.",
+                            )
+                            .size(12.0)
+                            .color(Color32::from_gray(110)),
+                        );
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                        if ui.button("Export\u{2026}").clicked() {
+                            let ids: Vec<i64> = if *whole_list {
+                                self.studies.iter().map(|s| s.id).collect()
+                            } else {
+                                vec![*study_id]
+                            };
+                            let (extension, kind) = if *json { ("json", "JSON") } else { ("csv", "CSV") };
+                            let name = format!("Ruthos measurements {}.{extension}", chrono::Local::now().format("%Y-%m-%d"));
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_title("Export measurements")
+                                .set_file_name(name)
+                                .add_filter(kind, &[extension])
+                                .save_file()
+                            {
+                                let library = shared.library.lock().clone();
+                                let written = ruthos_core::export_data::gather(&shared.db, &library, &ids, *identifiers)
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|data| {
+                                        data.write(&path).map_err(|e| e.to_string())?;
+                                        Ok(data)
+                                    });
+                                match written {
+                                    Ok(data) => self.set_status(format!(
+                                        "Exported {} values from {} {} to {}",
+                                        data.value_count(),
+                                        data.studies.len(),
+                                        if data.studies.len() == 1 { "study" } else { "studies" },
+                                        path.display()
+                                    )),
+                                    Err(e) => self.set_status(format!("Export failed: {e}")),
+                                }
+                                close = true;
+                            }
                         }
                     });
                 }
@@ -2314,4 +2602,7 @@ struct SendDialog {
     progress: Arc<parking_lot::Mutex<(usize, usize)>>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
     outcome: Option<Result<ruthos_net::SendOutcome, ruthos_net::NetError>>,
+    /// Asking the PACS to confirm it holds what was sent, and its answer.
+    commit: Option<crate::pacs::Task<Result<ruthos_net::CommitOutcome, ruthos_net::NetError>>>,
+    committed: Option<Result<ruthos_net::CommitOutcome, ruthos_net::NetError>>,
 }

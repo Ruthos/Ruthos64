@@ -25,6 +25,23 @@ Left and right are the patient's, and up is towards the head, as the scanner
 recorded them, so check them against a series positioned another way. **Close 3D**
 is at the foot.
 
+### Presets and editing colours
+
+The presets are Ruthos's own, then Horos's 29, in Horos's groups (Bone CT, Soft
+Tissue CT and Basic) and read as Horos reads them. A curve preset joins its curves
+into one, with opacity the square of each point's height and clear at the lowest
+and highest values; a table preset spreads its colour table and opacity table over
+its window, clear below it and solid above. They are set for CT in Hounsfield
+units.
+
+**Edit colours and opacity** opens the preset on screen over a histogram of the
+volume, with the window dragged so far included. Drag a point to move it, click to
+add one, right-click to take one away, and choose a point's colour as RGB, HSL or a
+hex code. Height is on Horos's scale, the square root of opacity, so faint
+opacities are not squashed at the foot. **Save** keeps it under **Saved** in the 3D
+menu, for every study; **Undo changes** goes back to how it was when the editor
+opened.
+
 The view turns around the middle of the volume, or of the box while a box is
 cutting it. To turn around something else, choose **Click to set** under Rotation
 centre and click it. A cross marks the point, and **Use the middle of the volume**
@@ -48,9 +65,11 @@ tool or press Esc:
 - **Remove piece:** click something, such as the table, and everything connected
   to that point goes.
 
-**Undo cut** and **Restore everything cut** are in the same menu. Cuts belong to
-the open 3D pane: they do not change the images or the segments, and they are
-not saved.
+**Undo cut** and **Restore everything cut** are in the same menu. Cuts do not
+change the images or the segments. They are kept with the series, with the live
+box and its standard cut, and come back the next time 3D opens on it, where
+**Restore everything cut** still shows it all and **Undo cut** still takes off the
+last. They are not sent with the study to other viewers.
 
 ## Segments
 
@@ -261,12 +280,24 @@ the object ends.
 
 ## Export
 
-**Export STL…** writes the selected segment and **Export all shown…** writes each
-shown segment as its own file, such as the fragments of a fracture. Meshes are in
-millimetres in patient coordinates, and the file header names the series, the
-segment and the tool. The status line reports the printed size and whether the
-mesh is closed. There is no decimation yet, so files can be large. Exports show
+**Export…** writes the selected segment and **Export all shown…** writes each
+shown segment as its own file, such as the fragments of a fracture. **Format**
+chooses STL for any printer, OBJ for 3D software, PLY with the segment's colour, or
+3MF for modern printers, also with its colour. Meshes are in millimetres in patient
+coordinates, with their triangles facing out, and each file names the series, the
+segment and the tool where the format has room. The status line reports the
+printed size and whether the mesh is closed.
+
+**Triangles** keeps all of them, half, a quarter or a tenth, for a smaller file of
+nearly the same shape. Triangles go first where the surface is flattest, and a
+step is refused if it would open the surface or turn a triangle over, so a closed
+mesh stays closed. A tenth keeps the volume of a test ball within 2%. Exports show
 the segment, not what has been cut in 3D.
+
+**Surfaces of segments**, in the 3D menu, shows each shown segment as a smooth
+surface in its colour, with what has been cut taken away. A very large scene is
+thinned to about 400,000 triangles so it turns smoothly. The live box does not
+clip surfaces; a cut made with it does.
 
 Exported meshes are for planning and education and do not replace reading the
 images.

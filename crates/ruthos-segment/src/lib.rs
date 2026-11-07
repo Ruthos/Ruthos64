@@ -9,7 +9,9 @@
 
 #[cfg(feature = "ai")]
 pub mod ai;
+pub mod decimate;
 pub mod mesh;
+pub mod mesh_io;
 pub mod refine;
 pub mod store;
 pub mod tools;

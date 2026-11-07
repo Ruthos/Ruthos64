@@ -28,6 +28,25 @@ and a length that crosses two regions is refused. The Measurements menu's
 "Show calibration basis" panel lists the attributes read and the basis
 chosen for the current image.
 
+## Exporting as data
+
+Right-click a study in the database window and choose **Export measurements** to
+write every measurement, each value worked out from one (an LV line's IVSd, LVIDd
+and so on), every library calculation and the report as one file. Export one study
+or every study in the list, album or search on screen.
+
+**CSV** has one row a value, under a header, for a spreadsheet: the patient and
+study, the series, image and frame, the kind of row (`measurement`, `derived`,
+`calculation`, `findings` or `conclusion`), the name and definition key, the value
+and unit, and where its scale came from. `patient_scale` is `false` when the value
+is not at the patient's true size. A calculation lists the definitions it used and
+how many values each was the mean of. **JSON** holds the same, nested by study.
+
+**Leave out names, IDs, dates, UIDs and report text** keeps species, breed, sex and
+age in days, and numbers the studies from 1 so they stay apart. Study and series
+descriptions are exported as written, so check them for names. Text a spreadsheet
+would run as a formula is written so it cannot be.
+
 ## Echo studies in order
 
 A machine numbers stills and loops in one sequence, but each loop opens as a series of

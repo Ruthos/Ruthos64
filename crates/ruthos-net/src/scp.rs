@@ -139,6 +139,11 @@ pub enum NetEvent {
     Echo {
         peer_ae: String,
     },
+    /// A PACS answered a request to confirm what it holds.
+    Committed {
+        peer_ae: String,
+        commitment: crate::workflow::Commitment,
+    },
     Released {
         peer_ae: String,
         stored: usize,
@@ -282,6 +287,8 @@ fn handle_association(stream: TcpStream, config: &ListenerConfig, tx: &Sender<Ne
     for uid in STORAGE_ABSTRACT_SYNTAXES {
         options = options.with_abstract_syntax(*uid);
     }
+    // A PACS answering a request to confirm what it holds.
+    options = options.with_abstract_syntax(crate::workflow::STORAGE_COMMITMENT);
 
     let mut association = match options.establish(stream) {
         Ok(a) => a,
@@ -307,6 +314,8 @@ fn handle_association(stream: TcpStream, config: &ListenerConfig, tx: &Sender<Ne
     let mut sop_class_uid = String::new();
     let mut sop_instance_uid = String::new();
     let mut stored = 0usize;
+    // An N-EVENT-REPORT under way: its message ID and event type.
+    let mut report: Option<(u16, u16)> = None;
     let command_ts = dicom_transfer_syntax_registry::entries::IMPLICIT_VR_LITTLE_ENDIAN.erased();
 
     loop {
@@ -341,7 +350,16 @@ fn handle_association(stream: TcpStream, config: &ListenerConfig, tx: &Sender<Ne
                                 let _ = tx.send(NetEvent::Echo {
                                     peer_ae: peer_ae.clone(),
                                 });
+                            } else if field == crate::workflow::N_EVENT_REPORT_RQ {
+                                report = Some((
+                                    cmd.element(tags::MESSAGE_ID)?.to_int()?,
+                                    cmd.element(tags::EVENT_TYPE_ID)
+                                        .ok()
+                                        .and_then(|e| e.to_int().ok())
+                                        .unwrap_or(1),
+                                ));
                             } else {
+                                report = None;
                                 msgid = cmd.element(tags::MESSAGE_ID)?.to_int()?;
                                 sop_class_uid = cmd
                                     .element(tags::AFFECTED_SOP_CLASS_UID)?
@@ -355,6 +373,44 @@ fn handle_association(stream: TcpStream, config: &ListenerConfig, tx: &Sender<Ne
                                     .to_string();
                             }
                             buffer.clear();
+                        }
+                        (PDataValueType::Data, true) if report.is_some() => {
+                            buffer.extend_from_slice(&value.data);
+                            let (id, event) = report.take().unwrap_or((0, 1));
+                            let ts = association
+                                .presentation_contexts()
+                                .iter()
+                                .find(|pc| pc.id == value.presentation_context_id)
+                                .map(|pc| pc.transfer_syntax.trim_end_matches(char::from(0)).to_string())
+                                .unwrap_or_default();
+                            match crate::dimse::decode(&buffer, &ts) {
+                                Ok(obj) => {
+                                    let commitment = crate::workflow::commitment_from(&obj);
+                                    tracing::info!(
+                                        "{peer_ae} answered commitment {}: {} held, {} not",
+                                        commitment.transaction_uid,
+                                        commitment.committed.len(),
+                                        commitment.failed.len()
+                                    );
+                                    let _ = tx.send(NetEvent::Committed {
+                                        peer_ae: peer_ae.clone(),
+                                        commitment,
+                                    });
+                                }
+                                Err(e) => tracing::warn!("a commitment report from {peer_ae} could not be read: {e}"),
+                            }
+                            buffer.clear();
+                            let rsp = crate::workflow::event_report_response(id, event);
+                            let mut bytes = Vec::new();
+                            rsp.write_dataset_with_ts(&mut bytes, &command_ts)?;
+                            association.send(&Pdu::PData {
+                                data: vec![PDataValue {
+                                    presentation_context_id: value.presentation_context_id,
+                                    value_type: PDataValueType::Command,
+                                    is_last: true,
+                                    data: bytes,
+                                }],
+                            })?;
                         }
                         (PDataValueType::Data, true) => {
                             buffer.extend_from_slice(&value.data);
