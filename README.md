@@ -4,7 +4,7 @@
 
 Ruthos is a community project to bring the Horos / OsiriX experience to Windows: the same database window, the same 2D viewer, the same tools, the same corner annotations, built as a single native binary on a modern GPU stack. It is not a port of Horos. Horos is Objective-C and Cocoa to the bone, so Ruthos re-implements its feature set and user interface on top of Rust libraries.
 
-> **Status: alpha.** It works end to end on real studies and is rough in places. Tier 1, the complete 2D viewer, is done: a patient archive that imports folders, files, pictures, watch folders and whole Horos databases; a DICOM listener, PACS query/retrieve, send and automatic routing; a Horos-style database window with albums, smart albums, thumbnails and a preview pane; a GPU viewer with window/level, CLUTs, zoom, pan, rotate, flip, cine, tiling and the Horos measurement tools, calibrated from DICOM and ultrasound regions, with ROI Manager, ROI Info, histograms and plots; reports to PDF; anonymised teaching copies; and export to DICOM, PNG, JPEG and MP4. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
+> **Status: alpha.** It works end to end on real studies and is rough in places. Tier 1, the complete 2D viewer, is done: a patient archive that imports folders, files, pictures, watch folders and whole Horos databases; a DICOM listener, PACS query/retrieve, send and automatic routing; a Horos-style database window with albums, smart albums, thumbnails and a preview pane; a GPU viewer with window/level, CLUTs, zoom, pan, rotate, flip, cine, tiling and the Horos measurement tools, calibrated from DICOM and ultrasound regions, with ROI Manager, ROI Info, histograms and plots; reports to PDF; anonymised teaching copies; and export to DICOM, PNG, JPEG and MP4. For echo it adds anatomical M-mode along a line or curve, and a timeline of stills and loops in the order they were taken. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
 
 ![The database window](docs/screenshots/database.png)
 
@@ -43,6 +43,16 @@ The annotation layout follows the Horos defaults:
 **Tool palette.** The 2D tools from Horos: window/level, zoom, pan, rotate, caliper (length, time, velocity), LV dimensions, angle, Cobb angle, dynamic angle, rectangle, ellipse, open and closed polygon, pencil, point, text, arrow, brush ROI and repulsor; selecting, moving and editing any measurement by its handles.
 
 Colour lookup tables and volume-rendering presets are read directly from the Horos definition files, so "Hot Iron", "Jet", "VR Bones" and the rest look the same.
+
+## Echo
+
+**Anatomical M-mode.** Draw a straight line at any angle, or a curve through several points, on a 2D loop, and a time and depth strip follows live as you move it. A curve can follow a wall that no single line from the probe could. Click the strip to move the loop to that frame. Save to study makes an M-mode image that the caliper and LV dimension tools measure.
+
+![A curved anatomical M-mode strip beside the equine echo loop it was read from](site/img/anatomical-mmode.jpg)
+
+A strip has only the frames of its loop, far fewer than the thousand or so lines a second of a true M-mode. So it suits dimensions better than fine timing: fast events can fall between frames, the 2D loop stays the reference, and every strip and report states the rate it was derived at. Smooth blends between frames for reading, and adds no measurements. See `docs/measurements.md`.
+
+**Timeline.** An echo machine numbers its stills and loops in one sequence, but viewers, Horos and Ruthos included, open each loop as a series of its own, which leaves the stills stacked apart. In Ruthos the series drawer offers Timeline, which lists every image in the order it was stored, with its time and any long pause, and Grouped, the usual view. Page Up and Page Down move along the exam. Files and series do not change.
 
 ## The dial
 
