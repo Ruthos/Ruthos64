@@ -1247,6 +1247,8 @@ impl PrefsState {
         {
             let now = shared.settings.lock();
             self.draft.hidden_smart_albums = now.hidden_smart_albums.clone();
+            // Set from the study list's headings.
+            self.draft.study_order = now.study_order;
             // Set from a viewer's series drawer.
             self.draft.series_grouped = now.series_grouped;
             // Set from the MPR Tool menu.

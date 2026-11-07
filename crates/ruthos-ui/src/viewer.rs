@@ -1040,6 +1040,7 @@ impl ViewerState {
         self.drag_draft = None;
         self.angle_draft = None;
         self.sync_series_cells();
+        self.keep_still_alone();
     }
 
     /// Change the grid. A tiled series spreads the active cell's series over
@@ -1048,6 +1049,7 @@ impl ViewerState {
         if tiling == self.tiling {
             return;
         }
+        self.restore_stack(shared);
         for k in 0..self.panes.len() {
             self.persist_pane(shared, k);
         }
@@ -1084,6 +1086,7 @@ impl ViewerState {
         }
         self.panes = panes;
         self.tiling = tiling;
+        self.keep_still_alone();
         self.selected_roi = None;
         self.drag_draft = None;
         self.angle_draft = None;
@@ -3697,8 +3700,37 @@ impl ViewerState {
         if entries.len() > 1 {
             self.timeline = entries;
         }
-        if std::mem::take(&mut self.timeline_from_start) && self.on_timeline() {
-            self.show_timeline_entry(shared, 0);
+        let from_start = std::mem::take(&mut self.timeline_from_start);
+        if self.on_timeline() {
+            let current = self.current_image().map(|i| i.id);
+            let here = self.timeline.iter().position(|e| Some(e.image.id) == current);
+            self.show_timeline_entry(shared, if from_start { 0 } else { here.unwrap_or(0) });
+        }
+    }
+
+    /// On the timeline a still is one image, not a place in a stack, so the
+    /// wheel and Play have nothing to run through. A tiled series is a stack.
+    fn keep_still_alone(&mut self) {
+        if !self.on_timeline() || self.panes.len() != 1 {
+            return;
+        }
+        let p = &mut self.panes[self.active];
+        if let Some(image) = p.image().filter(|i| i.number_of_frames <= 1).cloned() {
+            p.images = vec![image];
+            p.image_idx = 0;
+            p.frame_idx = 0;
+        }
+    }
+
+    /// Give the active cell its whole series again, on the same image.
+    fn restore_stack(&mut self, shared: &Shared) {
+        let id = self.series_of(self.active).id;
+        let p = &mut self.panes[self.active];
+        let current = p.image().map(|i| i.id);
+        let images = shared.db.images_for_series(id).unwrap_or_default();
+        if images.len() != p.images.len() {
+            p.image_idx = images.iter().position(|i| Some(i.id) == current).unwrap_or(0);
+            p.images = images;
         }
     }
 
@@ -3722,12 +3754,14 @@ impl ViewerState {
         if still {
             self.playing = false;
         }
+        self.restore_stack(shared);
         let pane = &self.panes[self.active];
         if pane.images.len() > 1 {
             if let Some(position) = pane.images.iter().position(|i| i.id == image_id) {
                 self.set_active_position(position);
             }
         }
+        self.keep_still_alone();
     }
 
     /// Move along the timeline, across stills and loops alike.
@@ -4471,6 +4505,11 @@ impl ViewerState {
                     .on_hover_text("By series, with the stills together");
                 if grouped != self.grouped {
                     self.grouped = grouped;
+                    if grouped {
+                        self.restore_stack(shared);
+                    } else {
+                        self.keep_still_alone();
+                    }
                     let mut settings = shared.settings.lock();
                     settings.series_grouped = grouped;
                     if let Err(e) = settings.save() {
@@ -4563,6 +4602,10 @@ impl ViewerState {
 
     fn tick_cine(&mut self, ui: &mut Ui) {
         let now = Instant::now();
+        // One image has nothing to play, and Play is off for it.
+        if self.panes.len() == 1 && self.panes[self.active].loop_len() <= 1 {
+            self.playing = false;
+        }
         if !self.playing {
             for p in &mut self.panes {
                 p.cine = None;

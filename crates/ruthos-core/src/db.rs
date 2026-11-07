@@ -56,6 +56,150 @@ pub enum StudySort {
     Modality,
 }
 
+/// A column of the study list that can be sorted on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StudyColumn {
+    PatientName,
+    Report,
+    PatientId,
+    Age,
+    Accession,
+    StudyDate,
+    Modality,
+    Description,
+    Images,
+    DateAdded,
+    Comments,
+    Status,
+}
+
+/// A date as `YYYY-MM-DD`, whether stored that way or as a DICOM `YYYYMMDD`.
+macro_rules! iso {
+    ($column:literal) => {
+        concat!(
+            "date(substr(replace(",
+            $column,
+            ",'-',''),1,4)||'-'||substr(replace(",
+            $column,
+            ",'-',''),5,2)||'-'||substr(replace(",
+            $column,
+            ",'-',''),7,2))"
+        )
+    };
+}
+
+/// Days old at the study, or nothing if the dates do not make sense.
+const AGE_IN_DAYS: &str = concat!(
+    "CASE WHEN julianday(",
+    iso!("s.study_date"),
+    ") >= julianday(",
+    iso!("s.patient_birth_date"),
+    ") THEN julianday(",
+    iso!("s.study_date"),
+    ") - julianday(",
+    iso!("s.patient_birth_date"),
+    ") END"
+);
+
+impl StudyColumn {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::PatientName => "Patient Name",
+            Self::Report => "Report",
+            Self::PatientId => "Patient ID",
+            Self::Age => "Age",
+            Self::Accession => "Accession",
+            Self::StudyDate => "Study Date",
+            Self::Modality => "Modality",
+            Self::Description => "Description",
+            Self::Images => "Images",
+            Self::DateAdded => "Date Added",
+            Self::Comments => "Comments",
+            Self::Status => "Status",
+        }
+    }
+
+    /// Which way a first click sorts: newest and largest first where that is
+    /// what people look for, A to Z otherwise.
+    fn starts_descending(self) -> bool {
+        matches!(
+            self,
+            Self::Report | Self::StudyDate | Self::Images | Self::DateAdded | Self::Status
+        )
+    }
+
+    /// The value to sort on, and what makes a row blank for it.
+    fn key(self) -> (&'static str, String) {
+        let text = |column: &'static str, key: &'static str| (key, format!("IFNULL({column}, '') = ''"));
+        match self {
+            Self::PatientName => text("s.patient_name", "s.patient_name COLLATE NOCASE"),
+            Self::PatientId => text("s.patient_id", "s.patient_id COLLATE NOCASE"),
+            Self::Accession => text("s.accession_number", "s.accession_number COLLATE NOCASE"),
+            Self::StudyDate => text("s.study_date", "s.study_date"),
+            Self::Modality => text("s.modalities", "s.modalities COLLATE NOCASE"),
+            Self::Description => text("s.study_description", "s.study_description COLLATE NOCASE"),
+            Self::Comments => text("s.comment", "s.comment COLLATE NOCASE"),
+            Self::Age => (AGE_IN_DAYS, format!("({AGE_IN_DAYS}) IS NULL")),
+            Self::Report => (
+                "EXISTS (SELECT 1 FROM report r WHERE r.study_id = s.id AND (r.findings <> '' OR r.conclusion <> ''))",
+                "1 = 0".to_string(),
+            ),
+            Self::Images => (
+                "(SELECT COUNT(*) FROM image i JOIN series se ON i.series_id = se.id WHERE se.study_id = s.id)",
+                "1 = 0".to_string(),
+            ),
+            Self::DateAdded => ("s.date_added", "1 = 0".to_string()),
+            Self::Status => ("s.state", "1 = 0".to_string()),
+        }
+    }
+}
+
+/// How the study list is sorted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StudyOrder {
+    pub column: StudyColumn,
+    pub descending: bool,
+}
+
+impl StudyOrder {
+    /// The order after a click on a heading: its usual way first, then back.
+    pub fn after_click(self, column: StudyColumn) -> Self {
+        Self {
+            column,
+            descending: if column == self.column {
+                !self.descending
+            } else {
+                column.starts_descending()
+            },
+        }
+    }
+
+    /// Blank values stay last whichever way the list runs.
+    fn order_by(self) -> String {
+        let way = if self.descending { "DESC" } else { "ASC" };
+        let (key, blank) = self.column.key();
+        let settle = match self.column {
+            StudyColumn::StudyDate => format!("s.study_time {way}, s.id {way}"),
+            StudyColumn::DateAdded => format!("s.id {way}"),
+            _ => "s.study_date DESC, s.study_time DESC, s.id DESC".to_string(),
+        };
+        format!(" ORDER BY {blank}, {key} {way}, {settle}")
+    }
+}
+
+impl From<StudySort> for StudyOrder {
+    fn from(sort: StudySort) -> Self {
+        let (column, descending) = match sort {
+            StudySort::DateAddedDesc => (StudyColumn::DateAdded, true),
+            StudySort::StudyDateDesc => (StudyColumn::StudyDate, true),
+            StudySort::PatientName => (StudyColumn::PatientName, false),
+            StudySort::PatientId => (StudyColumn::PatientId, false),
+            StudySort::Modality => (StudyColumn::Modality, false),
+        };
+        Self { column, descending }
+    }
+}
+
 /// What the database window's search field, modality popup, date popup and
 /// album selection add up to. Smart albums store one of these as JSON.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -71,6 +215,8 @@ pub struct StudyFilter {
     #[serde(skip)]
     pub album_id: Option<i64>,
     pub sort: StudySort,
+    /// A heading clicked in the study list, in place of `sort`.
+    pub order: Option<StudyOrder>,
     /// Only studies with a comment (Horos: "Cases with comments").
     pub has_comment: bool,
     /// Only studies added in the last so many seconds ("Just Added").
@@ -80,6 +226,13 @@ pub struct StudyFilter {
     /// Only studies with an image on this catalogued drive.
     #[serde(skip)]
     pub catalogue_root: Option<String>,
+}
+
+impl StudyFilter {
+    /// The order the list is in, from a heading or else the Sort menu.
+    pub fn shown_order(&self) -> StudyOrder {
+        self.order.unwrap_or_else(|| self.sort.into())
+    }
 }
 
 impl Database {
@@ -346,13 +499,7 @@ impl Database {
             sql.push_str(" WHERE ");
             sql.push_str(&clauses.join(" AND "));
         }
-        sql.push_str(match filter.sort {
-            StudySort::DateAddedDesc => " ORDER BY s.date_added DESC, s.id DESC",
-            StudySort::StudyDateDesc => " ORDER BY s.study_date DESC, s.study_time DESC, s.id DESC",
-            StudySort::PatientName => " ORDER BY s.patient_name COLLATE NOCASE, s.study_date DESC",
-            StudySort::PatientId => " ORDER BY s.patient_id COLLATE NOCASE, s.study_date DESC",
-            StudySort::Modality => " ORDER BY s.modalities, s.study_date DESC",
-        });
+        sql.push_str(&filter.shown_order().order_by());
 
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), study_from_row)?;
@@ -2098,6 +2245,80 @@ mod tests {
 
     /// An archive written on Windows before 0.1.0-alpha holds backslashes;
     /// opening it rewrites them so the same file resolves on a Mac.
+    #[test]
+    fn every_column_sorts_both_ways_with_blanks_last() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let add = |study: &str, name: &str, id: &str, date: &str, born: &str, description: &str, images: usize| {
+            let mut m = meta(study, study, &format!("{study}.0"));
+            m.patient_name = PatientName::parse(name);
+            m.patient_id = id.into();
+            m.study_date = (!date.is_empty()).then(|| date.to_string());
+            m.patient_birth_date = (!born.is_empty()).then(|| born.to_string());
+            m.study_description = description.into();
+            db.insert_instance(&m, study, true, 10).unwrap();
+            for n in 1..images {
+                db.insert_instance(&meta(study, study, &format!("{study}.{n}")), study, true, 10)
+                    .unwrap();
+            }
+        };
+        // Age: 9 months, 2 years, 3 weeks, none. As text, "9M" would come last.
+        add("a", "BETA", "2", "20260601", "20250901", "Echo", 1);
+        add("b", "alpha", "10", "20260101", "20240101", "", 3);
+        add("c", "GAMMA", "", "20261101", "20261010", "Abdomen", 2);
+        add("d", "DELTA", "3", "", "", "Thorax", 4);
+
+        let by = |column: StudyColumn, descending: bool| -> String {
+            let filter = StudyFilter {
+                order: Some(StudyOrder { column, descending }),
+                ..Default::default()
+            };
+            let studies = db.list_studies(&filter).unwrap();
+            studies.iter().map(|s| s.study_instance_uid.as_str()).collect()
+        };
+        assert_eq!(by(StudyColumn::PatientName, false), "badc");
+        assert_eq!(by(StudyColumn::PatientName, true), "cdab");
+        assert_eq!(by(StudyColumn::Age, false), "cabd", "youngest first, by real age");
+        assert_eq!(by(StudyColumn::Age, true), "bacd", "no age stays last");
+        assert_eq!(by(StudyColumn::Images, true), "dbca");
+        assert_eq!(by(StudyColumn::StudyDate, true), "cabd", "no date stays last");
+        assert_eq!(by(StudyColumn::StudyDate, false), "bacd", "no date stays last");
+        assert_eq!(by(StudyColumn::Description, false), "cadb", "no description stays last");
+        assert_eq!(by(StudyColumn::Description, true), "dacb", "no description stays last");
+        assert_eq!(
+            by(StudyColumn::PatientId, true),
+            "dabc",
+            "as text, and no ID stays last"
+        );
+
+        for column in [
+            StudyColumn::Report,
+            StudyColumn::Accession,
+            StudyColumn::Modality,
+            StudyColumn::DateAdded,
+            StudyColumn::Comments,
+            StudyColumn::Status,
+        ] {
+            assert_eq!(by(column, false).len(), 4, "{column:?}");
+            assert_eq!(by(column, true).len(), 4, "{column:?}");
+        }
+    }
+
+    #[test]
+    fn clicking_a_heading_picks_a_way_then_reverses_it() {
+        let start = StudyOrder::from(StudySort::DateAddedDesc);
+        let name = start.after_click(StudyColumn::PatientName);
+        assert!(!name.descending, "names start at A");
+        assert!(name.after_click(StudyColumn::PatientName).descending);
+        assert!(
+            name.after_click(StudyColumn::StudyDate).descending,
+            "dates start newest"
+        );
+        assert!(
+            !start.after_click(StudyColumn::DateAdded).descending,
+            "the same heading reverses"
+        );
+    }
+
     #[test]
     fn a_timeline_mixes_stills_and_loops_by_time() {
         let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();

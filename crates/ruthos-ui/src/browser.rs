@@ -13,7 +13,7 @@ use crossbeam_channel::{unbounded, Receiver};
 use egui::{Align2, Color32, Context, FontId, Pos2, RichText, Sense, Ui, Vec2};
 use egui_extras::{Column, TableBuilder};
 
-use ruthos_core::db::StudySort;
+use ruthos_core::db::{StudyColumn, StudySort};
 use ruthos_core::import::ImportSummary;
 use ruthos_core::{
     AlbumRow, DateFilter, ImageRow, ImportEvent, ImportMode, Importer, SeriesRow, StudyFilter, StudyRow,
@@ -119,6 +119,9 @@ pub struct BrowserState {
     selected_builtin: Option<usize>,
     /// Studies that have report text, for the Report column.
     reports: HashSet<i64>,
+    /// The saved order has been read from the settings.
+    order_read: bool,
+    shot_taken: bool,
     /// Source studies (by UID) that have teaching cases; shown only here.
     teaching_sources: HashSet<String>,
     anonymize: Option<Box<AnonymizeState>>,
@@ -166,6 +169,8 @@ impl BrowserState {
             builtin_albums: Vec::new(),
             selected_builtin: None,
             reports: HashSet::new(),
+            order_read: false,
+            shot_taken: false,
             teaching_sources: HashSet::new(),
             anonymize: None,
             horos: None,
@@ -301,6 +306,9 @@ impl BrowserState {
     }
 
     fn reload(&mut self, shared: &Shared) {
+        if !std::mem::replace(&mut self.order_read, true) {
+            self.filter.order = shared.settings.lock().study_order;
+        }
         let mut filter = self.filter.clone();
         filter.album_id = None;
         if let Some(b) = self.selected_builtin.and_then(|i| self.builtin_albums.get(i)) {
@@ -660,6 +668,19 @@ impl BrowserState {
         }
         ui.style_mut().visuals = theme::browser_visuals();
         let ctx = ui.ctx().clone();
+        // Developer option: `RUTHOS_DB_SCREENSHOT=<file.png>` saves this window
+        // once it has studies to show.
+        if !self.shot_taken && !self.studies.is_empty() && ctx.input(|i| i.time) > 2.0 {
+            self.shot_taken = true;
+            if let Some(path) = std::env::var_os("RUTHOS_DB_SCREENSHOT") {
+                ctx.request_screenshot(move |img| {
+                    let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
+                    if let Some(png) = image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, rgba) {
+                        let _ = png.save(&path);
+                    }
+                });
+            }
+        }
         self.poll_catalogues(&ctx, shared);
 
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
@@ -953,15 +974,9 @@ impl BrowserState {
                 ui.set_width(SORT_W);
                 ui.add_space(4.0);
                 toolbar_caption(ui, "Sort");
-                let label = match self.filter.sort {
-                    StudySort::DateAddedDesc => "Date added",
-                    StudySort::StudyDateDesc => "Study date",
-                    StudySort::PatientName => "Patient name",
-                    StudySort::PatientId => "Patient ID",
-                    StudySort::Modality => "Modality",
-                };
+                let shown = self.filter.shown_order();
                 egui::ComboBox::from_id_salt("sort-popup")
-                    .selected_text(label)
+                    .selected_text(shown.column.title())
                     .width(SORT_W - 4.0)
                     .show_ui(ui, |ui| {
                         for (s, l) in [
@@ -971,8 +986,10 @@ impl BrowserState {
                             (StudySort::PatientId, "Patient ID"),
                             (StudySort::Modality, "Modality"),
                         ] {
-                            if ui.selectable_label(self.filter.sort == s, l).clicked() {
+                            if ui.selectable_label(shown == s.into(), l).clicked() {
                                 self.filter.sort = s;
+                                self.filter.order = None;
+                                remember_order(shared, None);
                                 changed = true;
                             }
                         }
@@ -1327,6 +1344,8 @@ impl BrowserState {
 
         let text_color = Color32::from_gray(30);
         let row_h = theme::TABLE_ROW_HEIGHT;
+        let order = self.filter.shown_order();
+        let mut sort_by = None;
         TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
@@ -1334,7 +1353,7 @@ impl BrowserState {
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::exact(20.0))
             .column(Column::initial(200.0).at_least(100.0).clip(true))
-            .column(Column::exact(46.0))
+            .column(Column::exact(60.0))
             .column(Column::initial(90.0).at_least(60.0).clip(true))
             .column(Column::initial(46.0).at_least(36.0))
             .column(Column::initial(96.0).at_least(50.0).clip(true))
@@ -1346,23 +1365,39 @@ impl BrowserState {
             .column(Column::initial(150.0).at_least(60.0).clip(true))
             .column(Column::remainder().at_least(70.0).clip(true))
             .header(theme::TABLE_HEADER_HEIGHT, |mut header| {
-                for title in [
-                    "",
-                    "Patient Name",
-                    "Report",
-                    "Patient ID",
-                    "Age",
-                    "Accession",
-                    "Study Date",
-                    "Modality",
-                    "Description",
-                    "Images",
-                    "Date Added",
-                    "Comments",
-                    "Status",
+                header.col(|_| {});
+                for column in [
+                    StudyColumn::PatientName,
+                    StudyColumn::Report,
+                    StudyColumn::PatientId,
+                    StudyColumn::Age,
+                    StudyColumn::Accession,
+                    StudyColumn::StudyDate,
+                    StudyColumn::Modality,
+                    StudyColumn::Description,
+                    StudyColumn::Images,
+                    StudyColumn::DateAdded,
+                    StudyColumn::Comments,
+                    StudyColumn::Status,
                 ] {
                     header.col(|ui| {
-                        ui.label(RichText::new(title).strong().color(Color32::from_gray(80)));
+                        let heading = ui
+                            .interact(ui.max_rect(), ui.scope_id().with(column.title()), Sense::click())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("Click to sort, and again to reverse");
+                        let colour = Color32::from_gray(80);
+                        ui.label(RichText::new(column.title()).strong().color(colour));
+                        if order.column == column {
+                            let arrow = if order.descending {
+                                icons::CARET_DOWN
+                            } else {
+                                icons::CARET_UP
+                            };
+                            ui.label(icons::rich(arrow, 11.0).color(colour));
+                        }
+                        if heading.clicked() {
+                            sort_by = Some(column);
+                        }
                     });
                 }
             })
@@ -1585,6 +1620,12 @@ impl BrowserState {
                 });
             });
 
+        if let Some(column) = sort_by {
+            let order = order.after_click(column);
+            self.filter.order = Some(order);
+            remember_order(shared, Some(order));
+            self.dirty = true;
+        }
         for action in actions {
             match action {
                 Action::Anonymize(id) => self.start_anonymize(shared, id),
@@ -2231,6 +2272,17 @@ fn unix_to_local(secs: i64) -> String {
     chrono::DateTime::from_timestamp(secs, 0)
         .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default()
+}
+
+/// Keep the study list's order for next time.
+fn remember_order(shared: &Shared, order: Option<ruthos_core::db::StudyOrder>) {
+    let mut settings = shared.settings.lock();
+    if settings.study_order != order {
+        settings.study_order = order;
+        if let Err(e) = settings.save() {
+            tracing::warn!("the study order could not be saved: {e}");
+        }
+    }
 }
 
 fn smart_album_name(f: &StudyFilter) -> String {
