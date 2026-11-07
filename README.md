@@ -4,7 +4,7 @@
 
 Ruthos is a community project to bring the Horos / OsiriX experience to Windows: the same database window, the same 2D viewer, the same tools, the same corner annotations, built as a single native binary on a modern GPU stack. It is not a port of Horos. Horos is Objective-C and Cocoa to the bone, so Ruthos re-implements its feature set and user interface on top of Rust libraries.
 
-> **Status: alpha.** It works end to end on real studies and is rough in places. Tier 1, the complete 2D viewer, is done: a patient archive that imports folders, files, pictures, watch folders and whole Horos databases; a DICOM listener, PACS query/retrieve, send and automatic routing; a Horos-style database window; a GPU viewer with the Horos measurement tools, calibrated from DICOM and ultrasound regions; reports to PDF; anonymised teaching copies; and export to DICOM, PNG, JPEG and MP4. Beyond that it has MPR, GPU volume rendering with live cuts, segmentation with an optional AI tool, DICOMweb, sharing images with an owner or referring vet, and for echo, anatomical M-mode and a timeline of stills and loops. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
+> **Status: alpha.** It works end to end on real studies and is rough in places. Tier 1 of the [roadmap](#roadmap), the complete 2D viewer, is done: a patient archive that imports folders, files, pictures, watch folders and whole Horos databases; a DICOM listener, PACS query/retrieve, send and automatic routing; a Horos-style database window; a GPU viewer with the Horos measurement tools, calibrated from DICOM and ultrasound regions; reports to PDF; anonymised teaching copies; and export to DICOM, PNG, JPEG and MP4. So is tier 2: MPR, GPU volume rendering with live cuts, segmentation with an optional AI tool, DICOMweb, sharing images with an owner or referring vet, and for echo, anatomical M-mode and a timeline of stills and loops. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
 
 ![The database window, with patient names and IDs pixelated](site/img/database-echo.jpg)
 
@@ -73,45 +73,57 @@ On Windows, a Surface Dial, an ASUS Dial or a ProArt DialPad (set to Microsoft W
 
 ## Roadmap
 
-Work is organised in tiers. Each tier is usable on its own.
+Tiers 1 and 2 are what Ruthos does today. Tiers 3 and 4 are what it does not do yet.
 
-### Tier 1: a complete 2D viewer (done)
+### Tier 1: a complete 2D viewer and archive (done)
 
 - Import files and folders into a local database; watch folders; catalogue a whole drive without copying it (see `docs/catalogue-drive.md`)
 - Import an existing Horos or OsiriX database, including albums, smart albums, comments, status and key images (see `docs/moving-from-horos.md`)
+- Import JPEG and PNG pictures as DICOM with a patient form
 - Database window with albums, smart albums, search and filters
 - 2D viewer: window/level, presets, CLUTs, zoom, pan, rotate, flip, scroll, cine
 - Tiling of a series or a study, with a lock per cell
 - Measurement and ROI tools with ROI Info and the ROI Manager
+- Measurements with a stated scale basis, editable handles with undo, a GPU loupe, a Measurements menu, an LV tool with fractional shortening in M-mode and 2D, and a library of definitions, sets and calculations with JSON import and export (see `docs/measurements.md`)
+- Echo: anatomical M-mode along a line or curve, and a timeline of stills and loops
 - Key images, comments and study state
 - Pixel value readout, histograms and line plots
 - DICOM listener (C-STORE SCP), send (C-STORE SCU), query/retrieve (C-FIND, C-GET, C-MOVE), echo and automatic routing (see `docs/pacs.md`)
+- Reports to PDF with named measurements, calculations and key images
 - Export to DICOM, JPEG, PNG and MP4
-- Measurements with a stated scale basis, editable handles with undo, a GPU loupe, a Measurements menu, an LV tool with fractional shortening in M-mode and 2D, and a library of definitions, sets and calculations with JSON import and export (see `docs/measurements.md`)
 - Anonymisation for teaching: allowlist header profile, derived UIDs, shifted dates, ultrasound-region and template pixel masking with review, named teaching cases, sidecar for measurements, independent verification pass (see `docs/anonymiser.md`)
-- Sharing with an owner or a referring vet, with a DICOMDIR writer and reader (see `docs/sharing.md`)
-- Guided review of a teaching case through a session relay (see `docs/guided-review.md`)
-- Echo: anatomical M-mode along a line or curve, and a timeline of stills and loops
 - Preferences window
 
-### Tier 2: MPR, data and integration
+### Tier 2: 3D, segmentation and reaching beyond the practice (done)
 
-- Orthogonal and oblique MPR with linked crosshairs, thick slab MIP, MinIP and mean (done, see `docs/mpr.md`); curved MPR; reference lines and 3D position across series in the 2D viewer
-- DICOMweb: search, retrieve and send over HTTPS, tested against Orthanc (done, see `docs/dicomweb.md`); Cloudflare Access, dcm4chee-arc and cloud services still to be tried
+- Orthogonal and oblique MPR with linked crosshairs, and thick slab MIP, MinIP and mean (see `docs/mpr.md`)
+- GPU volume rendering with presets, MIP and MinIP, fixed views and a movable rotation centre
+- Live cutting in 3D by box, standard cuts, path and connected piece
+- Segments: threshold, region grow, islands and morphology, on the slices and in 3D, with volumes and a colour for each (see `docs/segmentation.md`)
+- Segments saved and reloaded as DICOM SEG, passing `dciodvfy` and highdicom in CI; opening them in other viewers is not yet confirmed
+- Mesh export to STL
+- AI segmentation on the user's machine with SAM 2.1 (Windows); VISTA3D and nnInteractive in Research mode, installed from a folder
+- DICOMweb: search, retrieve and send over HTTPS, tested against Orthanc; sign-in through Cloudflare Access is built but not yet tried on a real gateway (see `docs/dicomweb.md`)
+- Sharing with an owner or a referring vet, with a DICOMDIR writer and reader (see `docs/sharing.md`)
+- Guided review of a teaching case through a session relay (see `docs/guided-review.md`)
+
+### Tier 3: next
+
+- Curved MPR; reference lines and 3D position across series in the 2D viewer
 - Scrolling linked across series, and settings propagated between them
+- The Horos opacity presets and a transfer function editor; saving cuts with the study
+- Surface rendering in the 3D pane, mesh decimation, and OBJ, PLY and 3MF export
 - Measurements, calculations and findings saved as DICOM Structured Reports (measurement reports, TID 1500) and read back in, so they travel with the study to a PACS and other viewers; key object selection documents for key images
 - Measurements and reports exported as data (CSV and JSON) for research, audit and teaching
-- API ready for practice management systems (PMS). Comments, measurements, reports and annotated still images are produced through one documented, versioned interface, so a PMS can be told when a study is reported and receive its findings, values and key images with their annotations. No particular PMS integration is promised yet; the principle is that connecting one needs a small connector, not changes to Ruthos
-
-### Tier 3: volume and surface rendering (in progress, see `docs/segmentation.md`)
-
-- GPU volume rendering with presets, MIP and MinIP, and live cutting by box, standard cuts, path and connected piece, with fixed views and a movable rotation centre (done); saving cuts with the study, the Horos opacity presets and a transfer function editor
-- Segments: threshold, region grow, islands and morphology, on the slices and in 3D, with volumes and a colour for each, saved and reloaded as DICOM SEG (done; opening them in other viewers is not yet confirmed)
-- AI segmentation on the user's machine with SAM 2.1 (done, Windows); VISTA3D and nnInteractive in Research mode, not yet downloadable from Ruthos
-- Mesh export to STL (done); surface rendering in the 3D pane, decimation, and OBJ, PLY and 3MF
+- Reading Horos report files and saved measurements (ROIs)
+- Modality Worklist and storage commitment
+- DICOMweb against dcm4chee-arc and cloud services; IHE AIW-I and UPS-RS
+- VISTA3D and nnInteractive downloadable from within Ruthos; the AI tool on macOS and Linux
+- An installer and a Microsoft Store listing
 
 ### Tier 4: the future
 
+- API ready for practice management systems (PMS). Comments, measurements, reports and annotated still images are produced through one documented, versioned interface, so a PMS can be told when a study is reported and receive its findings, values and key images with their annotations. No particular PMS integration is promised yet; the principle is that connecting one needs a small connector, not changes to Ruthos
 - PET-CT and other fusion
 - Hanging protocols
 - A plugin interface (Horos plugins are Objective-C bundles and do not carry over)
