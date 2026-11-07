@@ -4,11 +4,11 @@
 
 Ruthos is a community project to bring the Horos / OsiriX experience to Windows: the same database window, the same 2D viewer, the same tools, the same corner annotations, built as a single native binary on a modern GPU stack. It is not a port of Horos. Horos is Objective-C and Cocoa to the bone, so Ruthos re-implements its feature set and user interface on top of Rust libraries.
 
-> **Status: alpha.** It works end to end on real studies and is rough in places. Tier 1, the complete 2D viewer, is done: a patient archive that imports folders, files, pictures, watch folders and whole Horos databases; a DICOM listener, PACS query/retrieve, send and automatic routing; a Horos-style database window with albums, smart albums, thumbnails and a preview pane; a GPU viewer with window/level, CLUTs, zoom, pan, rotate, flip, cine, tiling and the Horos measurement tools, calibrated from DICOM and ultrasound regions, with ROI Manager, ROI Info, histograms and plots; reports to PDF; anonymised teaching copies; and export to DICOM, PNG, JPEG and MP4. For echo it adds anatomical M-mode along a line or curve, and a timeline of stills and loops in the order they were taken. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
+> **Status: alpha.** It works end to end on real studies and is rough in places. Tier 1, the complete 2D viewer, is done: a patient archive that imports folders, files, pictures, watch folders and whole Horos databases; a DICOM listener, PACS query/retrieve, send and automatic routing; a Horos-style database window; a GPU viewer with the Horos measurement tools, calibrated from DICOM and ultrasound regions; reports to PDF; anonymised teaching copies; and export to DICOM, PNG, JPEG and MP4. Beyond that it has MPR, GPU volume rendering with live cuts, segmentation with an optional AI tool, DICOMweb, sharing images with an owner or referring vet, and for echo, anatomical M-mode and a timeline of stills and loops. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
 
-![The database window](docs/screenshots/database.png)
+![The database window, with patient names and IDs pixelated](site/img/database-echo.jpg)
 
-![The 2D viewer](docs/screenshots/viewer.png)
+![A colour Doppler echo loop in the 2D viewer](site/img/colour-doppler.jpg)
 
 ---
 
@@ -18,17 +18,17 @@ Horos is the free DICOM viewer of choice in a large number of veterinary practic
 
 Three things justify a new codebase rather than another wrapper:
 
-- **One small native binary.** No Java runtime, no bundled browser, no Python. Install it and open studies.
+- **One small native binary.** No Java runtime, no bundled browser, no Python. Unzip it and open studies.
 - **GPU first.** Window/level, colour lookup tables, MPR and volume rendering all run on the GPU through `wgpu`, so large CT and CBCT volumes stay interactive on ordinary clinic hardware.
-- **The Horos workflow.** Albums and smart albums, the series thumbnail drawer, propagate settings, key images, ROI tools and the familiar toolbars. Where Horos made a design decision, Ruthos follows it unless there is a strong reason not to.
+- **The Horos workflow.** Albums and smart albums, the series thumbnail drawer, key images, ROI tools and the familiar toolbars. Where Horos made a design decision, Ruthos follows it unless there is a strong reason not to.
 
-## What it will look like
+## What it looks like
 
-Ruthos mirrors the two windows that make up a Horos session.
+Ruthos follows the two windows that make up a Horos session.
 
-**Database window.** A source list on the left (local database, albums, smart albums, PACS nodes), an outline table of studies with series as expandable rows, a series thumbnail strip along the bottom, and the Horos toolbar: Import, Export, Query/Retrieve, Send, Anonymize, Trash, 2D Viewer, Key Images and ROIs, Report, modality and date filters, Search.
+**Database window.** A source list on the left (local database, albums, smart albums, PACS nodes), an outline table of studies with series as expandable rows, a series thumbnail strip along the bottom, and a Horos-style toolbar for import, export, Query/Retrieve, send, share, anonymise and reports, with modality and date filters and search.
 
-**2D viewer window.** A series thumbnail drawer on the left, the image viewport with the Horos four-corner annotation layout, and the viewer toolbar: Database, Window tiling, Series, Annotations, Patient, Tools, WL/WW and CLUT, Reconstruction, Orientation, Fusion, Export, Sync, Propagate settings, Play and Speed.
+**2D viewer window.** A series thumbnail drawer on the left, the image viewport with the Horos four-corner annotation layout, and the viewer toolbar: Database, Series, Tiling, Play and Speed, Annotations, Tool and Measure, WL/WW, colour table, Anat. M-mode, MPR, Orientation, Reset, Key Image, Export, Movie, Report and Anonymize.
 
 The annotation layout follows the Horos defaults:
 
@@ -40,9 +40,9 @@ The annotation layout follows the Horos defaults:
 | Bottom right | MRI timing (TE/TR), field strength, acquisition date |
 | Edge midpoints | Orientation letters |
 
-**Tool palette.** The 2D tools from Horos: window/level, zoom, pan, rotate, caliper (length, time, velocity), LV dimensions, angle, Cobb angle, dynamic angle, rectangle, ellipse, open and closed polygon, pencil, point, text, arrow, brush ROI and repulsor; selecting, moving and editing any measurement by its handles.
+**Tool palette.** The 2D tools from Horos: window/level, zoom, pan, rotate, caliper (length, time, velocity), LV dimensions, angle, Cobb angle, angle between two lines, rectangle, ellipse, open and closed polygon, pencil, point, text, arrow, brush ROI and repulsor; selecting, moving and editing any measurement by its handles.
 
-Colour lookup tables and volume-rendering presets are read directly from the Horos definition files, so "Hot Iron", "Jet", "VR Bones" and the rest look the same.
+Colour lookup tables are read directly from the Horos definition files, so "Hot Iron", "Jet" and the rest look the same. Ruthos adds five CT colour maps tied to Hounsfield values, whose thresholds are human ones for now.
 
 ## Echo
 
@@ -53,6 +53,10 @@ Colour lookup tables and volume-rendering presets are read directly from the Hor
 A strip has only the frames of its loop, far fewer than the thousand or so lines a second of a true M-mode. So it suits dimensions better than fine timing: fast events can fall between frames, the 2D loop stays the reference, and every strip and report states the rate it was derived at. Smooth blends between frames for reading, and adds no measurements. See `docs/measurements.md`.
 
 **Timeline.** An echo machine numbers its stills and loops in one sequence, but viewers, Horos and Ruthos included, open each loop as a series of its own, which leaves the stills stacked apart. In Ruthos the series drawer offers Timeline, which lists every image in the order it was stored, with its time and any long pause, and Grouped, the usual view. Page Up and Page Down move along the exam. Files and series do not change.
+
+## Sharing
+
+**Share** in the database window puts a patient's images in a folder or a zip that an owner or a referring vet can open with no installation and no database: a renamed copy of Ruthos, a page that opens on any device, the report, key images as JPEG, and a DICOMDIR for any viewer or PACS. The owner's name and contact details can be left out of the file headers, but not anything burned into the pixels. See `docs/sharing.md`.
 
 ## The dial
 
@@ -73,11 +77,11 @@ Work is organised in tiers. Each tier is usable on its own.
 
 ### Tier 1: a complete 2D viewer (done)
 
-- Import files and folders into a local database; watch folders
+- Import files and folders into a local database; watch folders; catalogue a whole drive without copying it (see `docs/catalogue-drive.md`)
 - Import an existing Horos or OsiriX database, including albums, smart albums, comments, status and key images (see `docs/moving-from-horos.md`)
 - Database window with albums, smart albums, search and filters
 - 2D viewer: window/level, presets, CLUTs, zoom, pan, rotate, flip, scroll, cine
-- Multi-series tiling, sync and propagate settings
+- Tiling of a series or a study, with a lock per cell
 - Measurement and ROI tools with ROI Info and the ROI Manager
 - Key images, comments and study state
 - Pixel value readout, histograms and line plots
@@ -85,20 +89,25 @@ Work is organised in tiers. Each tier is usable on its own.
 - Export to DICOM, JPEG, PNG and MP4
 - Measurements with a stated scale basis, editable handles with undo, a GPU loupe, a Measurements menu, an LV tool with fractional shortening in M-mode and 2D, and a library of definitions, sets and calculations with JSON import and export (see `docs/measurements.md`)
 - Anonymisation for teaching: allowlist header profile, derived UIDs, shifted dates, ultrasound-region and template pixel masking with review, named teaching cases, sidecar for measurements, independent verification pass (see `docs/anonymiser.md`)
+- Sharing with an owner or a referring vet, with a DICOMDIR writer and reader (see `docs/sharing.md`)
+- Guided review of a teaching case through a session relay (see `docs/guided-review.md`)
+- Echo: anatomical M-mode along a line or curve, and a timeline of stills and loops
 - Preferences window
 
 ### Tier 2: MPR, data and integration
 
 - Orthogonal and oblique MPR with linked crosshairs, thick slab MIP, MinIP and mean (done, see `docs/mpr.md`); curved MPR; reference lines and 3D position across series in the 2D viewer
+- DICOMweb: search, retrieve and send over HTTPS, tested against Orthanc (done, see `docs/dicomweb.md`); Cloudflare Access, dcm4chee-arc and cloud services still to be tried
+- Scrolling linked across series, and settings propagated between them
 - Measurements, calculations and findings saved as DICOM Structured Reports (measurement reports, TID 1500) and read back in, so they travel with the study to a PACS and other viewers; key object selection documents for key images
 - Measurements and reports exported as data (CSV and JSON) for research, audit and teaching
 - API ready for practice management systems (PMS). Comments, measurements, reports and annotated still images are produced through one documented, versioned interface, so a PMS can be told when a study is reported and receive its findings, values and key images with their annotations. No particular PMS integration is promised yet; the principle is that connecting one needs a small connector, not changes to Ruthos
 
 ### Tier 3: volume and surface rendering (in progress, see `docs/segmentation.md`)
 
-- GPU volume rendering with presets, MIP and MinIP, and cutting by box, path and connected piece (done); the Horos opacity presets and a transfer function editor
-- Segments: threshold, region grow, islands and morphology, on the slices and in 3D, with volumes (done); saving as DICOM SEG
-- AI segmentation on the user's machine with SAM 2.1 (done, Windows)
+- GPU volume rendering with presets, MIP and MinIP, and live cutting by box, standard cuts, path and connected piece, with fixed views and a movable rotation centre (done); saving cuts with the study, the Horos opacity presets and a transfer function editor
+- Segments: threshold, region grow, islands and morphology, on the slices and in 3D, with volumes and a colour for each, saved and reloaded as DICOM SEG (done; opening them in other viewers is not yet confirmed)
+- AI segmentation on the user's machine with SAM 2.1 (done, Windows); VISTA3D and nnInteractive in Research mode, not yet downloadable from Ruthos
 - Mesh export to STL (done); surface rendering in the 3D pane, decimation, and OBJ, PLY and 3MF
 
 ### Tier 4: the future
@@ -116,20 +125,20 @@ Ruthos is a Cargo workspace. Each crate has a single job and a clear boundary.
 
 | Crate | Job |
 |---|---|
-| `ruthos-core` | Data model (Study, Series, Image, Album), SQLite storage, import pipeline, file store, smart-album predicates, Horos database migration |
-| `ruthos-dicom` | Wraps [dicom-rs](https://github.com/Enet4/dicom-rs). Decoding to typed pixel buffers, rescale, geometry, default WL, CLUT and preset loaders |
-| `ruthos-net` | DICOM networking on the dicom-rs upper layer: listener, send, query/retrieve, echo |
+| `ruthos-core` | Data model (Study, Series, Image, Album), SQLite storage, settings, import pipeline, file store, smart-album predicates, reports, sharing, Horos database migration |
+| `ruthos-dicom` | Wraps [dicom-rs](https://github.com/Enet4/dicom-rs). Decoding to typed pixel buffers, rescale, geometry, default WL, CLUT and preset loaders, DICOMDIR, SEG and anatomical M-mode |
+| `ruthos-net` | DICOM networking on the dicom-rs upper layer: listener, send, query/retrieve, echo; and DICOMweb over HTTPS |
 | `ruthos-render` | `wgpu` pipelines: texture upload, WL/CLUT shader, ROI geometry, annotation text, and the volume ray marcher |
 | `ruthos-segment` | Segments: label maps, classical tools, surface meshes and export, and the optional AI tool (Cargo feature `ai`) |
 | `ruthos-session` | The client side of guided teaching sessions through a session relay |
 | `ruthos-ui` | The windows, one module per Horos window, built with `egui` |
-| `ruthos` | The application binary, settings, updates |
+| `ruthos` | The application binary |
 
 ### Technology choices
 
 - **Language:** Rust, stable toolchain, MSVC target on Windows.
 - **DICOM:** dicom-rs, with its own decoders for RLE and deflate, libjpeg-turbo for JPEG, CharLS for JPEG-LS and OpenJPEG for JPEG 2000 (rather than Grok, to stay clear of AGPL).
-- **Rendering:** `wgpu` over DirectX 12, with Vulkan as a fallback.
+- **Rendering:** `wgpu` over DirectX 12, with Vulkan and OpenGL as fallbacks, and Windows' software renderer as a last resort.
 - **UI:** `egui` with a custom theme and a small set of purpose-built widgets (toolbar, source list, outline table, thumbnail strip) that give the Horos look.
 - **Storage:** SQLite via `rusqlite`.
 - **Minimum platform:** Windows 10 version 1809 or later, 64-bit.
@@ -144,7 +153,7 @@ Ruthos is an independent project. It is not affiliated with or endorsed by the H
 
 Ruthos borrows from Horos under the terms of its licence: icons, colour lookup tables, volume-rendering presets, annotation defaults, window-level presets, and the shape of its database schema. Where Horos logic is translated into Rust, the source file is credited in a comment.
 
-### Uninstalling
+## Uninstalling
 
 Ruthos installs nothing. Quit it and delete the folder you unzipped. To remove the archive as well, delete `%LOCALAPPDATA%\Ruthos` (this deletes every imported study, so export what you need first), and delete `%APPDATA%\Ruthos` for the settings.
 
@@ -161,7 +170,7 @@ Team roles:
 
 ## Privacy
 
-Ruthos does not transmit any data to its developers or to third parties. It makes network connections only when the user configures them or asks for them: the DICOM listener, which is off by default and receives only what the user's own devices send it; DICOM connections the user initiates; a guided review server the user chooses to join; the optional AI model, fetched once on request; and Cisco's video encoder, fetched once from Cisco with the user's consent, the first time a movie is exported, which tells Cisco only what any download does.
+Ruthos does not transmit any data to its developers or to third parties. It makes network connections only when the user configures them or asks for them: the DICOM listener, which is off by default and receives only what the user's own devices send it; DICOM and DICOMweb connections the user initiates; a guided review server the user chooses to join; the optional AI model, fetched once on request; and Cisco's video encoder, fetched once from Cisco with the user's consent, the first time a movie is exported, which tells Cisco only what any download does.
 
 ## Licence
 
@@ -177,7 +186,7 @@ OpenH264 Video Codec provided by Cisco Systems, Inc. The encoder is not part of 
 
 You will need:
 
-1. The Rust toolchain via [rustup](https://rustup.rs). Stable channel, `x86_64-pc-windows-msvc` target.
+1. The Rust toolchain via [rustup](https://rustup.rs). Stable channel, 1.92 or later, `x86_64-pc-windows-msvc` target.
 2. Microsoft Visual C++ Build Tools (the "Desktop development with C++" workload). The MSVC compiler links Rust and builds the three C/C++ codecs below.
 3. [CMake](https://cmake.org/download/) on the `PATH` (or in the `CMAKE` environment variable). It builds the three C/C++ codecs: OpenJPEG (JPEG 2000), CharLS (JPEG-LS) and libjpeg-turbo (JPEG, including 12-bit).
 4. [NASM](https://www.nasm.us/) on the `PATH`, optional. Without it libjpeg-turbo builds without SIMD and decodes more slowly.
@@ -196,7 +205,7 @@ The binary is `target\release\ruthos.exe`. The database and imported files live 
 
 **macOS and Linux.** The code is cross-platform and continuous integration tests it on all three (`.github/workflows/ci.yml`), but Ruthos is built and used on Windows today. On macOS you need Rust, the Xcode command-line tools (`xcode-select --install`) and CMake (`brew install cmake`); on Linux, Rust, CMake, NASM and the GTK 3, xkbcommon, Wayland and X11 development packages. `cargo build --release` then works the same way. Data lives in `~/Library/Application Support/Ruthos` on macOS and under the XDG directories on Linux. See `docs/cross-platform.md` for what differs per platform and what still needs checking by hand on a Mac.
 
-Developer options, all environment variables: `RUTHOS_DATA_ROOT` (use another data folder), `RUTHOS_OPEN_STUDY`, `RUTHOS_OPEN_SERIES`, `RUTHOS_OPEN_IMAGE`, `RUTHOS_TILING` and `RUTHOS_SELECT_ROI` (open a study, series and tiling at startup with a stored measurement selected), `RUTHOS_LOUPE_AT=x,y` (show the loupe at an image point), `RUTHOS_BASIS_PANEL=1` (open the calibration basis panel), `RUTHOS_ZOOM=0.8` (scale the interface), `RUTHOS_SETTINGS=<file>` (use another settings file), `RUTHOS_OPEN_QUERY=<PACS index>` (open Query/Retrieve and search), `RUTHOS_QUERY_EXPAND=1` (show the first result's series), `RUTHOS_OPEN_PREFS` (open Preferences at a section), `RUTHOS_RENDERER=software` (force the CPU renderer), `WGPU_BACKEND` (dx12, metal, vulkan or gl) and `RUTHOS_DEBUG_PANIC=viewer` (exercise the error dialog).
+The main developer options, all environment variables: `RUTHOS_DATA_ROOT` (use another data folder), `RUTHOS_OPEN_STUDY`, `RUTHOS_OPEN_SERIES`, `RUTHOS_OPEN_IMAGE`, `RUTHOS_TILING` and `RUTHOS_SELECT_ROI` (open a study, series and tiling at startup with a stored measurement selected), `RUTHOS_LOUPE_AT=x,y` (show the loupe at an image point), `RUTHOS_BASIS_PANEL=1` (open the calibration basis panel), `RUTHOS_ZOOM=0.8` (scale the interface), `RUTHOS_SETTINGS=<file>` (use another settings file), `RUTHOS_OPEN_QUERY=<PACS index>` (open Query/Retrieve and search), `RUTHOS_QUERY_EXPAND=1` (show the first result's series), `RUTHOS_OPEN_PREFS` (open Preferences at a section), `RUTHOS_RENDERER=software` (force the CPU renderer), `WGPU_BACKEND` (dx12, metal, vulkan or gl) and `RUTHOS_DEBUG_PANIC=viewer` (exercise the error dialog).
 
 **Windows 11 Smart App Control.** If it is on, it will block the unsigned executables that every Rust build produces (build scripts, tests, the app). Developers need it off on their build machine. Released builds will be signed so end users can keep it on.
 
@@ -220,9 +229,9 @@ The project is at alpha, so the most useful contributions right now are:
 
 - Horos users describing the workflows they rely on, as issues
 - Sample DICOM studies that can be redistributed, especially veterinary CR, DR, CT and MRI
-- Review of the architecture above before it hardens into code
+- Trying it on real studies and reporting what breaks
 
-If you know Horos well, the `ruthos-ui` crate is organised by Horos window name (Browser, Viewer, ThumbnailsList, Query, Send, ROI, ROIManager, Preferences and so on), so you will find your way around.
+If you know Horos well, the `ruthos-ui` crate is organised by window (`browser.rs`, `viewer.rs`, `mpr.rs`, `query.rs`, `roi.rs`, `prefs.rs` and so on), so you will find your way around.
 
 ## Not for diagnostic use
 
