@@ -173,18 +173,26 @@ fn image_item(relation: &str, concept: Option<&Code>, r: &ImageRef) -> Obj {
 fn num(relation: &str, concept: &Code, value: f64, unit: &str, children: Vec<Obj>) -> Obj {
     let mut o = item(relation, "NUM", Some(concept));
     let mut measured = Obj::new_empty();
-    // A DS holds at most 16 characters.
-    let mut digits = format!("{value}");
-    if digits.len() > 16 {
-        digits = format!("{value:.6e}");
-    }
-    string(&mut measured, tags::NUMERIC_VALUE, VR::DS, &digits);
+    string(&mut measured, tags::NUMERIC_VALUE, VR::DS, &decimal(value));
     measured.put(sequence(
         tags::MEASUREMENT_UNITS_CODE_SEQUENCE,
         vec![code_item(&code(unit, "UCUM", unit))],
     ));
     o.put(sequence(tags::MEASURED_VALUE_SEQUENCE, vec![measured]));
     with_children(o, children)
+}
+
+/// A value as a plain decimal of at most 16 characters, as a DS holds,
+/// to six places; an exponent only for numbers too large or small for that.
+pub fn decimal(value: f64) -> String {
+    let plain = format!("{value:.6}");
+    let plain = plain.trim_end_matches('0').trim_end_matches('.');
+    let plain = if plain == "-0" { "0" } else { plain };
+    if plain.len() <= 16 && (value == 0.0 || plain.trim_start_matches(['-', '0', '.']).len() >= 2) {
+        plain.to_string()
+    } else {
+        format!("{value:.6e}")
+    }
 }
 
 fn outline_item(outline: &Outline, image: &ImageRef) -> Obj {
@@ -781,6 +789,16 @@ mod tests {
             std::fs::copy(&file, PathBuf::from(interop).join("ruthos-kos.dcm")).unwrap();
         }
         std::fs::remove_dir_all(folder).ok();
+    }
+
+    #[test]
+    fn values_are_plain_decimals() {
+        assert_eq!(decimal(4.988295000000001), "4.988295");
+        assert_eq!(decimal(50.856), "50.856");
+        assert_eq!(decimal(40.0), "40");
+        assert_eq!(decimal(-0.0000001), "-1.000000e-7");
+        assert_eq!(decimal(0.0), "0");
+        assert!(decimal(1.0e20).len() <= 16);
     }
 
     #[test]

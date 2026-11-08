@@ -109,6 +109,20 @@ fn from_outline(o: &Outline) -> (String, Vec<[f32; 2]>) {
     }
 }
 
+/// A measurement's name in words when it was not given one.
+fn tool_name(kind: &str) -> &str {
+    match kind {
+        "length" => "Length",
+        "openpolygon" => "Length of a path",
+        "angle" => "Angle",
+        "dynangle" => "Angle between two lines",
+        "cobb" => "Cobb angle",
+        "rect" | "oval" | "polygon" | "pencil" | "brush" => "Area",
+        "point" => "Point",
+        other => other,
+    }
+}
+
 /// The study as a measurement report, and its key images.
 pub fn build(db: &Database, library: &Library, study_id: i64) -> Result<(SrReport, Vec<ImageRef>)> {
     let images: HashMap<i64, ImageRow> = db.images_for_study(study_id)?.into_iter().map(|i| (i.id, i)).collect();
@@ -156,7 +170,7 @@ pub fn build(db: &Database, library: &Library, study_id: i64) -> Result<(SrRepor
         };
         let mut numbers: Vec<(String, Option<String>, f64, String)> = Vec::new();
         if let Some(v) = roi.value {
-            let label = roi.name.clone().unwrap_or_else(|| roi.kind.clone());
+            let label = roi.name.clone().unwrap_or_else(|| tool_name(&roi.kind).to_string());
             numbers.push((label, roi.def_key.clone(), v, roi.unit.clone()));
         }
         for v in &values {
