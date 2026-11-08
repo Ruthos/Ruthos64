@@ -535,7 +535,10 @@ pub fn prepare_cancellable(
     let study = db
         .study(request.study_id)?
         .ok_or_else(|| CoreError::Other("study not found".into()))?;
-    let series_list = db.series_for_study(study.id)?;
+    // Reports and key image documents stay behind: their text can name the
+    // patient, and they have no pixels to mask.
+    let mut series_list = db.series_for_study(study.id)?;
+    series_list.retain(|s| !crate::structured::is_document_modality(&s.modality));
     let mut images: Vec<(SeriesRow, ImageRow)> = Vec::new();
     for s in &series_list {
         for img in db.images_for_series(s.id)? {

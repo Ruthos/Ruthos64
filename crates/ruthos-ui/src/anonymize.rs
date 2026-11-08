@@ -103,6 +103,7 @@ impl AnonymizeState {
         for s in series_rows
             .into_iter()
             .filter(|s| s.modality != ruthos_core::seg::MODALITY)
+            .filter(|s| !ruthos_core::structured::is_document_modality(&s.modality))
         {
             let mut st = SeriesState {
                 class: teaching::classify_series(&shared.db, &shared.paths, &s),

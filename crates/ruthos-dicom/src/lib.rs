@@ -22,6 +22,7 @@ pub mod quirks;
 pub mod sc;
 pub mod scale;
 pub mod seg;
+pub mod sr;
 pub mod structure;
 pub mod vr_presets;
 

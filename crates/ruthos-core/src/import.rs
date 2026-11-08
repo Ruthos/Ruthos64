@@ -234,10 +234,11 @@ pub fn import_file(db: &Database, paths: &DataPaths, file: &Path, mode: ImportMo
         Err(e) => return Err(e.into()),
     };
 
-    // Images only. Structured reports, presentation states and the like are
-    // skipped in this version; they are not "not DICOM", so they count as
-    // errors the user can see.
-    if meta.rows == 0 || meta.columns == 0 {
+    // Images, and the measurement reports and key image documents that go with
+    // them. Presentation states and the like are skipped in this version; they
+    // are not "not DICOM", so they count as errors the user can see.
+    let document = crate::structured::is_document_class(&meta.sop_class_uid);
+    if !document && (meta.rows == 0 || meta.columns == 0) {
         return Err(CoreError::Other(format!(
             "{} has no image pixel data (SOP class {})",
             file.display(),

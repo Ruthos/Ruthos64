@@ -24,6 +24,7 @@ pub mod report;
 pub mod routing;
 pub mod seg;
 pub mod settings;
+pub mod structured;
 pub mod teaching;
 pub mod thumbs;
 pub mod volume;

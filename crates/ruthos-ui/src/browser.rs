@@ -453,6 +453,19 @@ impl BrowserState {
                             .series_revision
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
+                    // Reports and key image documents that arrived, or whose
+                    // images now have, become measurements and key images.
+                    let library = shared.library.lock().clone();
+                    let mut placed = ruthos_core::structured::Applied::default();
+                    for id in &summary.touched_study_ids {
+                        match ruthos_core::structured::apply(&shared.db, &shared.paths, &library, *id) {
+                            Ok(a) => {
+                                placed.measurements += a.measurements;
+                                placed.key_images += a.key_images;
+                            }
+                            Err(e) => tracing::warn!("a structured report could not be read: {e}"),
+                        }
+                    }
                     for id in &summary.touched_study_ids {
                         self.series_cache.remove(id);
                         if let Ok(series) = shared.db.series_for_study(*id) {
@@ -468,6 +481,12 @@ impl BrowserState {
                             self.open_requests.push((*id, None));
                             self.open_next_import = false;
                         }
+                    }
+                    if placed.measurements + placed.key_images > 0 {
+                        self.set_status(format!(
+                            "From structured reports: {} measurements and {} key images",
+                            placed.measurements, placed.key_images
+                        ));
                     }
                     self.last_import = Some((summary, Instant::now()));
                     self.dirty = true;

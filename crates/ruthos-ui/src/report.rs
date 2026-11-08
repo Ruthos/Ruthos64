@@ -333,6 +333,18 @@ impl ReportState {
                     {
                         self.export_pdf(shared);
                     }
+                    if ToolbarButton::new(Bitmap::Export, "Save as DICOM")
+                        .width(80.0)
+                        .tooltip(
+                            "Save the measurements, calculations, findings and conclusion into the study as a \
+                             DICOM structured report, and the key images as a key object document, so they go \
+                             with the study to a PACS or another viewer",
+                        )
+                        .show(ui)
+                        .clicked()
+                    {
+                        self.save_dicom(shared);
+                    }
                     toolbar_separator(ui);
                     if ToolbarButton::new(Bitmap::Viewer, "2D Viewer")
                         .tooltip("Open this study in the viewer")
@@ -602,6 +614,37 @@ impl ReportState {
             rows.push(("Referring".into(), s.referring_physician.clone()));
         }
         rows
+    }
+
+    /// The report as DICOM documents in the study.
+    fn save_dicom(&mut self, shared: &Shared) {
+        if self.is_dirty() {
+            self.save(shared);
+        }
+        let library = shared.library.lock().clone();
+        match ruthos_core::structured::save(&shared.db, &shared.paths, &library, self.study.id) {
+            Ok(saved) => {
+                let mut parts = Vec::new();
+                if let Some(n) = saved.measurements {
+                    parts.push(format!("a structured report of {n} values"));
+                }
+                if let Some(n) = saved.key_images {
+                    parts.push(format!("{n} key image{}", if n == 1 { "" } else { "s" }));
+                }
+                self.set_status(if parts.is_empty() {
+                    "Nothing to save: no measurements, text or key images yet".to_string()
+                } else {
+                    format!("Saved {} into the study", parts.join(" and "))
+                });
+                let _ = shared
+                    .import_tx
+                    .send(ruthos_core::ImportEvent::Finished(ruthos_core::import::ImportSummary {
+                        touched_study_ids: vec![self.study.id],
+                        ..Default::default()
+                    }));
+            }
+            Err(e) => self.set_status(format!("Not saved: {e}")),
+        }
     }
 
     fn export_pdf(&mut self, shared: &Shared) {

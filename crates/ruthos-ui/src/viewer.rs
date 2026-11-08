@@ -850,7 +850,9 @@ impl ViewerState {
     pub fn open(shared: &Shared, study: StudyRow, series_id: Option<i64>) -> anyhow::Result<Self> {
         // A SEG is shown over its images in MPR, not as images of its own.
         let mut series = shared.db.series_for_study(study.id)?;
-        series.retain(|s| s.modality != ruthos_core::seg::MODALITY);
+        series.retain(|s| {
+            s.modality != ruthos_core::seg::MODALITY && !ruthos_core::structured::is_document_modality(&s.modality)
+        });
         if series.is_empty() {
             anyhow::bail!("study has no series");
         }
@@ -3660,7 +3662,9 @@ impl ViewerState {
         let Ok(mut series) = shared.db.series_for_study(self.study.id) else {
             return;
         };
-        series.retain(|s| s.modality != ruthos_core::seg::MODALITY);
+        series.retain(|s| {
+            s.modality != ruthos_core::seg::MODALITY && !ruthos_core::structured::is_document_modality(&s.modality)
+        });
         let moved: Option<Vec<usize>> = self
             .panes
             .iter()

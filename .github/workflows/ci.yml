@@ -97,9 +97,13 @@ jobs:
         run: cargo test -p ruthos-dicom --test amm a_saved_strip
         env:
           RUTHOS_SEG_INTEROP: ${{ runner.temp }}/seg
+      - name: Ruthos writes a measurement report and a key image document
+        run: cargo test -p ruthos-dicom --lib sr::tests
+        env:
+          RUTHOS_SEG_INTEROP: ${{ runner.temp }}/seg
       - name: dciodvfy finds no errors in them
         run: |
-          for f in ruthos-seg.dcm ruthos-amm.dcm; do
+          for f in ruthos-seg.dcm ruthos-amm.dcm ruthos-sr.dcm ruthos-kos.dcm; do
             dciodvfy "$RUNNER_TEMP/seg/$f" 2>&1 | tee "$RUNNER_TEMP/dciodvfy-$f.txt"
             ! grep -q '^Error' "$RUNNER_TEMP/dciodvfy-$f.txt"
           done

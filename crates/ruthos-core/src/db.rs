@@ -1136,6 +1136,40 @@ impl Database {
         Ok(out)
     }
 
+    /// Every measurement of a study, image by image.
+    pub fn rois_for_study(&self, study_id: i64) -> Result<Vec<RoiRecord>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.image_id, r.frame, r.kind, r.points, r.name, r.value, r.unit, r.basis, r.def_key
+             FROM roi r JOIN image i ON i.id = r.image_id JOIN series s ON s.id = i.series_id
+             WHERE s.study_id = ?1 ORDER BY s.series_number, s.id, i.instance_number, r.frame, r.id",
+        )?;
+        let rows = stmt.query_map(params![study_id], roi_from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Whether a structured report or key image document has been turned
+    /// into measurements and key images, or was written here.
+    pub fn document_applied(&self, sop_instance_uid: &str) -> Result<bool> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                "SELECT 1 FROM applied_document WHERE sop_instance_uid = ?1",
+                params![sop_instance_uid],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    pub fn mark_document_applied(&self, sop_instance_uid: &str) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT OR IGNORE INTO applied_document (sop_instance_uid, date_applied) VALUES (?1, ?2)",
+            params![sop_instance_uid, now_unix()],
+        )?;
+        Ok(())
+    }
+
     /// Keep what was cut in a series's 3D view, or forget it when nothing is.
     pub fn save_cuts(&self, series_id: i64, cuts: &crate::cuts::SavedCuts) -> Result<()> {
         let conn = self.conn.lock();
@@ -1941,6 +1975,10 @@ fn migrate(conn: &Connection) -> Result<()> {
             PRIMARY KEY (album_id, study_id)
          );
 
+         CREATE TABLE IF NOT EXISTS applied_document (
+            sop_instance_uid TEXT PRIMARY KEY,
+            date_applied INTEGER NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS cuts (
             series_id INTEGER PRIMARY KEY REFERENCES series(id) ON DELETE CASCADE,
             dims TEXT NOT NULL,
@@ -2443,6 +2481,106 @@ mod tests {
 
     /// An archive written on Windows before 0.1.0-alpha holds backslashes;
     /// opening it rewrites them so the same file resolves on a Mac.
+    /// Save a study's measurements as a report, then bring it into a second
+    /// archive, as a PACS or a colleague would.
+    #[test]
+    fn a_report_carries_the_measurements_to_another_archive() {
+        let root = std::env::temp_dir().join(format!("ruthos-sr-db-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let library = crate::measure::builtin();
+        let sample = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/pydicom/CT_small.dcm");
+
+        let here = DataPaths::new(root.join("here"));
+        let db = Database::open_in_memory(&here).unwrap();
+        let crate::import::FileOutcome::Imported { image_id, study_id, .. } =
+            crate::import::import_file(&db, &here, &sample, crate::import::ImportMode::Copy).unwrap()
+        else {
+            panic!()
+        };
+        let mut recs = vec![
+            RoiRecord {
+                id: 0,
+                image_id,
+                frame: 0,
+                kind: "length".into(),
+                points: vec![[10.0, 10.0], [10.0, 50.0]],
+                name: Some("LVIDd".into()),
+                value: Some(40.0),
+                unit: "mm".into(),
+                basis: Some("pixel-spacing".into()),
+                def_key: Some("lv.lvidd".into()),
+            },
+            RoiRecord {
+                id: 0,
+                image_id,
+                frame: 0,
+                kind: "length".into(),
+                points: vec![[20.0, 10.0], [20.0, 40.0]],
+                name: Some("LVIDs".into()),
+                value: Some(30.0),
+                unit: "mm".into(),
+                basis: Some("pixel-spacing".into()),
+                def_key: Some("lv.lvids".into()),
+            },
+        ];
+        db.sync_rois(image_id, 0, &mut recs).unwrap();
+        db.set_key_image(image_id, true).unwrap();
+        db.set_report(study_id, "Walls normal.", "No change.").unwrap();
+
+        let saved = crate::structured::save(&db, &here, &library, study_id).unwrap();
+        assert!(saved.measurements.unwrap() >= 3, "two lines and a calculation");
+        assert_eq!(saved.key_images, Some(1));
+        // Ruthos's own documents are not applied again here.
+        let again = crate::structured::apply(&db, &here, &library, study_id).unwrap();
+        assert_eq!(again, crate::structured::Applied::default());
+        assert_eq!(db.rois(image_id, 0).unwrap().len(), 2);
+
+        // Another archive: the report arrives before the image, then the image.
+        let there = DataPaths::new(root.join("there"));
+        let other = Database::open_in_memory(&there).unwrap();
+        let docs: Vec<_> = db
+            .images_for_study(study_id)
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.id != image_id)
+            .collect();
+        assert_eq!(docs.len(), 2, "a report and a key image document");
+        let mut other_study = 0;
+        for d in &docs {
+            let crate::import::FileOutcome::Imported { study_id, .. } =
+                crate::import::import_file(&other, &there, &here.resolve(&d.path), crate::import::ImportMode::Copy)
+                    .unwrap()
+            else {
+                panic!()
+            };
+            other_study = study_id;
+        }
+        let waiting = crate::structured::apply(&other, &there, &library, other_study).unwrap();
+        assert_eq!(
+            waiting,
+            crate::structured::Applied::default(),
+            "nothing to put them on yet"
+        );
+        let crate::import::FileOutcome::Imported { image_id: arrived, .. } =
+            crate::import::import_file(&other, &there, &sample, crate::import::ImportMode::Copy).unwrap()
+        else {
+            panic!()
+        };
+        let applied = crate::structured::apply(&other, &there, &library, other_study).unwrap();
+        assert_eq!(applied.measurements, 2);
+        assert_eq!(applied.key_images, 1);
+        let back = other.rois(arrived, 0).unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].def_key.as_deref(), Some("lv.lvidd"));
+        assert_eq!(back[0].points, vec![[10.0, 10.0], [10.0, 50.0]]);
+        assert_eq!(back[0].basis.as_deref(), Some("pixel-spacing"));
+        // Once only.
+        let twice = crate::structured::apply(&other, &there, &library, other_study).unwrap();
+        assert_eq!(twice, crate::structured::Applied::default());
+        assert_eq!(other.rois(arrived, 0).unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn cuts_are_kept_with_the_series_and_go_with_it() {
         use crate::cuts::{SavedClip, SavedCuts};
