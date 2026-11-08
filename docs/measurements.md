@@ -28,6 +28,29 @@ and a length that crosses two regions is refused. The Measurements menu's
 "Show calibration basis" panel lists the attributes read and the basis
 chosen for the current image.
 
+## Saving into the study as DICOM
+
+**Save as DICOM** in the report window puts the study's measurements into the study
+itself, so they go with it when it is sent to a PACS, shared or opened in another
+viewer:
+
+- A **structured report** (DICOM Comprehensive SR, template TID 1500 Imaging
+  Measurement Report) holds every measurement with a value, each value worked out
+  from one, every library calculation, and the findings and conclusion. Each
+  measurement names the image and frame it was taken on and, where it has one, its
+  outline as spatial coordinates, so other software can draw it. Values carry UCUM
+  units and the definition's code (LOINC where it has one, otherwise Ruthos's own).
+  Values in pixels are left out, as they are not a true size.
+- A **key object selection** document (TID 2010) lists the key images.
+
+Each save adds a new report; the earlier ones stay. Reports and key image documents
+that arrive with a study, from a PACS, a shared folder or another viewer, become
+measurements and key images: once all the images they refer to are in the archive,
+and once only. Ruthos's own report carries each measurement exactly as drawn; from
+other software, a measurement with an outline comes back as a line, point, polygon
+or ellipse with its value, and one without an outline is not placed. Teaching copies
+leave reports and key image documents out, as their text can name the patient.
+
 ## Exporting as data
 
 Right-click a study in the database window and choose **Export measurements** to

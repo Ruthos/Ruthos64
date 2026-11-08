@@ -1,4 +1,4 @@
-# Ruthos 0.1.13-alpha
+# Ruthos 0.1.14-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
@@ -11,16 +11,21 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - **The archive format may change before 1.0.** Keep your original files.
 - **Research-mode models carry their own licences.** nnInteractive is non-commercial (CC BY-NC-SA 4.0) and VISTA3D is for research and non-clinical use only (NVIDIA's model card and the NVIDIA Open Model License). Each shows its terms before first use, and whether your use is allowed is your responsibility.
 
-## New in 0.1.13-alpha
+## New in 0.1.14-alpha
+
+- **Measurements travel with the study as DICOM.** Save as DICOM in the report window writes the measurements, their derived values, the calculations, the findings and the conclusion into the study as a structured report (TID 1500), and the key images as a key object selection document, so they go with it to a PACS or another viewer. Reports and key image documents that arrive with a study become measurements and key images once their images are in the archive. Other software is not yet confirmed to read Ruthos's reports. See `docs/measurements.md`.
+- **Measurements as data.** Right-click a study to export its measurements, derived values, calculations and report as CSV or JSON, for one study or the whole list, with or without the patient's identity.
+- **Horos's 3D presets and an editor.** Horos's 29 volume rendering presets, read as Horos reads them, and an editor for colours and opacity over a histogram of the volume, with presets of your own. Cuts in 3D are now kept with the study.
+- **Surfaces and 3D printing.** Segments can be shown as smooth surfaces in the 3D pane. Meshes export as STL, OBJ, PLY or 3MF, with fewer triangles if you like, staying closed for printing. See `docs/segmentation.md`.
+- **Worklist and storage commitment.** Import Pictures can fill in the patient and accession from a Modality Worklist, and after sending, Ruthos can ask a PACS to confirm it holds every image. Neither has been tried against a real worklist server or PACS yet. See `docs/pacs.md`.
+- **The study list sorts by any heading,** and again to reverse it. A still on the echo timeline is one image, not a stack.
+
+## Previously, in 0.1.13-alpha
 
 - **Echo timeline.** Stills and loops of an echo are numbered in one sequence, but each loop is its own series, so the stills used to stack apart from them. The viewer's drawer now offers Timeline, which lists every image in the order it was stored, with its time and any long pause, and Grouped, the old view. Page Up and Page Down move along the timeline. Times are read on import, or the first time an older study opens. Files and series do not change. See `docs/measurements.md`.
 - **Smooth in anatomical M-mode.** A new option, on by default, blends between frames on screen and in a saved strip, and the saved file records it. It adds no readings: untick it to see and save each frame as a block.
 - **A saved strip appears straight away.** Open viewers now show new series as soon as an import finishes, so a study arriving over the network appears too.
 - **A playing loop no longer holds up the app.** On Windows a viewer playing a loop kept the database window from updating at all, and a viewer could not close until the loop stopped. Both are fixed. Playback pauses very briefly about every 0.7 seconds to let the main window paint.
-
-## Previously, in 0.1.12-alpha
-
-- **Anatomical M-mode.** On a 2D ultrasound loop, draw a straight line at any angle, or a curve through several points, and a time and depth strip follows live as you move it. Click the strip to move the loop to that frame. Save to study makes an M-mode image that the caliper and LV dimension tools measure. A strip has only the frames of its loop, so it suits dimensions better than fine timing: each frame shows as a block, every strip and report states the rate it was derived at, and below 30 frames a second it warns you. See `docs/measurements.md`.
 
 ## What works
 
@@ -37,14 +42,13 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 
 ## Not yet
 
-- Query by worklist (Modality Worklist) and storage commitment.
 - Reading Horos report files and Horos's saved measurements (ROIs).
-- Saving cuts with the study, surface rendering in the 3D pane, and Horos's volume rendering opacity presets.
+- Clipping surfaces with the live box in 3D; a cut made with it does apply.
 - Downloading VISTA3D and nnInteractive from within Ruthos.
 - Opening saved segments in other viewers, which has not been confirmed.
 - macOS and Linux for the AI tool, which runs on Windows only for now.
 - An installer and a Microsoft Store listing. This build is a zip; see below for signing.
-- dcm4chee-arc and cloud DICOMweb services, IHE AIW-I and UPS-RS, and surface rendering.
+- dcm4chee-arc and cloud DICOMweb services, IHE AIW-I and UPS-RS.
 
 ## Running
 
@@ -61,7 +65,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.13-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.14-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed unless the release page says so: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.

@@ -4,7 +4,7 @@
 
 Ruthos is a community project to bring the Horos / OsiriX experience to Windows: the same database window, the same 2D viewer, the same tools, the same corner annotations, built as a single native binary on a modern GPU stack. It is not a port of Horos. Horos is Objective-C and Cocoa to the bone, so Ruthos re-implements its feature set and user interface on top of Rust libraries.
 
-> **Status: alpha.** It works end to end on real studies and is rough in places. Tier 1 of the [roadmap](#roadmap), the complete 2D viewer, is done: a patient archive that imports folders, files, pictures, watch folders and whole Horos databases; a DICOM listener, PACS query/retrieve, send and automatic routing, with worklist and storage commitment; a Horos-style database window; a GPU viewer with the Horos measurement tools, calibrated from DICOM and ultrasound regions; reports to PDF, and measurements as CSV or JSON; anonymised teaching copies; and export to DICOM, PNG, JPEG and MP4. So is tier 2: MPR, GPU volume rendering with Horos's presets and live cuts kept with the study, segmentation with surfaces and 3D printing formats, an optional AI tool, DICOMweb, sharing images with an owner or referring vet, and for echo, anatomical M-mode and a timeline of stills and loops. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
+> **Status: alpha.** It works end to end on real studies and is rough in places. Tier 1 of the [roadmap](#roadmap), the complete 2D viewer, is done: a patient archive that imports folders, files, pictures, watch folders and whole Horos databases; a DICOM listener, PACS query/retrieve, send and automatic routing, with worklist and storage commitment; a Horos-style database window; a GPU viewer with the Horos measurement tools, calibrated from DICOM and ultrasound regions; reports to PDF and as DICOM structured reports, and measurements as CSV or JSON; anonymised teaching copies; and export to DICOM, PNG, JPEG and MP4. So is tier 2: MPR, GPU volume rendering with Horos's presets and live cuts kept with the study, segmentation with surfaces and 3D printing formats, an optional AI tool, DICOMweb, sharing images with an owner or referring vet, and for echo, anatomical M-mode and a timeline of stills and loops. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for what the current build does and does not do, and [CONTRIBUTING.md](CONTRIBUTING.md) if you want to help.
 
 ![The database window, with patient names and IDs pixelated](site/img/database-echo.jpg)
 
@@ -90,6 +90,7 @@ Tiers 1 and 2 are what Ruthos does today. Tiers 3 and 4 are what it does not do 
 - Pixel value readout, histograms and line plots
 - DICOM listener (C-STORE SCP), send (C-STORE SCU), query/retrieve (C-FIND, C-GET, C-MOVE), echo and automatic routing, Modality Worklist for pictures, and storage commitment after sending (see `docs/pacs.md`)
 - Reports to PDF with named measurements, calculations and key images
+- Measurements, calculations and findings saved into the study as DICOM structured reports (TID 1500) and key images as key object selection documents, and read back from other software, so they travel with the study
 - Measurements, calculations and reports exported as CSV or JSON, with or without identity, for research, audit and teaching (see `docs/measurements.md`)
 - Export to DICOM, JPEG, PNG and MP4
 - Anonymisation for teaching: allowlist header profile, derived UIDs, shifted dates, ultrasound-region and template pixel masking with review, named teaching cases, sidecar for measurements, independent verification pass (see `docs/anonymiser.md`)
@@ -113,7 +114,6 @@ Tiers 1 and 2 are what Ruthos does today. Tiers 3 and 4 are what it does not do 
 
 - Curved MPR; reference lines and 3D position across series in the 2D viewer
 - Scrolling linked across series, and settings propagated between them
-- Measurements, calculations and findings saved as DICOM Structured Reports (measurement reports, TID 1500) and read back in, so they travel with the study to a PACS and other viewers; key object selection documents for key images
 - Reading Horos report files and saved measurements (ROIs)
 - DICOMweb against dcm4chee-arc and cloud services; IHE AIW-I and UPS-RS
 - VISTA3D and nnInteractive downloadable from within Ruthos; the AI tool on macOS and Linux
