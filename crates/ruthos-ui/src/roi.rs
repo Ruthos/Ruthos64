@@ -217,6 +217,22 @@ impl BrushMask {
 }
 
 /// Where two lines cross, if they are not parallel.
+/// Where a two-line angle's value goes: half way between the middles of its
+/// lines, moved inside `view` if it falls outside it.
+pub fn two_line_label_at(pts: &[Pos2], view: Rect) -> Pos2 {
+    let middle = |a: Pos2, b: Pos2| a + (b - a) / 2.0;
+    let at = middle(middle(pts[0], pts[1]), middle(pts[2], pts[3]));
+    // Room for a label such as "Cobb 23.4°".
+    let inside = view.shrink2(Vec2::new(48.0, 12.0));
+    if inside.width() <= 0.0 || inside.height() <= 0.0 {
+        return at;
+    }
+    Pos2::new(
+        at.x.clamp(inside.left(), inside.right()),
+        at.y.clamp(inside.top(), inside.bottom()),
+    )
+}
+
 pub fn line_intersection(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<Vec2> {
     let r = b - a;
     let s = d - c;
@@ -1494,7 +1510,6 @@ impl Roi {
                     painter.circle_filled(*p, 2.5, color);
                 }
                 let thin = Stroke::new(1.0, color.gamma_multiply(0.7));
-                let mut anchor = Pos2::new((pts[0].x + pts[3].x) / 2.0, (pts[0].y + pts[3].y) / 2.0);
                 if *cobb {
                     // Perpendiculars from the middle of each line, to where
                     // they meet: the classic Cobb construction.
@@ -1512,7 +1527,6 @@ impl Roi {
                     if let Some(m) = meet {
                         painter.line_segment([m1, m], thin);
                         painter.line_segment([m2, m], thin);
-                        anchor = m;
                     }
                 } else {
                     // Both lines extended to where they cross.
@@ -1524,14 +1538,16 @@ impl Roi {
                                 let near = if (a - x).length() < (b - x).length() { a } else { b };
                                 dashed(painter, near, x, thin);
                             }
-                            anchor = x;
                         }
                     }
                 }
+                // Between the middles of the two lines, where the crossing may
+                // be far off the image, and kept on screen.
+                let anchor = two_line_label_at(&pts, painter.clip_rect());
                 let r = shadow_text(
                     painter,
-                    anchor + Vec2::new(10.0, 10.0),
-                    Align2::LEFT_TOP,
+                    anchor,
+                    Align2::CENTER_CENTER,
                     &self.label(frame),
                     label_font,
                     color,
@@ -1940,6 +1956,19 @@ mod tests {
         assert!((two_line_angle(&p, false, None) - 150.0).abs() < 1e-3);
         assert!((two_line_angle(&p, true, None) - 30.0).abs() < 1e-3);
         let x = line_intersection(p[0], p[1], Vec2::new(5.0, -5.0), Vec2::new(5.0, 5.0)).unwrap();
+        // Nearly parallel lines meet far away; the value stays between them.
+        let pts = [
+            Pos2::new(100.0, 100.0),
+            Pos2::new(300.0, 102.0),
+            Pos2::new(100.0, 200.0),
+            Pos2::new(300.0, 201.0),
+        ];
+        let view = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+        let at = two_line_label_at(&pts, view);
+        assert!((at.x - 200.0).abs() < 1e-3 && (at.y - 150.75).abs() < 1e-3, "{at:?}");
+        // Lines off the side of the view: the value comes back inside it.
+        let off: Vec<Pos2> = pts.iter().map(|p| Pos2::new(p.x + 900.0, p.y)).collect();
+        assert!(view.contains(two_line_label_at(&off, view)));
         assert!((x - Vec2::new(5.0, 0.0)).length() < 1e-4);
         assert!(line_intersection(p[0], p[1], Vec2::new(0.0, 1.0), Vec2::new(10.0, 1.0)).is_none());
     }
