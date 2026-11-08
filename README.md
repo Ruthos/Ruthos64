@@ -40,7 +40,7 @@ The annotation layout follows the Horos defaults:
 | Bottom right | MRI timing (TE/TR), field strength, acquisition date |
 | Edge midpoints | Orientation letters |
 
-**Tool palette.** The 2D tools from Horos: window/level, zoom, pan, rotate, caliper (length, time, velocity), LV dimensions, angle, Cobb angle, angle between two lines, rectangle, ellipse, open and closed polygon, pencil, point, text, arrow, brush ROI and repulsor; selecting, moving and editing any measurement by its handles.
+**Tool palette.** The 2D tools from Horos: window/level, zoom, pan, rotate, caliper (length, time, velocity), LV dimensions, angle, Cobb angle, angle between two lines, rectangle, ellipse, open and closed polygon, pencil, point, text, arrow, brush ROI and repulsor, which pushes a drawn outline in or out to follow an edge; selecting, moving and editing any measurement by its handles. An angle between two lines shows its value between the lines, so it stays on screen when they cross far away.
 
 Colour lookup tables are read directly from the Horos definition files, so "Hot Iron", "Jet" and the rest look the same. Ruthos adds five CT colour maps tied to Hounsfield values, whose thresholds are human ones for now.
 
