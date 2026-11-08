@@ -1,0 +1,3 @@
+[guided-review]
+server = h://each
+allowed_servers = https:.org, https:/A, https://b.ele

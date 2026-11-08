@@ -1,0 +1,3 @@
+[guided-review]
+ser=h
+allowed_servers =g, http:s#:-, g, http:s#:-

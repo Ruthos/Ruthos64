@@ -1,0 +1,1 @@
+{"ruthos_profile":1,"issuer":{"server":"https://relarg/teach","name":"n","by":"b"},"issued":"20209::00Z","expires":"2027-07-31T23:59:59Z","server":"https://rach","session":{"code":"482913"},"cases":["EQ-014"],"sig":{"alg":"Ed25519","kid":"k","value":"AAAAAAAAAAAAAA="}}

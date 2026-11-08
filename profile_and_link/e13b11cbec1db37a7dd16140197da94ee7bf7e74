@@ -1,0 +1,5 @@
+[guided-review]
+server =geach
+allowed_servers =g
+[g]
+

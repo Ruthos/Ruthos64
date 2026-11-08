@@ -1,0 +1,2 @@
+[guided-review]
+allowed_servers = ha, file://a|,ergs
