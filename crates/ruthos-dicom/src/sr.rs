@@ -295,9 +295,10 @@ fn document(
             obj.put(element.clone());
         }
     }
+    add_required_empty(&mut obj);
+    // Image-only attributes a document does not have.
     obj.remove_element(tags::FRAME_OF_REFERENCE_UID);
     obj.remove_element(tags::POSITION_REFERENCE_INDICATOR);
-    add_required_empty(&mut obj);
     let now = chrono::Local::now();
     let (date, time) = (now.format("%Y%m%d").to_string(), now.format("%H%M%S").to_string());
     let sop = new_uid();
@@ -345,6 +346,23 @@ pub fn write_sr(template: &Path, report: &SrReport, folder: &Path) -> Result<Pat
         .unwrap_or_default();
     string(&mut obj, tags::COMPLETION_FLAG, VR::CS, "COMPLETE");
     string(&mut obj, tags::VERIFICATION_FLAG, VR::CS, "UNVERIFIED");
+    obj.put(sequence(tags::PERFORMED_PROCEDURE_CODE_SEQUENCE, Vec::new()));
+    // Ruthos's own codes, declared as a private coding scheme.
+    let mut scheme = Obj::new_empty();
+    string(&mut scheme, tags::CODING_SCHEME_DESIGNATOR, VR::SH, SCHEME);
+    string(
+        &mut scheme,
+        tags::CODING_SCHEME_NAME,
+        VR::ST,
+        "Ruthos measurement definitions",
+    );
+    string(
+        &mut scheme,
+        tags::CODING_SCHEME_RESPONSIBLE_ORGANIZATION,
+        VR::ST,
+        "Ruthos project",
+    );
+    obj.put(sequence(tags::CODING_SCHEME_IDENTIFICATION_SEQUENCE, vec![scheme]));
     let images: Vec<&ImageRef> = report.measurements.iter().filter_map(|m| m.image.as_ref()).collect();
     if let Some(e) = evidence(&study_uid, &images) {
         obj.put(e);
@@ -661,9 +679,14 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/pydicom/CT_small.dcm")
     }
 
+    /// The second is a frame of a loop: only a multi-frame image names a frame.
     fn image(n: u32) -> ImageRef {
         ImageRef {
-            sop_class: uids::CT_IMAGE_STORAGE.into(),
+            sop_class: if n == 2 {
+                uids::ULTRASOUND_MULTI_FRAME_IMAGE_STORAGE.into()
+            } else {
+                uids::CT_IMAGE_STORAGE.into()
+            },
             sop_instance: format!("1.2.826.0.1.3680043.10.1465.{n}"),
             series_uid: "1.2.826.0.1.3680043.10.1465.500".into(),
             frame: if n == 2 { Some(3) } else { None },
@@ -743,7 +766,11 @@ mod tests {
     #[test]
     fn key_images_come_back() {
         let folder = std::env::temp_dir().join(format!("ruthos-kos-{}", std::process::id()));
-        let file = write_kos(&sample(), &[image(1), image(2)], &folder).unwrap();
+        let whole = |n| ImageRef {
+            frame: None,
+            ..image(n)
+        };
+        let file = write_kos(&sample(), &[whole(1), whole(2)], &folder).unwrap();
         assert_eq!(
             read_kos(&file).unwrap(),
             vec![image(1).sop_instance, image(2).sop_instance]
