@@ -597,6 +597,8 @@ pub struct ViewerState {
     /// The "assign measurement" popup, when open.
     assign: Option<AssignPopup>,
     drag_draft: Option<(Vec2, Vec2)>,
+    /// The axis a caliper being drawn on an M-mode strip keeps to.
+    drag_lock: crate::mcaliper::AxisLock,
     angle_draft: Option<AngleDraft>,
     mmode_draft: Option<MmodeDraft>,
     /// A polygon being clicked out, and where the next point would go.
@@ -770,6 +772,8 @@ struct HandleDrag {
     original: RoiKind,
     /// Sub-pixel position carried while Shift scales the movement.
     fine: Option<Vec2>,
+    /// A line's end moved on an M-mode strip keeps to its axis.
+    lock: Option<crate::mcaliper::AxisLock>,
 }
 
 /// A whole measurement being dragged by its outline.
@@ -908,6 +912,7 @@ impl ViewerState {
             label_hits: Vec::new(),
             assign: None,
             drag_draft: None,
+            drag_lock: Default::default(),
             angle_draft: None,
             mmode_draft: None,
             polygon_draft: None,
@@ -2507,6 +2512,7 @@ impl ViewerState {
                                 handle: h,
                                 original: roi.kind.clone(),
                                 fine: None,
+                                lock: None,
                             });
                             self.selected_roi = Some(sel);
                             self.active_handle = h;
@@ -2540,6 +2546,8 @@ impl ViewerState {
             }
         }
         let escape = ui.input(|i| i.key_pressed(Key::Escape));
+        let drag_frame = self.handle_drag.as_ref().and_then(|d| self.frames.get(&d.key).cloned());
+        let free = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
         if let Some(drag) = &mut self.handle_drag {
             if escape {
                 if let Some(roi) = self.rois.get_mut(&drag.key).and_then(|l| l.get_mut(drag.index)) {
@@ -2567,6 +2575,18 @@ impl ViewerState {
                     } else {
                         drag.fine = None;
                         t.screen_to_image(p)
+                    };
+                    // One end of a caliper on an M-mode strip keeps the line
+                    // to its axis, as when it was drawn.
+                    let target = match (&drag.original, drag_frame.as_deref()) {
+                        (RoiKind::Length { a, b }, Some(f))
+                            if drag.handle < 2 && crate::mcaliper::mmode_region(f, *a).is_some() =>
+                        {
+                            let anchor = if drag.handle == 0 { *b } else { *a };
+                            let lock = drag.lock.get_or_insert(crate::mcaliper::AxisLock::of_line(*a, *b));
+                            crate::mcaliper::hold(lock, anchor, target, t.state.zoom, free)
+                        }
+                        _ => target,
                     };
                     if let Some(roi) = self.rois.get_mut(&drag.key).and_then(|l| l.get_mut(drag.index)) {
                         roi.set_handle(drag.handle, target);
@@ -5450,6 +5470,25 @@ impl ViewerState {
                 if let Some(kind) = draft_kind(self.tool, a, b) {
                     Roi::new(kind).draw(&painter, &transform, &frame, theme::ROI_DRAFT, false);
                 }
+                if self.tool == Tool::Length {
+                    crate::mcaliper::draw_guides(&painter, &transform, &frame, a, b, theme::ROI_DRAFT);
+                }
+            } else if let Some(RoiKind::Length { a, b }) = self
+                .selected_roi
+                .and_then(|i| self.rois.get(&key).and_then(|l| l.get(i)))
+                .map(|r| &r.kind)
+                .filter(|_| self.show_rois)
+            {
+                crate::mcaliper::draw_guides(&painter, &transform, &frame, *a, *b, theme::ROI_DRAFT);
+            }
+            if self.tool == Tool::Length && self.drag_draft.is_none() && self.handle_drag.is_none() {
+                if let Some(h) = self.tool_hover.filter(|h| transform.rect.contains(*h)) {
+                    let at = transform.screen_to_image(h);
+                    if crate::mcaliper::mmode_region(&frame, at).is_some() {
+                        crate::mcaliper::draw_crosshairs(&painter, &transform, &frame, at, theme::ROI_DRAFT);
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                    }
+                }
             }
             if let Some(d) = &self.angle_draft {
                 let roi = Roi::new(RoiKind::Angle { a: d.a, b: d.b, c: d.c });
@@ -6226,6 +6265,7 @@ impl ViewerState {
                     if let Some(p) = origin.map(|p| t.screen_to_image(p)) {
                         if !self.try_select_roi(t, key, origin) {
                             self.drag_draft = Some((p, p));
+                            self.drag_lock = Default::default();
                         }
                     }
                 }
@@ -6238,6 +6278,19 @@ impl ViewerState {
                                 + response.drag_delta() / (self.loupe.magnification.max(1.0) * t.state.zoom.max(1e-6))
                         } else {
                             t.screen_to_image(p)
+                        };
+                        // On an M-mode strip a caliper keeps to depth or time
+                        // until the drag turns past 45 degrees; Ctrl frees it.
+                        let mmode = tool == Tool::Length
+                            && self
+                                .frames
+                                .get(key)
+                                .is_some_and(|f| crate::mcaliper::mmode_region(f, a).is_some());
+                        let b = if mmode {
+                            let free = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+                            crate::mcaliper::hold(&mut self.drag_lock, a, b, t.state.zoom, free)
+                        } else {
+                            b
                         };
                         self.drag_draft = Some((a, b));
                         self.loupe_target = Some(LoupeTarget {

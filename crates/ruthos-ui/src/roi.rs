@@ -571,6 +571,16 @@ impl Roi {
                 };
             }
         }
+        if let RoiKind::Length { a, b } = &self.kind {
+            if let Some(ms) = mmode_time_only(frame, *a, *b) {
+                return Measurement {
+                    value: Some(ms),
+                    unit: "ms",
+                    basis: Some(SpacingBasis::UltrasoundRegion),
+                    issue: None,
+                };
+            }
+        }
         if let RoiKind::Point { p } = &self.kind {
             if let Some(v) = frame.meta.velocity_at(p.x as f64, p.y as f64) {
                 return Measurement {
@@ -1128,13 +1138,25 @@ impl Roi {
                         return text;
                     }
                 }
-                // In an M-mode strip a line also spans time.
+                if let (Some(ms), "ms") = (m.value, m.unit) {
+                    return format!("\u{394}t {ms:.0} ms");
+                }
+                // In an M-mode strip a line also spans time; one drawn free
+                // has a slope too.
                 let dt = match &self.kind {
                     RoiKind::Length { a, b } => frame
                         .meta
                         .time_between([a.x as f64, a.y as f64], [b.x as f64, b.y as f64])
                         .filter(|s| *s >= 0.001)
-                        .map(|s| format!("  \u{394}t {:.0} ms", s * 1000.0))
+                        .map(|s| {
+                            let mut text = format!("  \u{394}t {:.0} ms", s * 1000.0);
+                            if let (Some(mm), "mm") = (m.value, m.unit) {
+                                if mm > 0.0 && a.y != b.y {
+                                    text.push_str(&format!("  slope {:.0} mm/s", mm / s));
+                                }
+                            }
+                            text
+                        })
                         .unwrap_or_default(),
                     _ => String::new(),
                 };
@@ -1825,6 +1847,18 @@ struct DopplerLine {
     v2: f64,
 }
 
+/// A line held horizontal on an M-mode strip: the time it spans, in ms.
+fn mmode_time_only(frame: &Frame, a: Vec2, b: Vec2) -> Option<f64> {
+    if a.y != b.y || a.x == b.x {
+        return None;
+    }
+    crate::mcaliper::mmode_region(frame, a)?;
+    let s = frame
+        .meta
+        .time_between([a.x as f64, a.y as f64], [b.x as f64, b.y as f64])?;
+    Some(s * 1000.0)
+}
+
 fn doppler_line(frame: &Frame, a: Vec2, b: Vec2) -> Option<DopplerLine> {
     let m = &frame.meta;
     let v1 = m.velocity_at(a.x as f64, a.y as f64)?;
@@ -2112,6 +2146,28 @@ mod tests {
             mmode,
             p: pts.map(|(x, y)| Vec2::new(x, y)),
         })
+    }
+
+    #[test]
+    fn a_caliper_on_a_strip_reads_what_its_axis_measures() {
+        let f = mmode_frame();
+        let line = |a: (f32, f32), b: (f32, f32)| {
+            Roi::new(RoiKind::Length {
+                a: Vec2::new(a.0, a.1),
+                b: Vec2::new(b.0, b.1),
+            })
+        };
+        // Held down: a depth, 5 rows of 1 mm, and nothing else.
+        let depth = line((50.0, 110.0), (50.0, 115.0));
+        assert_eq!(depth.value_text(&f), "5.00 mm");
+        // Held across: a time alone, 40 columns of 5 ms.
+        let time = line((50.0, 120.0), (90.0, 120.0));
+        assert_eq!(time.value_text(&f), "\u{394}t 200 ms");
+        let m = time.measure(&f);
+        assert_eq!((m.value, m.unit), (Some(200.0), "ms"));
+        // Free: both, and the slope between them.
+        let free = line((50.0, 110.0), (90.0, 115.0));
+        assert_eq!(free.value_text(&f), "5.00 mm  \u{394}t 200 ms  slope 25 mm/s");
     }
 
     #[test]

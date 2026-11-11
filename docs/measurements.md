@@ -28,6 +28,24 @@ and a length that crosses two regions is refused. The Measurements menu's
 "Show calibration basis" panel lists the attributes read and the basis
 chosen for the current image.
 
+### The caliper on an M-mode strip
+
+On an M-mode strip, including one saved from Anatomical M-mode, the caliper keeps to the
+axis you set off along:
+
+- **Mostly down: a depth.** The line stays vertical and shows only the distance.
+- **Mostly across: a time.** The line stays horizontal and shows only the time.
+- **Past 45 degrees from that axis, it lets go** and stays free for the rest of the
+  drag, showing distance, time and the slope between them (mm/s, for an E-F slope).
+  Hold **Ctrl** to draw it free from the start.
+
+The axis is chosen once the pointer has moved a few pixels, so a shaky press does
+not choose it. Moving one end of a caliper later keeps it to its axis in the same way.
+While you hover with the caliper the strip shows crosshairs. The caliper being drawn
+or selected shows dotted lines right across the strip, at the depth of each end for
+a distance and at the moment of each end for a time, so the same depth or moment can
+be read in other beats. Shift still gives fine placement with the loupe.
+
 ## Saving into the study as DICOM
 
 **Save as DICOM** in the report window puts the study's measurements into the study

@@ -20,6 +20,7 @@ pub mod horos_import;
 pub mod icons;
 pub mod loader;
 pub mod loupe;
+pub mod mcaliper;
 pub mod measure_prefs;
 pub mod mpr;
 pub mod package_ui;
