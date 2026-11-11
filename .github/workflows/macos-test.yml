@@ -4,9 +4,8 @@
 # The app is for Apple Silicon and is not Developer ID signed or notarised:
 # it carries only an ad-hoc signature, which Apple Silicon needs to run it
 # at all. macOS refuses it the first time it is opened; allow it once in
-# System Settings > Privacy & Security > Open Anyway. This build is for
-# testing on a machine you control, never for distribution; releases come
-# only from release.yml.
+# System Settings > Privacy & Security > Open Anyway. The README links it
+# as the macOS alpha, a test build; releases come only from release.yml.
 name: macOS test build
 
 on:
