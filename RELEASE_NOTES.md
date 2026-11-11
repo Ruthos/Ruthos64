@@ -1,4 +1,4 @@
-# Ruthos 0.1.15-alpha
+# Ruthos 0.1.16-alpha
 
 Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written in Rust. It is an alpha: it works end to end on real studies, and it is rough in places. It is not for diagnostic use.
 
@@ -11,19 +11,18 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - **The archive format may change before 1.0.** Keep your original files.
 - **Research-mode models carry their own licences.** nnInteractive is non-commercial (CC BY-NC-SA 4.0) and VISTA3D is for research and non-clinical use only (NVIDIA's model card and the NVIDIA Open Model License). Each shows its terms before first use, and whether your use is allowed is your responsibility.
 
-## New in 0.1.15-alpha
+## New in 0.1.16-alpha
+
+- **Long loops play smoothly.** A loop too large to hold in memory whole, such as a long colour echo loop, used to be read from disk again for every frame, and played at a crawl. It is now played from its file kept open, reading ahead while it plays, and only a stretch of it is kept in memory. A loop that fits starts to show at once instead of after it has all been decoded.
+- **The caliper on M-mode keeps to depth or time.** Drawn mostly down it stays vertical and shows the distance alone; drawn mostly across it stays horizontal and shows the time alone. Past 45 degrees from that axis it lets go, and shows distance, time and slope together; Ctrl frees it from the start. Crosshairs follow the pointer across the strip, and dotted lines run across the whole strip from the caliper being drawn or selected. See `docs/measurements.md`.
+- **Preferences opens on Show All,** a window of icons as in Horos, with Show All in the header. New panes: Manage, to show, hide and order the smart folders and albums; Import, for a Horos database and for cataloguing a drive; and About.
+- **A quieter source list.** About, Import Horos, Catalogue Drive, Add a PACS and the data path have moved into Preferences. The listener shows only while it is on, catalogued drives once there are any, and Guided review only once it is switched on in its pane; it is off until then.
+- **Anatomical M-mode is a tool** in the Tools menu with the drawing tools (J), in place of its toolbar button.
+
+## Previously, in 0.1.15-alpha
 
 - **An angle between two lines shows its value between them.** The label used to sit where the lines would cross, which could be far off the image. It now sits halfway between the middles of the two lines, and stays inside the view.
 - **Clearer structured reports.** Values in a saved report are written as plain decimals, and a measurement with no name is saved under the name of its tool, such as Angle between two lines, so other software shows something readable.
-
-## Previously, in 0.1.14-alpha
-
-- **Measurements travel with the study as DICOM.** Save as DICOM in the report window writes the measurements, their derived values, the calculations, the findings and the conclusion into the study as a structured report (TID 1500), and the key images as a key object selection document, so they go with it to a PACS or another viewer. Reports and key image documents that arrive with a study become measurements and key images once their images are in the archive. Other software is not yet confirmed to read Ruthos's reports. See `docs/measurements.md`.
-- **Measurements as data.** Right-click a study to export its measurements, derived values, calculations and report as CSV or JSON, for one study or the whole list, with or without the patient's identity.
-- **Horos's 3D presets and an editor.** Horos's 29 volume rendering presets, read as Horos reads them, and an editor for colours and opacity over a histogram of the volume, with presets of your own. Cuts in 3D are now kept with the study.
-- **Surfaces and 3D printing.** Segments can be shown as smooth surfaces in the 3D pane. Meshes export as STL, OBJ, PLY or 3MF, with fewer triangles if you like, staying closed for printing. See `docs/segmentation.md`.
-- **Worklist and storage commitment.** Import Pictures can fill in the patient and accession from a Modality Worklist, and after sending, Ruthos can ask a PACS to confirm it holds every image. Neither has been tried against a real worklist server or PACS yet. See `docs/pacs.md`.
-- **The study list sorts by any heading,** and again to reverse it. A still on the echo timeline is one image, not a stack.
 
 ## What works
 
@@ -36,7 +35,7 @@ Ruthos is a Horos-inspired DICOM viewer and patient archive for Windows, written
 - **Reports.** A report per study with the named measurements, the LV M-mode block, calculations, findings and conclusion, exported to PDF with the key images.
 - **Anonymisation for teaching.** Teaching copies built by allowlist with derived UIDs, shifted dates, pixel masking of ultrasound regions or saved templates with review, a named teaching case register, a sidecar that carries measurements, and an independent verification pass before anything is written.
 - **Pictures.** Import JPEG or PNG photographs as DICOM with a patient form; grayscale radiograph exports become monochrome so they window.
-- **Preferences** window, and error containment: a fault in one window closes that window and writes `crash.log` instead of closing the program.
+- **Preferences** window in the Horos style, opening on Show All, and error containment: a fault in one window closes that window and writes `crash.log` instead of closing the program.
 
 ## Not yet
 
@@ -63,7 +62,7 @@ A file that does not import or display correctly is the most useful report you c
 `SHA256SUMS.txt` lists the checksum of every file in this release, and each file carries a GitHub build-provenance attestation recording the commit and workflow run that built it:
 
 ```
-gh attestation verify Ruthos-0.1.15-alpha-win64.zip --repo Ruthos/Ruthos64
+gh attestation verify Ruthos-0.1.16-alpha-win64.zip --repo Ruthos/Ruthos64
 ```
 
 This alpha is not code-signed unless the release page says so: Windows SmartScreen warns on first run (choose More info, then Run anyway), and Smart App Control in enforce mode refuses it. Signed builds through the SignPath Foundation follow once the project is accepted; even then SmartScreen can warn on the first downloads of a new version until its reputation builds.
