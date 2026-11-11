@@ -386,6 +386,21 @@ impl BrowserState {
         if self.selected_builtin.is_some_and(|i| i >= self.builtin_albums.len()) {
             self.selected_builtin = None;
         }
+        // For Preferences > Manage.
+        *shared.smart_folders.lock() = self
+            .builtin_albums
+            .iter()
+            .map(|b| crate::shared::SmartFolder {
+                key: format!("builtin:{}", b.name),
+                name: b.name.clone(),
+                builtin: true,
+            })
+            .chain(self.albums.iter().map(|a| crate::shared::SmartFolder {
+                key: format!("album:{}", a.id),
+                name: a.name.clone(),
+                builtin: false,
+            }))
+            .collect();
         self.series_cache.clear();
         if let Some(sel) = self.selected_study {
             if !self.studies.iter().any(|s| s.id == sel) {
@@ -681,25 +696,19 @@ impl BrowserState {
                 }
             });
         }
-        if source_row(ui, icons::PLUS, "Catalogue Drive\u{2026}", None, false)
-            .on_hover_text(
-                "List every DICOM study on a drive without copying its images. They open when the drive is connected",
-            )
-            .clicked()
-        {
-            if let Some(root) = rfd::FileDialog::new()
-                .set_title("Choose a drive or folder to catalogue")
-                .pick_folder()
-            {
-                self.start_catalogue(shared, root);
-            }
-        }
     }
 
     // ---------------------------------------------------------------- show
 
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         self.pump_events(shared);
+        // Asked for from Preferences > Import.
+        let request = shared.browser_request.lock().take();
+        match request {
+            Some(crate::shared::BrowserRequest::ImportHoros) => self.request_horos_import(None),
+            Some(crate::shared::BrowserRequest::Catalogue(root)) => self.start_catalogue(shared, root),
+            None => {}
+        }
         if self.dirty {
             self.reload(shared);
         }
@@ -1113,18 +1122,23 @@ impl BrowserState {
             self.selected_builtin = None;
             self.dirty = true;
         }
-        let builtins = self.builtin_albums.clone();
-        let albums = self.albums.clone();
-        let hidden = shared.settings.lock().hidden_smart_albums.clone();
+        let (hidden, order, guided) = {
+            let s = shared.settings.lock();
+            (
+                s.hidden_smart_albums.clone(),
+                s.smart_album_order.clone(),
+                s.show_guided_review,
+            )
+        };
         let builtin_key = |name: &str| format!("builtin:{name}");
         let album_key = |id: i64| format!("album:{id}");
-        // A hidden folder since deleted is not counted.
-        let hidden_count = builtins
-            .iter()
-            .filter(|b| hidden.contains(&builtin_key(&b.name)))
-            .count()
-            + albums.iter().filter(|a| hidden.contains(&album_key(a.id))).count();
-        for (i, b) in builtins.iter().enumerate() {
+        // Hidden folders and their order are managed in Preferences > Manage.
+        let builtins = crate::shared::in_order(
+            self.builtin_albums.clone().into_iter().enumerate().collect(),
+            |(_, b)| builtin_key(&b.name),
+            &order,
+        );
+        for (i, b) in builtins {
             let key = builtin_key(&b.name);
             if hidden.contains(&key) {
                 continue;
@@ -1151,25 +1165,11 @@ impl BrowserState {
                     }
                     ui.close();
                 }
-                if hidden_count > 0 && menu_item(ui, "Show all hidden", false).clicked() {
-                    self.set_hidden(shared, None);
+                if menu_item(ui, "Manage\u{2026}", false).clicked() {
+                    open_prefs_at(shared, "manage");
                     ui.close();
                 }
             });
-        }
-
-        if hidden_count > 0
-            && source_row(
-                ui,
-                icons::SMART_ALBUM,
-                &format!("Show {hidden_count} hidden"),
-                None,
-                false,
-            )
-            .on_hover_text("Show every smart folder you have hidden")
-            .clicked()
-        {
-            self.set_hidden(shared, None);
         }
 
         ui.horizontal(|ui| {
@@ -1184,7 +1184,7 @@ impl BrowserState {
                 }
             });
         });
-        let albums = self.albums.clone();
+        let albums = crate::shared::in_order(self.albums.clone(), |a| album_key(a.id), &order);
         if albums.is_empty() {
             ui.label(RichText::new("No albums yet").size(11.5).color(Color32::from_gray(140)));
         }
@@ -1212,7 +1212,7 @@ impl BrowserState {
                 self.dirty = true;
             }
             r.context_menu(|ui| {
-                if album.is_smart && menu_item(ui, "Hide", false).clicked() {
+                if menu_item(ui, "Hide", false).clicked() {
                     self.set_hidden(shared, Some(key.clone()));
                     if self.selected_album == Some(album.id) {
                         self.selected_album = None;
@@ -1220,11 +1220,11 @@ impl BrowserState {
                     }
                     ui.close();
                 }
-                if hidden_count > 0 && menu_item(ui, "Show all hidden", false).clicked() {
-                    self.set_hidden(shared, None);
+                if menu_item(ui, "Manage\u{2026}", false).clicked() {
+                    open_prefs_at(shared, "manage");
                     ui.close();
                 }
-                if menu_item(ui, "Rename…", false).clicked() {
+                if menu_item(ui, "Rename\u{2026}", false).clicked() {
                     self.modal = Some(Modal::RenameAlbum {
                         id: album.id,
                         name: album.name.clone(),
@@ -1251,32 +1251,29 @@ impl BrowserState {
             }
         }
 
-        source_header(ui, "SOURCES");
+        // The listener shows only while it runs; it is set up in Preferences.
         let net = shared.net_status.lock().clone();
-        let (glyph, text) = if net.running {
-            (icons::LISTENER_ON, format!("{} : {}", net.ae_title, net.port))
-        } else {
-            (icons::LISTENER_OFF, "Listener off".to_string())
-        };
-        let r = source_row(ui, glyph, &text, Some(net.received as i64), false);
-        let mut tip = String::new();
-        if net.running {
-            tip.push_str(&format!(
-                "DICOM listener running. AE title {}, port {}.\n",
-                net.ae_title, net.port
-            ));
-            tip.push_str("Point your X-ray system or PACS at this computer's IP address.\n");
-        } else {
-            tip.push_str("The DICOM listener is not running.\n");
-        }
-        if let Some(p) = &net.last_peer {
-            tip.push_str(&format!("Last connection from {p}\n"));
-        }
-        if let Some(e) = &net.last_error {
-            tip.push_str(&format!("Last error: {e}"));
-        }
-        r.on_hover_text(tip);
         let nodes = shared.settings.lock().pacs_nodes.clone();
+        if net.running || !nodes.is_empty() {
+            source_header(ui, "SOURCES");
+        }
+        if net.running {
+            let text = format!("{} : {}", net.ae_title, net.port);
+            let r = source_row(ui, icons::LISTENER_ON, &text, Some(net.received as i64), false);
+            let mut tip = format!(
+                "DICOM listener running. AE title {}, port {}.\nPoint your X-ray system or PACS at this computer's IP address.\n",
+                net.ae_title, net.port
+            );
+            if let Some(p) = &net.last_peer {
+                tip.push_str(&format!("Last connection from {p}\n"));
+            }
+            if let Some(e) = &net.last_error {
+                tip.push_str(&format!("Last error: {e}"));
+            }
+            if r.on_hover_text(tip).clicked() {
+                open_prefs_at(shared, "listener");
+            }
+        }
         for (i, n) in nodes.iter().enumerate() {
             if source_row(ui, icons::QUERY, &n.name, None, false)
                 .on_hover_text(format!(
@@ -1288,50 +1285,32 @@ impl BrowserState {
                 *shared.open_query.lock() = Some(Some(i));
             }
         }
-        if nodes.is_empty()
-            && source_row(ui, icons::PLUS, "Add a PACS\u{2026}", None, false)
-                .on_hover_text("Set up a PACS to search, retrieve from and send to")
-                .clicked()
-        {
-            *shared.prefs_section.lock() = Some("pacs");
-            shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // Catalogued drives; cataloguing one is in Preferences > Import.
+        if !self.catalogues.is_empty() {
+            ui.add_space(8.0);
+            self.catalogue_rows(ui, shared);
         }
 
         ui.add_space(8.0);
-        self.catalogue_rows(ui, shared);
-
-        ui.add_space(8.0);
-        if source_row(ui, icons::SMART_ALBUM, "Guided review…", None, false)
-            .on_hover_text("Teaching sessions: join, host and follow")
-            .clicked()
+        if guided
+            && source_row(ui, icons::SMART_ALBUM, "Guided review\u{2026}", None, false)
+                .on_hover_text("Teaching sessions: join, host and follow")
+                .clicked()
         {
             shared.open_session.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        // Windows and Linux have no menu bar, so this is the only way in there.
-        if source_row(ui, icons::SMART_ALBUM, "Import Horos Database…", None, false)
-            .on_hover_text("A Horos or OsiriX library, with its albums, comments and key images")
-            .clicked()
-        {
-            self.request_horos_import(None);
-        }
-        if source_row(ui, icons::SMART_ALBUM, "Preferences…", None, false)
-            .on_hover_text(format!("Settings ({})", crate::platform::shortcut("Ctrl+,")))
+        // Windows and Linux have no menu bar: this is the way in to
+        // Preferences, and from there to About and the occasional tools.
+        if source_row(ui, icons::SMART_ALBUM, "Preferences\u{2026}", None, false)
+            .on_hover_text(format!(
+                "Settings, importing a Horos database, cataloguing a drive, and About ({})",
+                crate::platform::shortcut("Ctrl+,")
+            ))
             .clicked()
         {
             shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        if source_row(ui, icons::SMART_ALBUM, "About Ruthos…", None, false)
-            .on_hover_text("Version, acknowledgements and third-party licences")
-            .clicked()
-        {
-            shared.open_about.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(format!("{}", shared.paths.root.display()))
-                .size(10.0)
-                .color(Color32::from_gray(130)),
-        );
         if let Some(note) = shared.renderer_note.lock().clone() {
             ui.add_space(4.0);
             ui.label(RichText::new(note).size(10.0).color(Color32::from_rgb(190, 120, 20)));
@@ -2590,6 +2569,12 @@ fn remember_order(shared: &Shared, order: Option<ruthos_core::db::StudyOrder>) {
             tracing::warn!("the study order could not be saved: {e}");
         }
     }
+}
+
+/// Open Preferences on a section, or bring it to that section if open.
+fn open_prefs_at(shared: &Shared, section: &'static str) {
+    *shared.prefs_section.lock() = Some(section);
+    shared.open_prefs.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn smart_album_name(f: &StudyFilter) -> String {

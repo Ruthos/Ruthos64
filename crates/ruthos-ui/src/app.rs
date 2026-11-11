@@ -430,9 +430,9 @@ impl RuthosApp {
             ViewportBuilder::default()
                 .with_icon(crate::app_icon())
                 .with_title("Ruthos Preferences")
-                // Wide enough for the eight section buttons.
-                .with_inner_size([900.0, 560.0])
-                .with_min_inner_size([880.0, 420.0])
+                // Show All's widest group, four icons, and the panes' forms.
+                .with_inner_size([820.0, 600.0])
+                .with_min_inner_size([620.0, 420.0])
                 .with_resizable(true),
             |ctx, _class| {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {

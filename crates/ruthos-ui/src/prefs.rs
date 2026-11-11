@@ -1,7 +1,8 @@
 //! The Preferences window (Horos: PreferencesWindowController).
 //!
-//! A row of sections across the top, the section's controls below, and
-//! Save / Cancel at the bottom. Edits go to a draft copy of the settings and
+//! As in Horos and the system settings, it opens on Show All: every pane as
+//! an icon, in groups. A pane fills the window, and Show All in the header
+//! goes back. Save / Cancel are at the bottom. Edits go to a draft copy of the settings and
 //! are written to `settings.json` on Save; the application then applies what
 //! can change live (the listener, viewer defaults, measurement sets) and
 //! says what needs a restart (the data folder, thumbnail size).
@@ -15,19 +16,100 @@ use crate::measure_prefs::LibraryEditor;
 use crate::icons::{self, Bitmap};
 use crate::shared::Shared;
 use crate::theme;
-use crate::widgets::{toolbar_separator, ToolbarButton};
+use crate::widgets::{toggle_switch, toolbar_separator, Icon, ToolbarButton};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
+    /// Every pane, as icons.
+    All,
     General,
+    Manage,
+    Watch,
+    Import,
     Listener,
     Pacs,
     Routing,
-    Watch,
     Viewer,
     Measurements,
     GuidedReview,
     Advanced,
+    About,
+}
+
+/// The Show All grid: its groups, in order.
+const GROUPS: [(&str, &[Section]); 4] = [
+    (
+        "Database",
+        &[Section::General, Section::Manage, Section::Watch, Section::Import],
+    ),
+    ("Network", &[Section::Listener, Section::Pacs, Section::Routing]),
+    ("Viewing", &[Section::Viewer, Section::Measurements]),
+    ("Other", &[Section::GuidedReview, Section::Advanced, Section::About]),
+];
+
+impl Section {
+    /// The pane a key names: `RUTHOS_OPEN_PREFS` and other windows use these.
+    fn from_key(key: &str) -> Option<Section> {
+        Some(match key {
+            "all" => Section::All,
+            "general" => Section::General,
+            "manage" => Section::Manage,
+            "watch" => Section::Watch,
+            "import" => Section::Import,
+            "listener" => Section::Listener,
+            "pacs" => Section::Pacs,
+            "routing" => Section::Routing,
+            "viewer" => Section::Viewer,
+            "measurements" => Section::Measurements,
+            "guided" => Section::GuidedReview,
+            "advanced" => Section::Advanced,
+            "about" => Section::About,
+            _ => return None,
+        })
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Section::All => "Show All",
+            Section::General => "General",
+            Section::Manage => "Manage",
+            Section::Watch => "Watch folders",
+            Section::Import => "Import",
+            Section::Listener => "Listener",
+            Section::Pacs => "PACS",
+            Section::Routing => "Routing",
+            Section::Viewer => "Viewer",
+            Section::Measurements => "Measurements",
+            Section::GuidedReview => "Guided Review",
+            Section::Advanced => "Advanced",
+            Section::About => "About",
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            Section::All => Icon::Bitmap(Bitmap::DatabaseWindow),
+            Section::General => Icon::Glyph(icons::SMART_ALBUM),
+            Section::Manage => Icon::Bitmap(Bitmap::SmartAlbum),
+            Section::Watch => Icon::Bitmap(Bitmap::Import),
+            Section::Import => Icon::Bitmap(Bitmap::ImportImages),
+            Section::Listener => Icon::Bitmap(Bitmap::Network),
+            Section::Pacs => Icon::Bitmap(Bitmap::Query),
+            Section::Routing => Icon::Bitmap(Bitmap::Send),
+            Section::Viewer => Icon::Bitmap(Bitmap::Viewer),
+            Section::Measurements => Icon::Bitmap(Bitmap::Length),
+            Section::GuidedReview => Icon::Bitmap(Bitmap::Sync),
+            Section::Advanced => Icon::Bitmap(Bitmap::Presets),
+            Section::About => Icon::Bitmap(Bitmap::Report),
+        }
+    }
+}
+
+/// A change made in Manage.
+enum ManageChange {
+    Show(String, bool),
+    Order(Vec<String>),
+    ShowAll,
 }
 
 pub struct PrefsState {
@@ -77,17 +159,10 @@ impl PrefsState {
         // Developer option: `RUTHOS_OPEN_PREFS=listener|pacs|viewer|measurements`;
         // other windows can ask for a section through `prefs_section`.
         let asked = shared.prefs_section.lock().take().map(String::from);
-        let section = match asked.or_else(|| std::env::var("RUTHOS_OPEN_PREFS").ok()).as_deref() {
-            Some("listener") => Section::Listener,
-            Some("pacs") => Section::Pacs,
-            Some("routing") => Section::Routing,
-            Some("watch") => Section::Watch,
-            Some("viewer") => Section::Viewer,
-            Some("advanced") => Section::Advanced,
-            Some("measurements") => Section::Measurements,
-            Some("guided") => Section::GuidedReview,
-            _ => Section::General,
-        };
+        let section = asked
+            .or_else(|| std::env::var("RUTHOS_OPEN_PREFS").ok())
+            .and_then(|k| Section::from_key(&k))
+            .unwrap_or(Section::All);
         Self {
             section,
             draft,
@@ -110,6 +185,7 @@ impl PrefsState {
     }
 
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
+        crate::about::dev_screenshot(ui.ctx(), "RUTHOS_PREFS_SCREENSHOT");
         self.show_inner(ui, shared);
         if self.close_requested {
             shared.settings.lock().dial = self.dial_original.clone();
@@ -118,6 +194,11 @@ impl PrefsState {
 
     fn show_inner(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.style_mut().visuals = theme::browser_visuals();
+        // Another window asked for a pane while this one was open.
+        let asked = shared.prefs_section.lock().take();
+        if let Some(s) = asked.and_then(Section::from_key) {
+            self.section = s;
+        }
         if ui.input(|i| i.viewport().close_requested()) {
             self.close_requested = true;
         }
@@ -133,51 +214,20 @@ impl PrefsState {
             .show(ui, |ui| {
                 theme::paint_toolbar_background(ui, false, egui::vec2(6.0, 3.0));
                 ui.horizontal(|ui| {
-                    for (section, icon, label) in [
-                        (
-                            Section::General,
-                            crate::widgets::Icon::Glyph(icons::SMART_ALBUM),
-                            "General",
-                        ),
-                        (
-                            Section::Listener,
-                            crate::widgets::Icon::Bitmap(Bitmap::Network),
-                            "Listener",
-                        ),
-                        (Section::Pacs, crate::widgets::Icon::Bitmap(Bitmap::Query), "PACS"),
-                        (Section::Routing, crate::widgets::Icon::Bitmap(Bitmap::Send), "Routing"),
-                        (
-                            Section::Watch,
-                            crate::widgets::Icon::Bitmap(Bitmap::Import),
-                            "Watch folders",
-                        ),
-                        (Section::Viewer, crate::widgets::Icon::Bitmap(Bitmap::Viewer), "Viewer"),
-                        (
-                            Section::Measurements,
-                            crate::widgets::Icon::Bitmap(Bitmap::Length),
-                            "Measurements",
-                        ),
-                        (
-                            Section::GuidedReview,
-                            crate::widgets::Icon::Bitmap(Bitmap::Network),
-                            "Guided Review",
-                        ),
-                        (
-                            Section::Advanced,
-                            crate::widgets::Icon::Bitmap(Bitmap::Presets),
-                            "Advanced",
-                        ),
-                    ] {
-                        if ToolbarButton::new(icon, label)
-                            .selected(self.section == section)
-                            .width(88.0)
-                            .show(ui)
-                            .clicked()
-                        {
-                            self.section = section;
-                        }
+                    if ToolbarButton::new(Section::All.icon(), "Show All")
+                        .enabled(self.section != Section::All)
+                        .tooltip("Every preference pane")
+                        .width(88.0)
+                        .show(ui)
+                        .clicked()
+                    {
+                        self.section = Section::All;
                     }
                     toolbar_separator(ui);
+                    if self.section != Section::All {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(self.section.title()).size(18.0).strong());
+                    }
                 });
             });
 
@@ -214,6 +264,10 @@ impl PrefsState {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| match self.section {
+                        Section::All => self.show_all(ui),
+                        Section::Manage => self.manage(ui, shared),
+                        Section::Import => Self::import(ui, shared),
+                        Section::About => crate::about::contents(ui, shared),
                         Section::General => self.general(ui, shared),
                         Section::Listener => self.listener(ui, shared),
                         Section::Pacs => self.pacs(ui, shared),
@@ -223,11 +277,190 @@ impl PrefsState {
                         Section::Advanced => self.advanced(ui),
                         Section::Measurements => self.measurements(ui),
                         Section::GuidedReview => {
+                            Self::guided_switch(ui, shared, &mut self.note);
                             let ctx = ui.ctx().clone();
                             shared.session.lock().tab(ui, shared, &ctx);
                         }
                     });
             });
+    }
+
+    /// Every pane as an icon, in groups.
+    fn show_all(&mut self, ui: &mut Ui) {
+        for (i, (title, sections)) in GROUPS.iter().enumerate() {
+            if i > 0 {
+                ui.add_space(4.0);
+                ui.separator();
+            }
+            ui.label(RichText::new(*title).size(12.5).color(Color32::from_gray(110)));
+            ui.add_space(2.0);
+            ui.horizontal_wrapped(|ui| {
+                for s in sections.iter() {
+                    if ToolbarButton::new(s.icon(), s.title()).width(104.0).show(ui).clicked() {
+                        self.section = *s;
+                    }
+                }
+            });
+        }
+    }
+
+    /// Change the live settings at once, as the sidebar does. Save keeps
+    /// what is set here.
+    fn change_now(shared: &Shared, note: &mut Option<String>, f: impl FnOnce(&mut Settings)) {
+        let mut s = shared.settings.lock();
+        f(&mut s);
+        if let Err(e) = s.save() {
+            *note = Some(format!("Could not save: {e}"));
+        }
+    }
+
+    /// Which smart folders and albums the sidebar shows, and their order.
+    fn manage(&mut self, ui: &mut Ui, shared: &Shared) {
+        Self::heading(ui, "Smart folders and albums");
+        Self::hint(
+            ui,
+            "Choose what the database window's sidebar shows, and in what order. Changes apply at once.",
+        );
+        let folders = shared.smart_folders.lock().clone();
+        let (hidden, order) = {
+            let s = shared.settings.lock();
+            (s.hidden_smart_albums.clone(), s.smart_album_order.clone())
+        };
+        let ordered = |builtin: bool| -> Vec<crate::shared::SmartFolder> {
+            crate::shared::in_order(
+                folders.iter().filter(|f| f.builtin == builtin).cloned().collect(),
+                |f| f.key.clone(),
+                &order,
+            )
+        };
+        let mut change = None;
+        for (title, builtin, empty) in [
+            ("Smart folders", true, "None"),
+            ("Albums", false, "No albums yet. Make one with + in the sidebar."),
+        ] {
+            ui.add_space(12.0);
+            ui.label(RichText::new(title).strong());
+            ui.add_space(4.0);
+            let group = ordered(builtin);
+            if group.is_empty() {
+                Self::hint(ui, empty);
+                continue;
+            }
+            egui::Grid::new(("prefs-manage", builtin))
+                .num_columns(2)
+                .spacing([16.0, 6.0])
+                .show(ui, |ui| {
+                    for (i, f) in group.iter().enumerate() {
+                        let mut shown = !hidden.contains(&f.key);
+                        if ui.checkbox(&mut shown, f.name.as_str()).changed() {
+                            change = Some(ManageChange::Show(f.key.clone(), shown));
+                        }
+                        ui.horizontal(|ui| {
+                            let mut swap = None;
+                            if ui
+                                .add_enabled(i > 0, egui::Button::new(icons::rich(icons::CARET_UP, 11.0)).small())
+                                .on_hover_text("Move up")
+                                .clicked()
+                            {
+                                swap = Some((i, i - 1));
+                            }
+                            if ui
+                                .add_enabled(
+                                    i + 1 < group.len(),
+                                    egui::Button::new(icons::rich(icons::CARET_DOWN, 11.0)).small(),
+                                )
+                                .on_hover_text("Move down")
+                                .clicked()
+                            {
+                                swap = Some((i, i + 1));
+                            }
+                            if let Some((a, b)) = swap {
+                                let mut keys: Vec<String> = group.iter().map(|f| f.key.clone()).collect();
+                                keys.swap(a, b);
+                                let others = ordered(!builtin).into_iter().map(|f| f.key);
+                                let all: Vec<String> = if builtin {
+                                    keys.into_iter().chain(others).collect()
+                                } else {
+                                    others.chain(keys).collect()
+                                };
+                                change = Some(ManageChange::Order(all));
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+        }
+        ui.add_space(12.0);
+        if ui
+            .add_enabled(!hidden.is_empty(), egui::Button::new("Show all"))
+            .on_hover_text("Show every hidden smart folder and album")
+            .clicked()
+        {
+            change = Some(ManageChange::ShowAll);
+        }
+        if let Some(change) = change {
+            Self::change_now(shared, &mut self.note, |s| match change {
+                ManageChange::Show(key, shown) => {
+                    s.hidden_smart_albums.retain(|k| *k != key);
+                    if !shown {
+                        s.hidden_smart_albums.push(key);
+                    }
+                }
+                ManageChange::Order(keys) => s.smart_album_order = keys,
+                ManageChange::ShowAll => s.hidden_smart_albums.clear(),
+            });
+        }
+    }
+
+    /// The occasional imports: a Horos library, and a drive catalogued
+    /// where it is. The database window does the work and shows progress.
+    fn import(ui: &mut Ui, shared: &Shared) {
+        let ask = |request| {
+            *shared.browser_request.lock() = Some(request);
+            shared.focus_browser.store(true, std::sync::atomic::Ordering::Relaxed);
+        };
+        Self::heading(ui, "Horos database");
+        Self::hint(
+            ui,
+            "Bring in a Horos or OsiriX library, with its albums, comments and key images.",
+        );
+        ui.add_space(4.0);
+        if ui.button("Import Horos Database\u{2026}").clicked() {
+            ask(crate::shared::BrowserRequest::ImportHoros);
+        }
+        ui.add_space(18.0);
+        Self::heading(ui, "Catalogue a drive");
+        Self::hint(
+            ui,
+            "List every DICOM study on a drive without copying its images. They open when the drive is \
+             connected, and the drive is listed under Drives in the sidebar, where a right-click scans it again \
+             or forgets it.",
+        );
+        ui.add_space(4.0);
+        if ui.button("Catalogue Drive\u{2026}").clicked() {
+            if let Some(root) = rfd::FileDialog::new()
+                .set_title("Choose a drive or folder to catalogue")
+                .pick_folder()
+            {
+                ask(crate::shared::BrowserRequest::Catalogue(root));
+            }
+        }
+    }
+
+    /// Whether Guided review shows in the sidebar: off for most people.
+    fn guided_switch(ui: &mut Ui, shared: &Shared, note: &mut Option<String>) {
+        let mut on = shared.settings.lock().show_guided_review;
+        ui.horizontal(|ui| {
+            if toggle_switch(ui, &mut on).changed() {
+                Self::change_now(shared, note, |s| s.show_guided_review = on);
+            }
+            ui.label("Show Guided review in the database window");
+        });
+        Self::hint(
+            ui,
+            "For teaching sessions. Leave it off if you do not host or join them.",
+        );
+        ui.add_space(12.0);
     }
 
     fn heading(ui: &mut Ui, text: &str) {
@@ -1260,6 +1493,9 @@ impl PrefsState {
         {
             let now = shared.settings.lock();
             self.draft.hidden_smart_albums = now.hidden_smart_albums.clone();
+            // Set in Manage and Guided Review, which apply at once.
+            self.draft.smart_album_order = now.smart_album_order.clone();
+            self.draft.show_guided_review = now.show_guided_review;
             // Saved from the 3D colour editor.
             self.draft.vr_presets = now.vr_presets.clone();
             // Set from the study list's headings.

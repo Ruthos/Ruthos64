@@ -8,6 +8,10 @@ Ruthos ships with no server configured, and no server address appears in its
 code or default settings. A session relay is reached through an invitation, a
 profile, a site's `ruthos.ini`, or an address typed under Enter address manually.
 
+Guided review is set up in Preferences > Guided Review. Most people never use
+it, so the database window's sidebar shows it only once the switch at the top
+of that pane is on.
+
 ## Joining
 
 Click the invitation link from your educator. Ruthos shows the server's domain

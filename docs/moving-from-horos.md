@@ -1,6 +1,6 @@
 # Moving from Horos
 
-**Import Horos Database…**, near the foot of the database sidebar (File > Import Horos Database on macOS), brings a Horos (or OsiriX) library into Ruthos with its albums, comments, status and key images.
+**Import Horos Database…**, in Preferences > Import (File > Import Horos Database on macOS), brings a Horos (or OsiriX) library into Ruthos with its albums, comments, status and key images.
 
 ## What to copy from the Mac
 

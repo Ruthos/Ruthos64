@@ -24,9 +24,9 @@ Three things justify a new codebase rather than another wrapper:
 
 ## What it looks like
 
-Ruthos follows the two windows that make up a Horos session.
+Ruthos follows the two windows that make up a Horos session, and Preferences follows Horos too: it opens on Show All, every pane as an icon in groups, with About, Manage (which smart folders and albums the sidebar shows, and their order) and the occasional tools, importing a Horos database and cataloguing a drive, among them.
 
-**Database window.** A source list on the left (local database, albums, smart albums, PACS nodes), an outline table of studies with series as expandable rows, a series thumbnail strip along the bottom, and a Horos-style toolbar for import, export, Query/Retrieve, send, share, anonymise and reports, with modality and date filters and search.
+**Database window.** A source list on the left (local database, smart folders, albums, PACS nodes, catalogued drives, and the listener while it is on), an outline table of studies with series as expandable rows, a series thumbnail strip along the bottom, and a Horos-style toolbar for import, export, Query/Retrieve, send, share, anonymise and reports, with modality and date filters and search.
 
 **2D viewer window.** A series thumbnail drawer on the left, the image viewport with the Horos four-corner annotation layout, and the viewer toolbar: Database, Series, Tiling, Play and Speed, Annotations, Tool and Measure, WL/WW, colour table, MPR, Orientation, Reset, Key Image, Export, Movie, Report and Anonymize.
 

@@ -99,6 +99,10 @@ pub struct Shared {
     pub open_session: AtomicBool,
     /// Open the About window.
     pub open_about: AtomicBool,
+    /// The database window's smart folders and albums, for Preferences > Manage.
+    pub smart_folders: Mutex<Vec<SmartFolder>>,
+    /// Work Preferences asks of the database window.
+    pub browser_request: Mutex<Option<BrowserRequest>>,
 }
 
 impl Shared {
@@ -129,6 +133,8 @@ impl Shared {
             session: Mutex::new(crate::session::Hub::new(&settings)),
             open_session: AtomicBool::new(false),
             open_about: AtomicBool::new(false),
+            smart_folders: Mutex::new(Vec::new()),
+            browser_request: Mutex::new(None),
             settings: Mutex::new(settings),
             render_state,
             loader: FrameLoader::new(),
@@ -200,5 +206,46 @@ impl Shared {
         }
         self.thumbs.request(key, self.resolve(&image.path), 0);
         None
+    }
+}
+
+/// A smart folder or album in the database window's sidebar.
+#[derive(Debug, Clone)]
+pub struct SmartFolder {
+    /// `builtin:<name>` or `album:<id>`: the key hiding and ordering use.
+    pub key: String,
+    pub name: String,
+    /// One of the built-in folders, not an album.
+    pub builtin: bool,
+}
+
+/// Work Preferences hands to the database window, which shows its progress.
+#[derive(Debug, Clone)]
+pub enum BrowserRequest {
+    ImportHoros,
+    Catalogue(std::path::PathBuf),
+}
+
+/// `items` in the user's order: those `order` names first, in its order,
+/// then the rest as they came.
+pub fn in_order<T>(items: Vec<T>, key: impl Fn(&T) -> String, order: &[String]) -> Vec<T> {
+    let mut ranked: Vec<(usize, usize, T)> = items
+        .into_iter()
+        .enumerate()
+        .map(|(i, t)| (order.iter().position(|k| *k == key(&t)).unwrap_or(usize::MAX), i, t))
+        .collect();
+    ranked.sort_by_key(|(rank, i, _)| (*rank, *i));
+    ranked.into_iter().map(|(_, _, t)| t).collect()
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::in_order;
+
+    #[test]
+    fn named_items_come_first_in_their_order_and_the_rest_keep_theirs() {
+        let items = vec!["a", "b", "c", "d"];
+        let order = vec!["c".to_string(), "gone".to_string(), "a".to_string()];
+        assert_eq!(in_order(items, |s| s.to_string(), &order), vec!["c", "a", "b", "d"]);
     }
 }

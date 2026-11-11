@@ -46,8 +46,9 @@ fn notices() -> Option<PathBuf> {
 
 /// Developer options: `RUTHOS_ABOUT_SCREENSHOT=<file.png>` opens the window and
 /// saves it as drawn two seconds in; `RUTHOS_BROWSER_SCREENSHOT=<file.png>` does
-/// that with the database window alone.
-fn dev_screenshot(ctx: &egui::Context, option: &str) {
+/// that with the database window alone; `RUTHOS_PREFS_SCREENSHOT=<file.png>`
+/// with Preferences, opened with `RUTHOS_OPEN_PREFS`.
+pub(crate) fn dev_screenshot(ctx: &egui::Context, option: &str) {
     use std::sync::atomic::AtomicBool;
     static TAKEN: AtomicBool = AtomicBool::new(false);
     let Some(path) = std::env::var_os(option) else {
@@ -55,6 +56,8 @@ fn dev_screenshot(ctx: &egui::Context, option: &str) {
     };
     if ctx.input(|i| i.time) < 2.0 {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        // Preferences paints with the main window: keep that one going too.
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
     } else if !TAKEN.swap(true, Ordering::Relaxed) {
         ctx.request_screenshot(move |img| {
             let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
@@ -82,43 +85,46 @@ pub fn window(ctx: &egui::Context, shared: &Shared, open: &mut bool) {
         .default_width(520.0)
         .default_height(520.0)
         .show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.label(RichText::new("Ruthos").size(24.0).strong());
-                ui.label(format!("Version {VERSION}, build {COMMIT}"));
-                ui.add_space(8.0);
-                ui.label("Licensed under the GNU Lesser General Public License v3.0.");
-                ui.label(RichText::new("Not a medical device. Not for diagnostic use.").strong());
-                ui.add_space(8.0);
-                ui.label(RichText::new("Acknowledgements").strong());
-                ui.label(ACKNOWLEDGEMENTS);
-                ui.add_space(4.0);
-                ui.label(IJG);
-                ui.add_space(4.0);
-                ui.label(
-                    "OpenH264 Video Codec provided by Cisco Systems, Inc. The encoder is fetched from Cisco, with your consent, the first time you export a movie.",
-                );
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    let found = notices();
-                    let button = egui::Button::new("Third-party licences");
-                    if ui
-                        .add_enabled(found.is_some(), button)
-                        .on_hover_text("Every component's copyright and licence, in your browser")
-                        .on_disabled_hover_text("Packaged builds include this file; a build from source does not")
-                        .clicked()
-                    {
-                        if let Some(path) = &found {
-                            let _ = open::that_detached(path);
-                        }
-                    }
-                    if ui.button("Copy versions").on_hover_text("For a bug report").clicked() {
-                        ui.ctx().copy_text(versions(shared));
-                    }
-                });
-                ui.add_space(8.0);
-                ui.collapsing("Cisco's licence for the OpenH264 binary", |ui| {
-                    ui.label(RichText::new(ruthos_core::movie::CISCO_LICENCE).small());
-                });
-            });
+            egui::ScrollArea::vertical().show(ui, |ui| contents(ui, shared));
         });
+}
+
+/// What About shows, in its window or in Preferences.
+pub fn contents(ui: &mut egui::Ui, shared: &Shared) {
+    ui.label(RichText::new("Ruthos").size(24.0).strong());
+    ui.label(format!("Version {VERSION}, build {COMMIT}"));
+    ui.add_space(8.0);
+    ui.label("Licensed under the GNU Lesser General Public License v3.0.");
+    ui.label(RichText::new("Not a medical device. Not for diagnostic use.").strong());
+    ui.add_space(8.0);
+    ui.label(RichText::new("Acknowledgements").strong());
+    ui.label(ACKNOWLEDGEMENTS);
+    ui.add_space(4.0);
+    ui.label(IJG);
+    ui.add_space(4.0);
+    ui.label(
+            "OpenH264 Video Codec provided by Cisco Systems, Inc. The encoder is fetched from Cisco, with your consent, the first time you export a movie.",
+        );
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        let found = notices();
+        let button = egui::Button::new("Third-party licences");
+        if ui
+            .add_enabled(found.is_some(), button)
+            .on_hover_text("Every component's copyright and licence, in your browser")
+            .on_disabled_hover_text("Packaged builds include this file; a build from source does not")
+            .clicked()
+        {
+            if let Some(path) = &found {
+                let _ = open::that_detached(path);
+            }
+        }
+        if ui.button("Copy versions").on_hover_text("For a bug report").clicked() {
+            ui.ctx().copy_text(versions(shared));
+        }
+    });
+    ui.add_space(8.0);
+    ui.collapsing("Cisco's licence for the OpenH264 binary", |ui| {
+        ui.label(RichText::new(ruthos_core::movie::CISCO_LICENCE).small());
+    });
 }

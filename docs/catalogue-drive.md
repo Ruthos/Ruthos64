@@ -1,6 +1,6 @@
 # Catalogue a drive
 
-**Catalogue Drive…**, under DRIVES in the database sidebar, lists every DICOM study
+**Catalogue Drive…**, in Preferences > Import, lists every DICOM study
 on a drive or folder without copying its images. Ruthos records where each file
 is, so an archive of many terabytes stays on its disk while its studies can be
 searched, sorted and put in albums like any others.

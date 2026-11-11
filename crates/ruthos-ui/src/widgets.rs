@@ -720,3 +720,30 @@ pub fn menu_check(ui: &mut Ui, value: &mut bool, text: &str) -> Response {
     }
     r
 }
+
+/// An on/off switch, as in the system settings.
+pub fn toggle_switch(ui: &mut Ui, on: &mut bool) -> Response {
+    let size = ui.spacing().interact_size.y * egui::vec2(2.0, 1.0);
+    let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, ui.is_enabled(), *on, ""));
+    if ui.is_rect_visible(rect) {
+        let how_on = ui.ctx().animate_bool_responsive(response.id, *on);
+        let radius = 0.5 * rect.height();
+        let off = Color32::from_gray(190);
+        let lit = Color32::from_rgb(52, 120, 246);
+        let fill = egui::lerp(egui::Rgba::from(off)..=egui::Rgba::from(lit), how_on);
+        ui.painter().rect_filled(rect, radius, Color32::from(fill));
+        let x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), how_on);
+        ui.painter().circle(
+            egui::pos2(x, rect.center().y),
+            radius - 2.0,
+            Color32::WHITE,
+            egui::Stroke::new(0.5, Color32::from_gray(150)),
+        );
+    }
+    response
+}

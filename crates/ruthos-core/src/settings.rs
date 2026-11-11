@@ -21,6 +21,12 @@ pub struct SavedTransfer {
 pub struct Settings {
     /// Smart folders hidden from the database sidebar.
     pub hidden_smart_albums: Vec<String>,
+    /// The order of the sidebar's smart folders and albums, by key
+    /// (`builtin:<name>`, `album:<id>`); those not named follow.
+    pub smart_album_order: Vec<String>,
+    /// Show Guided review in the database sidebar. Off for most people,
+    /// who never teach with it.
+    pub show_guided_review: bool,
     /// How far from a model's edge refinement may move it, in voxels.
     pub refine_band: u8,
     /// Developer option: write each AI segment's unrefined mask into its SEG too,
@@ -375,6 +381,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             hidden_smart_albums: Vec::new(),
+            smart_album_order: Vec::new(),
+            show_guided_review: false,
             refine_band: 3,
             save_unrefined_masks: false,
             load_newest_segments: false,
