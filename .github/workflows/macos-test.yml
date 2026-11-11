@@ -47,7 +47,7 @@ jobs:
         run: |
           SHORT="$(git rev-parse --short HEAD)"
           ditto -c -k --keepParent dist/Ruthos.app "dist/Ruthos-test-$SHORT-macos-arm64.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ruthos-macos-test
           path: dist/Ruthos-test-*-macos-arm64.zip

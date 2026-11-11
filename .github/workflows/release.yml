@@ -54,7 +54,7 @@ jobs:
           if ($v.ProductName -ne 'Ruthos') { throw "ProductName is '$($v.ProductName)'" }
           if ($v.OriginalFilename -ne 'ruthos.exe') { throw "OriginalFilename is '$($v.OriginalFilename)'" }
           if ($v.ProductVersion -ne $want) { throw "ProductVersion $($v.ProductVersion) does not match tag $want" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         id: unsigned
         with:
           name: windows-unsigned
@@ -86,7 +86,7 @@ jobs:
           if ($s.Status -ne 'Valid') { throw "Authenticode status is $($s.Status)" }
           if ($s.SignerCertificate.Subject -notmatch 'SignPath Foundation') { throw "Signer is $($s.SignerCertificate.Subject)" }
           if (-not $s.TimeStamperCertificate) { throw "The signature has no timestamp" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-signed
           path: signed/ruthos.exe
@@ -115,7 +115,7 @@ jobs:
           New-Item -ItemType Directory -Force "dist/$name" | Out-Null
           Copy-Item bin/ruthos.exe, LICENSE, README.md, notices/THIRD_PARTY_LICENSES.html, notices/THIRD_PARTY_LICENSES.txt "dist/$name"
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-windows
           path: dist/*.zip
@@ -214,7 +214,7 @@ jobs:
         run: |
           [ -n "$KEYCHAIN" ] && security delete-keychain "$KEYCHAIN" || true
           rm -f "$RUNNER_TEMP/AuthKey.p8"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-macos
           path: |
@@ -242,7 +242,7 @@ jobs:
       - name: Third-party notices, packaged as resources
         run: python3 scripts/notices.py build --target x86_64-unknown-linux-gnu --out notices
       - run: cargo packager --release --formats appimage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-linux
           path: dist/*.AppImage
