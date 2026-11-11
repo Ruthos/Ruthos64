@@ -9,6 +9,9 @@
 # On macOS, cargo-packager signs and notarises when APPLE_SIGNING_IDENTITY,
 # APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID are set in the environment.
 
+# The package it packages: the workspace root has no [package] of its own,
+# and without this cargo-packager quietly skips the whole file.
+name = "ruthos"
 product-name = "Ruthos"
 identifier = "org.ruthos.Ruthos"
 version = "0.1.16-alpha"
@@ -21,6 +24,8 @@ publisher = "Ruthos"
 category = "Utility"
 out-dir = "dist"
 
+# Where the built binary is; release.yml puts the universal macOS binary here too.
+binaries-dir = "target/release"
 binaries = [{ path = "ruthos", main = true }]
 
 # The application icon; cargo-packager builds the .icns for Ruthos.app from
@@ -46,7 +51,7 @@ extensions = ["dcm", "dicom", "dic"]
 mime-type = "application/dicom"
 description = "DICOM image"
 name = "DICOM"
-role = "Viewer"
+role = "viewer"
 
 [macos]
 minimum-system-version = "11.0"
