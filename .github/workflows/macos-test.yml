@@ -1,0 +1,56 @@
+# A macOS build to try Ruthos on a Mac before Mac releases are signed.
+# Started by hand from the Actions tab (or `gh workflow run macos-test.yml`).
+#
+# The app is for Apple Silicon and is not Developer ID signed or notarised:
+# it carries only an ad-hoc signature, which Apple Silicon needs to run it
+# at all. macOS refuses it the first time it is opened; allow it once in
+# System Settings > Privacy & Security > Open Anyway. This build is for
+# testing on a machine you control, never for distribution; releases come
+# only from release.yml.
+name: macOS test build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  app:
+    name: Ruthos.app for Apple Silicon (unsigned, for testing)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p ruthos
+      - run: cargo install cargo-packager --locked
+      - run: cargo install cargo-about --locked --version 0.9.3 --features cli
+      - name: Third-party notices
+        run: python3 scripts/notices.py build --target aarch64-apple-darwin --out notices
+      - name: Ruthos.app
+        run: cargo packager --release --formats app
+      - name: The notices are inside the bundle
+        run: |
+          cp LICENSE dist/Ruthos.app/Contents/Resources/
+          test -f dist/Ruthos.app/Contents/Resources/THIRD_PARTY_LICENSES.html
+          test -f dist/Ruthos.app/Contents/Resources/THIRD_PARTY_LICENSES.txt
+      - name: Ad-hoc signature, so Apple Silicon will run it
+        run: |
+          codesign --force --deep --sign - dist/Ruthos.app
+          codesign --verify --deep --strict --verbose=2 dist/Ruthos.app
+      # ditto keeps the bundle's permissions and links, which the artefact
+      # upload alone would lose.
+      - name: Zip
+        run: |
+          SHORT="$(git rev-parse --short HEAD)"
+          ditto -c -k --keepParent dist/Ruthos.app "dist/Ruthos-test-$SHORT-macos-arm64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruthos-macos-test
+          path: dist/Ruthos-test-*-macos-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
