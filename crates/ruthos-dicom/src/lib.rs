@@ -28,7 +28,7 @@ pub mod vr_presets;
 
 pub use clut::{Clut, ClutLibrary};
 pub use meta::{read_meta, InstanceMeta, PatientName, UsRegion};
-pub use pixels::{decode_all_frames, decode_frame, Frame, FramePixels};
+pub use pixels::{decode_all_frames, decode_all_frames_each, decode_frame, Frame, FramePixels, OpenImage};
 pub use presets::{WindowPreset, WindowPresets};
 pub use scale::{HandCalibration, Length, MeasureIssue, Scale, SpacingBasis};
 

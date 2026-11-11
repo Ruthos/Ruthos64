@@ -4,14 +4,14 @@
 //! viewer picks results up on its next paint. Decoded frames are cached by
 //! the viewer, not here, so memory is released when a viewer closes.
 
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crossbeam_channel::{select, unbounded, Receiver, Sender, TryRecvError};
 use parking_lot::Mutex;
 
-use ruthos_dicom::{decode_frame, Frame};
+use ruthos_dicom::{decode_frame, Frame, OpenImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FrameKey {
@@ -39,6 +39,60 @@ const MOST_PENDING_AHEAD: usize = 16;
 /// may be one that has closed.
 const MOST_HELD: usize = 64;
 
+/// Files of loops played a frame at a time are kept open, so a frame is not
+/// read from disk again: up to this many bytes of them, the most recent first.
+const MOST_OPEN_BYTES: u64 = 768 * 1024 * 1024;
+
+/// A file larger than this is read from disk for each frame instead.
+const LARGEST_KEPT_OPEN: u64 = 512 * 1024 * 1024;
+
+struct OpenFile {
+    image_id: i64,
+    bytes: u64,
+    file: Arc<OpenImage>,
+}
+
+type OpenFiles = Arc<Mutex<VecDeque<OpenFile>>>;
+
+/// Decode one frame of a loop played a frame at a time, from its file kept
+/// open. The lock is held while a file is opened, so the workers reading
+/// ahead along a loop do not each read it.
+fn decode_streamed(open: &OpenFiles, key: FrameKey, path: &Path) -> Result<Frame, String> {
+    let file = {
+        let mut files = open.lock();
+        match files.iter().position(|f| f.image_id == key.image_id) {
+            Some(at) => {
+                let f = files.remove(at).expect("found");
+                let file = f.file.clone();
+                files.push_back(f);
+                Some(file)
+            }
+            None => {
+                let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+                if bytes > LARGEST_KEPT_OPEN {
+                    None
+                } else {
+                    let file = Arc::new(OpenImage::open(path).map_err(|e| e.to_string())?);
+                    files.push_back(OpenFile {
+                        image_id: key.image_id,
+                        bytes,
+                        file: file.clone(),
+                    });
+                    while files.len() > 1 && files.iter().map(|f| f.bytes).sum::<u64>() > MOST_OPEN_BYTES {
+                        files.pop_front();
+                    }
+                    Some(file)
+                }
+            }
+        }
+    };
+    match file {
+        Some(file) => file.decode_frame(key.frame),
+        None => decode_frame(path, key.frame),
+    }
+    .map_err(|e| e.to_string())
+}
+
 /// The next piece of work: what a viewer is waiting for, before reading ahead.
 fn next_request(wanted: &Receiver<Request>, ahead: &Receiver<Request>) -> Option<Request> {
     match wanted.try_recv() {
@@ -65,6 +119,7 @@ pub struct FrameLoader {
     one_at_a_time: Arc<Mutex<HashSet<i64>>>,
     /// Messages for the viewer (a loop opened a frame at a time, say).
     notices: Arc<Mutex<Vec<String>>>,
+    open: OpenFiles,
 }
 
 impl Default for FrameLoader {
@@ -81,6 +136,7 @@ impl FrameLoader {
         let pending: Arc<Mutex<HashSet<FrameKey>>> = Arc::new(Mutex::new(HashSet::new()));
         let one_at_a_time: Arc<Mutex<HashSet<i64>>> = Arc::new(Mutex::new(HashSet::new()));
         let notices: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let open: OpenFiles = Arc::new(Mutex::new(VecDeque::new()));
         let workers = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(2)
@@ -90,6 +146,7 @@ impl FrameLoader {
             let ahead_rx = ahead_rx.clone();
             let done_tx = done_tx.clone();
             let (pending, one_at_a_time, notices) = (pending.clone(), one_at_a_time.clone(), notices.clone());
+            let open = open.clone();
             std::thread::Builder::new()
                 .name(format!("ruthos-decode-{i}"))
                 .spawn(move || {
@@ -97,28 +154,29 @@ impl FrameLoader {
                         match req.all_frames {
                             Some(n) => {
                                 let started = std::time::Instant::now();
-                                let decoded = ruthos_dicom::decode_all_frames(&req.path);
-                                if let Ok(frames) = &decoded {
+                                // Each frame goes to the viewer as it is decoded,
+                                // so a long loop starts to show at once.
+                                let mut got = 0u32;
+                                let decoded = ruthos_dicom::decode_all_frames_each(&req.path, &mut |frame| {
+                                    got = got.max(frame.frame_index + 1);
+                                    let key = FrameKey {
+                                        image_id: req.key.image_id,
+                                        frame: frame.frame_index,
+                                    };
+                                    let _ = done_tx.send(LoadedFrame {
+                                        key,
+                                        result: Ok(Arc::new(frame)),
+                                    });
+                                });
+                                if decoded.is_ok() {
                                     tracing::info!(
-                                        "decoded loop of {} frames (image {}) in {:.0} ms",
-                                        frames.len(),
+                                        "decoded loop of {got} frames (image {}) in {:.0} ms",
                                         req.key.image_id,
                                         started.elapsed().as_secs_f64() * 1000.0
                                     );
                                 }
                                 match decoded {
-                                    Ok(frames) => {
-                                        let got = frames.len() as u32;
-                                        for frame in frames {
-                                            let key = FrameKey {
-                                                image_id: req.key.image_id,
-                                                frame: frame.frame_index,
-                                            };
-                                            let _ = done_tx.send(LoadedFrame {
-                                                key,
-                                                result: Ok(Arc::new(frame)),
-                                            });
-                                        }
+                                    Ok(()) => {
                                         for k in got..n {
                                             let key = FrameKey {
                                                 image_id: req.key.image_id,
@@ -148,13 +206,12 @@ impl FrameLoader {
                                                 });
                                             }
                                         }
-                                        let result = decode_frame(&req.path, req.key.frame)
-                                            .map(Arc::new)
-                                            .map_err(|e| e.to_string());
+                                        let result = decode_streamed(&open, req.key, &req.path).map(Arc::new);
                                         let _ = done_tx.send(LoadedFrame { key: req.key, result });
                                     }
+                                    // Frames already sent stay; the rest show the error.
                                     Err(e) => {
-                                        for k in 0..n {
+                                        for k in got..n {
                                             let key = FrameKey {
                                                 image_id: req.key.image_id,
                                                 frame: k,
@@ -168,9 +225,13 @@ impl FrameLoader {
                                 }
                             }
                             None => {
-                                let result = decode_frame(&req.path, req.key.frame)
-                                    .map(Arc::new)
-                                    .map_err(|e| e.to_string());
+                                let streamed = one_at_a_time.lock().contains(&req.key.image_id);
+                                let result = if streamed {
+                                    decode_streamed(&open, req.key, &req.path)
+                                } else {
+                                    decode_frame(&req.path, req.key.frame).map_err(|e| e.to_string())
+                                }
+                                .map(Arc::new);
                                 let _ = done_tx.send(LoadedFrame { key: req.key, result });
                             }
                         }
@@ -186,7 +247,19 @@ impl FrameLoader {
             pending,
             one_at_a_time,
             notices,
+            open,
         }
+    }
+
+    /// Whether this loop is played a frame at a time, being too large to hold
+    /// whole: the viewer keeps only a stretch of it and reads ahead.
+    pub fn is_streamed(&self, image_id: i64) -> bool {
+        self.one_at_a_time.lock().contains(&image_id)
+    }
+
+    /// Close the files kept open for loops no viewer shows any longer.
+    pub fn keep_open_only(&self, shown: &HashSet<i64>) {
+        self.open.lock().retain(|f| shown.contains(&f.image_id));
     }
 
     /// Queue a decode unless one is already in flight for this key.

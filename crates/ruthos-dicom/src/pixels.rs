@@ -95,6 +95,26 @@ pub fn decode_frame(path: &Path, frame_index: u32) -> Result<Frame> {
     decode_object_frame(&obj, frame_index)
 }
 
+/// A file read once, to decode its frames one at a time. A loop too large to
+/// hold whole is played from this: reading a long echo loop from disk costs
+/// some 70 ms, decoding one of its frames a few.
+pub struct OpenImage {
+    obj: dicom_object::DefaultDicomObject,
+}
+
+impl OpenImage {
+    pub fn open(path: &Path) -> Result<Self> {
+        Ok(Self {
+            obj: crate::open::open_any(path, None)?,
+        })
+    }
+
+    /// Decode one frame, through the same guard as [`decode_frame`].
+    pub fn decode_frame(&self, frame_index: u32) -> Result<Frame> {
+        decode_object_frame(&self.obj, frame_index)
+    }
+}
+
 /// Run a third-party decoder so that a panic costs one image rather than the
 /// thread decoding it. The guard turns away what is known to cause one; this
 /// is for what is not. Fuzz builds abort on any panic, so they still report it.
@@ -164,6 +184,15 @@ pub fn decode_object_frame(obj: &dicom_object::DefaultDicomObject, frame_index: 
 /// Decode every frame of a file in one pass. For a cine loop this reads and
 /// parses the file once instead of once per frame.
 pub fn decode_all_frames(path: &Path) -> Result<Vec<Frame>> {
+    let mut out = Vec::new();
+    decode_all_frames_each(path, &mut |f| out.push(f))?;
+    Ok(out)
+}
+
+/// Decode every frame of a file in one pass, handing each over as soon as it
+/// is decoded, so a long loop can be shown before it has all been read. The
+/// guard runs first: an error before any frame means none was handed over.
+pub fn decode_all_frames_each(path: &Path, each: &mut dyn FnMut(Frame)) -> Result<()> {
     let obj = crate::open::open_any(path, None)?;
     let meta = {
         let mut m = meta_from_object(&obj);
@@ -178,7 +207,10 @@ pub fn decode_all_frames(path: &Path) -> Result<Vec<Frame>> {
     crate::guard::check_series_bytes(crate::guard::decoded_bytes(&meta))?;
 
     if jpeg::is_jpeg_transfer_syntax(&meta.transfer_syntax) {
-        return (0..frames).map(|k| decode_jpeg_frame(&obj, meta.clone(), k)).collect();
+        for k in 0..frames {
+            each(decode_jpeg_frame(&obj, meta.clone(), k)?);
+        }
+        return Ok(());
     }
 
     let decoded = contained(|| obj.decode_pixel_data().map_err(|e| DicomError::Pixels(error_chain(&e))))?;
@@ -190,7 +222,6 @@ pub fn decode_all_frames(path: &Path) -> Result<Vec<Frame>> {
     let is_color = decoded.samples_per_pixel() > 1
         || *decoded.photometric_interpretation() == dicom_pixeldata::PhotometricInterpretation::PaletteColor;
     let available = decoded.number_of_frames().max(1).min(frames);
-    let mut out = Vec::with_capacity(available as usize);
     for k in 0..available {
         if is_color {
             let options = ConvertOptions::new().with_voi_lut(VoiLutOption::Default);
@@ -199,7 +230,7 @@ pub fn decode_all_frames(path: &Path) -> Result<Vec<Frame>> {
                 .map_err(|e| DicomError::Pixels(error_chain(&e)))?;
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
-            out.push(Frame {
+            each(Frame {
                 width: w,
                 height: h,
                 frame_index: k,
@@ -213,10 +244,10 @@ pub fn decode_all_frames(path: &Path) -> Result<Vec<Frame>> {
             let values: Vec<f32> = decoded
                 .to_vec_frame::<f32>(k)
                 .map_err(|e| DicomError::Pixels(error_chain(&e)))?;
-            out.push(gray_frame(values, width, height, k, meta.clone())?);
+            each(gray_frame(values, width, height, k, meta.clone())?);
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 fn gray_frame(values: Vec<f32>, width: u32, height: u32, frame_index: u32, meta: InstanceMeta) -> Result<Frame> {

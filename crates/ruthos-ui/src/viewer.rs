@@ -839,6 +839,10 @@ const FRAME_CACHE: usize = 48;
 
 /// Slices read in the direction of scrolling, and behind it.
 const READ_AHEAD: usize = 12;
+
+/// The frames kept of a loop too large to hold whole, which is played a
+/// frame at a time from its file: a stretch around the one shown.
+const STREAMED_FRAMES: usize = 96;
 const READ_BEHIND: usize = 3;
 
 /// Size of the lock control in a cell's bottom-right corner.
@@ -3352,7 +3356,7 @@ impl ViewerState {
                     };
                     self.frames.insert(loaded.key, frame);
                     self.frame_order.push_back(loaded.key);
-                    let (frame_cache, _) = self.cache_limits();
+                    let (frame_cache, _) = self.cache_limits(shared);
                     let shown: HashSet<FrameKey> = self.panes.iter().filter_map(|p| p.key()).collect();
                     // Oldest first, but never what is on screen.
                     for _ in 0..self.frame_order.len() {
@@ -3425,11 +3429,16 @@ impl ViewerState {
         }
     }
 
+    /// Every image this viewer shows.
+    pub fn image_ids(&self) -> impl Iterator<Item = i64> + '_ {
+        self.panes.iter().flat_map(|p| p.images.iter().map(|i| i.id))
+    }
+
     /// Cache sizes grow with the number of cells on screen, and hold every
     /// frame of every loop being shown so cine never re-decodes. Capped so a
     /// 4x4 of long loops cannot exhaust memory; beyond the cap playback
     /// degrades instead of failing.
-    fn cache_limits(&self) -> (usize, usize) {
+    fn cache_limits(&self, shared: &Shared) -> (usize, usize) {
         const MAX_CACHED_FRAMES: usize = 900;
         let cells = self.panes.len();
         let mut seen = std::collections::HashSet::new();
@@ -3438,7 +3447,11 @@ impl ViewerState {
             .iter()
             .filter_map(|p| p.image())
             .filter(|i| seen.insert(i.id))
-            .map(|i| i.number_of_frames.max(1) as usize)
+            .map(|i| match i.number_of_frames.max(1) as usize {
+                // Too large to hold whole: a stretch of it, read ahead.
+                n if n > 1 && shared.loader.is_streamed(i.id) => n.min(STREAMED_FRAMES),
+                n => n,
+            })
             .sum::<usize>()
             .min(MAX_CACHED_FRAMES);
         // A stack being played is kept whole, so each pass is not decoded again.
@@ -3471,7 +3484,7 @@ impl ViewerState {
         ));
         self.gpu.insert(key, g.clone());
         self.gpu_order.push_back(key);
-        let (_, gpu_cache) = self.cache_limits();
+        let (_, gpu_cache) = self.cache_limits(shared);
         while self.gpu_order.len() > gpu_cache {
             if let Some(old) = self.gpu_order.pop_front() {
                 self.gpu.remove(&old);
@@ -5198,6 +5211,24 @@ impl ViewerState {
         {
             let p = &self.panes[k];
             self.ensure_requested(shared, &p.images, p.image_idx, p.frame_idx);
+            // A loop played a frame at a time: the frames coming next, behind
+            // the one wanted, in every cell that plays.
+            if let Some(img) = p
+                .image()
+                .filter(|i| i.number_of_frames > 1 && shared.loader.is_streamed(i.id))
+            {
+                let n = img.number_of_frames as u32;
+                let ahead = if self.playing { self.cine_ahead.max(4) } else { 2 } as u32;
+                for by in 1..=ahead.min(n - 1) {
+                    let key = FrameKey {
+                        image_id: img.id,
+                        frame: (p.frame_idx + by) % n,
+                    };
+                    if !self.frames.contains_key(&key) {
+                        shared.loader.request_ahead(key, shared.resolve(&img.path));
+                    }
+                }
+            }
             if active {
                 let n = p.positions();
                 if n > 1 {

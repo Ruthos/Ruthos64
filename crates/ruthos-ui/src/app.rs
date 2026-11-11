@@ -723,7 +723,17 @@ impl eframe::App for RuthosApp {
         }
 
         // Viewer windows.
+        let open = self.viewers.len();
         self.viewers.retain(|v| !v.lock().close_requested);
+        if self.viewers.len() < open {
+            // Files kept open for the loops of a closed viewer are let go.
+            let shown: std::collections::HashSet<i64> = self
+                .viewers
+                .iter()
+                .flat_map(|v| v.lock().image_ids().collect::<Vec<_>>())
+                .collect();
+            self.shared.loader.keep_open_only(&shown);
+        }
         for v in &self.viewers {
             let (id, title) = {
                 let g = v.lock();
