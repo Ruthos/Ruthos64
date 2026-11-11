@@ -10,7 +10,7 @@ signing is not set up.
 - [ ] **Cloudflare Access.** Sign in through the browser against a real Access application, then search, retrieve and send, and do the same with a service token. Update the Cloudflare lines in `RELEASE_NOTES.md` and [dicomweb.md](dicomweb.md) only after this passes.
 - [ ] **The flagged slice** (refinement test 7). In the panel, click a flagged slice and confirm it jumps there.
 - [ ] **Sharing, by hand.** Press Share for a folder and a zip, with a report and key images, then open the package on a PC that has never had developer tools, from a real stick, and note what SmartScreen says about the signed viewer.
-- [x] **The release workflow.** Checkout, artefact download and the draft release moved to new major versions; the workflow has since run on every tag from v0.1.11-alpha to v0.1.15-alpha, and each draft was checked. Check the draft as in [release-signing.md](release-signing.md).
+- [x] **The release workflow.** Checkout, artefact download and the draft release moved to new major versions; the workflow has since run on every tag from v0.1.11-alpha to v0.1.16-alpha, and each draft was checked. Check the draft as in [release-signing.md](release-signing.md).
 - [ ] **After publishing.** Run `stamp_release.py`, then change "alpha" by hand in the README and the site.
 
 ## Decisions to make
