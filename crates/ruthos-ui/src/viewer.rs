@@ -64,6 +64,8 @@ pub enum Tool {
     Text,
     /// Push the points of outlines to reshape them.
     Repulsor,
+    /// A line or curve on a loop, read as a time and depth strip.
+    AnatomicalMmode,
 }
 
 impl Tool {
@@ -82,7 +84,7 @@ impl Tool {
     ];
 
     /// Drawing and annotation tools, in the Tools menu itself.
-    pub const DRAW: [Tool; 9] = [
+    pub const DRAW: [Tool; 10] = [
         Tool::Arrow,
         Tool::Text,
         Tool::Point,
@@ -92,6 +94,7 @@ impl Tool {
         Tool::Pencil,
         Tool::Brush,
         Tool::Repulsor,
+        Tool::AnatomicalMmode,
     ];
 
     pub fn is_measure(self) -> bool {
@@ -131,7 +134,7 @@ impl Tool {
         }
     }
 
-    pub const ALL: [Tool; 19] = [
+    pub const ALL: [Tool; 20] = [
         Tool::WindowLevel,
         Tool::Move,
         Tool::Zoom,
@@ -151,6 +154,7 @@ impl Tool {
         Tool::Brush,
         Tool::Text,
         Tool::Repulsor,
+        Tool::AnatomicalMmode,
     ];
 
     pub fn label(self) -> &'static str {
@@ -174,6 +178,7 @@ impl Tool {
             Tool::Brush => "Brush",
             Tool::Text => "Text",
             Tool::Repulsor => "Repulsor",
+            Tool::AnatomicalMmode => "Anatomical M-mode",
         }
     }
 
@@ -195,6 +200,7 @@ impl Tool {
             Tool::OpenPolygon | Tool::Pencil => icons::TOOL_LENGTH,
             Tool::Brush | Tool::Repulsor => icons::TOOL_OVAL,
             Tool::Text => icons::ANNOTATIONS,
+            Tool::AnatomicalMmode => icons::TOOL_LENGTH,
         }
     }
 
@@ -221,6 +227,7 @@ impl Tool {
             Tool::Brush => "U",
             Tool::Text => "X",
             Tool::Repulsor => "Q",
+            Tool::AnatomicalMmode => "J",
         }
     }
 
@@ -245,6 +252,7 @@ impl Tool {
             Key::U => Tool::Brush,
             Key::X => Tool::Text,
             Key::Q => Tool::Repulsor,
+            Key::J => Tool::AnatomicalMmode,
             _ => return None,
         })
     }
@@ -269,6 +277,7 @@ impl Tool {
             Tool::Pencil | Tool::Brush => Bitmap::Pencil,
             Tool::Text => Bitmap::Text,
             Tool::Repulsor => Bitmap::Revert,
+            Tool::AnatomicalMmode => Bitmap::Rois,
         }
     }
 
@@ -1595,7 +1604,8 @@ impl ViewerState {
 
     /// Developer options: `RUTHOS_CINE_PLAY=1` starts cine once an image
     /// is up, `RUTHOS_CINE_FPS=<n>` sets the rate for files without one,
-    /// `RUTHOS_CINE_SPEED=0.5` the speed, and
+    /// `RUTHOS_CINE_SPEED=0.5` the speed, `RUTHOS_VIEWER_TOOL=<id>` picks a
+    /// tool by its menu id, and
     /// `RUTHOS_VIEWER_SCREENSHOT=<file.png>` saves this window as drawn
     /// four seconds after it opened.
     fn dev_options(&mut self, ui: &Ui) {
@@ -1609,6 +1619,13 @@ impl ViewerState {
             }
             if std::env::var_os("RUTHOS_CINE_PLAY").is_some() {
                 self.playing = true;
+            }
+            // `RUTHOS_VIEWER_TOOL=amm` chooses a tool by its menu id.
+            if let Some(a) = std::env::var("RUTHOS_VIEWER_TOOL")
+                .ok()
+                .and_then(|v| Self::menu_from_id(&format!("tool:{v}")))
+            {
+                self.pending_menu = Some(a);
             }
         }
         // `RUTHOS_MENU_PREVIEW=1` draws the Measurements menu in a window, and
@@ -2792,6 +2809,16 @@ impl ViewerState {
                 self.angle_draft = None;
                 self.mmode_draft = None;
                 self.polygon_draft = None;
+                if t == Tool::AnatomicalMmode {
+                    match self.current_image().filter(|i| i.number_of_frames > 1).map(|i| i.id) {
+                        Some(id) if self.amm.is_none() => self.amm = Some(crate::amm_ui::AmmView::new(id)),
+                        Some(_) => {}
+                        None => {
+                            self.set_status("Anatomical M-mode needs a loop".to_string());
+                            return;
+                        }
+                    }
+                }
                 self.set_status(format!("Tool: {}", t.label()));
             }
             MenuAction::SetPhase(phase) => {
@@ -3478,6 +3505,7 @@ impl ViewerState {
             "tool:brush" => MenuAction::SetTool(Tool::Brush),
             "tool:text" => MenuAction::SetTool(Tool::Text),
             "tool:repulsor" => MenuAction::SetTool(Tool::Repulsor),
+            "tool:amm" => MenuAction::SetTool(Tool::AnatomicalMmode),
             "undo" => MenuAction::Undo,
             "delete" => MenuAction::DeleteSelected,
             "delete-all" => MenuAction::DeleteAll,
@@ -4054,10 +4082,9 @@ impl ViewerState {
                         for t in Tool::DRAW {
                             let r = tool_menu_row(ui, t.bitmap(), t.label(), self.tool == t, self.right_tool == t);
                             if r.clicked() {
-                                self.tool = t;
-                                changed = true;
+                                self.pending_menu = Some(MenuAction::SetTool(t));
                                 ui.close();
-                            } else if r.secondary_clicked() {
+                            } else if r.secondary_clicked() && t != Tool::AnatomicalMmode {
                                 self.right_tool = t;
                                 changed = true;
                                 ui.close();
@@ -4204,24 +4231,6 @@ impl ViewerState {
                 }
             });
 
-            let looping = self.current_image().is_some_and(|i| i.number_of_frames > 1);
-            if ToolbarButton::new(icons::TOOL_LENGTH, "Anat. M-mode")
-                .width(76.0)
-                .enabled(looping)
-                .selected(self.amm.is_some())
-                .tooltip(if looping {
-                    "Draw a line or curve on this loop to read a time and depth strip along it"
-                } else {
-                    "Anatomical M-mode needs a loop"
-                })
-                .show(ui)
-                .clicked()
-            {
-                self.amm = match (&self.amm, self.current_image()) {
-                    (None, Some(image)) => Some(crate::amm_ui::AmmView::new(image.id)),
-                    _ => None,
-                };
-            }
             let mpr_ok = crate::mpr::series_suits_mpr(&self.panes[self.active].images);
             if ToolbarButton::new(Bitmap::Mpr, "MPR")
                 .enabled(mpr_ok)
@@ -5290,7 +5299,14 @@ impl ViewerState {
         }
 
         let mut transform = ViewTransform::new(rect, frame.width, frame.height, aspect, self.panes[k].view);
-        if let (true, Some(amm)) = (active, self.amm.as_mut()) {
+        let amm_tool = active && self.tool == Tool::AnatomicalMmode;
+        if amm_tool && self.amm.is_none() && response.clicked() {
+            // The window was closed: a click with the tool opens it again.
+            if let Some(id) = self.current_image().filter(|i| i.number_of_frames > 1).map(|i| i.id) {
+                self.amm = Some(crate::amm_ui::AmmView::new(id));
+            }
+        }
+        if let (true, Some(amm)) = (amm_tool, self.amm.as_mut()) {
             amm.input(ui, &response, &transform);
         } else if active && !self.session.following {
             self.handle_input(ui, &response, &mut transform, &frame, &key);
@@ -6102,6 +6118,8 @@ impl ViewerState {
                     }
                 }
             }
+            // Its clicks go to the strip's line, before this.
+            Tool::AnatomicalMmode => {}
             Tool::Repulsor => {
                 // Points of outlines inside the circle are pushed to its
                 // edge; where points spread apart, new ones are added so

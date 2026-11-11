@@ -28,7 +28,7 @@ Ruthos follows the two windows that make up a Horos session.
 
 **Database window.** A source list on the left (local database, albums, smart albums, PACS nodes), an outline table of studies with series as expandable rows, a series thumbnail strip along the bottom, and a Horos-style toolbar for import, export, Query/Retrieve, send, share, anonymise and reports, with modality and date filters and search.
 
-**2D viewer window.** A series thumbnail drawer on the left, the image viewport with the Horos four-corner annotation layout, and the viewer toolbar: Database, Series, Tiling, Play and Speed, Annotations, Tool and Measure, WL/WW, colour table, Anat. M-mode, MPR, Orientation, Reset, Key Image, Export, Movie, Report and Anonymize.
+**2D viewer window.** A series thumbnail drawer on the left, the image viewport with the Horos four-corner annotation layout, and the viewer toolbar: Database, Series, Tiling, Play and Speed, Annotations, Tool and Measure, WL/WW, colour table, MPR, Orientation, Reset, Key Image, Export, Movie, Report and Anonymize.
 
 The annotation layout follows the Horos defaults:
 
@@ -46,7 +46,7 @@ Colour lookup tables are read directly from the Horos definition files, so "Hot 
 
 ## Echo
 
-**Anatomical M-mode.** Draw a straight line at any angle, or a curve through several points, on a 2D loop, and a time and depth strip follows live as you move it. A curve can follow a wall that no single line from the probe could. Click the strip to move the loop to that frame. Save to study makes an M-mode image that the caliper and LV dimension tools measure.
+**Anatomical M-mode.** A tool in the Tools menu, with the drawing tools. Draw a straight line at any angle, or a curve through several points, on a 2D loop, and a time and depth strip follows live as you move it. A curve can follow a wall that no single line from the probe could. Click the strip to move the loop to that frame. Save to study makes an M-mode image that the caliper and LV dimension tools measure.
 
 ![A curved anatomical M-mode strip beside the equine echo loop it was read from](site/img/anatomical-mmode.jpg)
 

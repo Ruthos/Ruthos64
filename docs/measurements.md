@@ -83,8 +83,10 @@ change, and the choice is remembered.
 
 ## Anatomical M-mode
 
-On a 2D ultrasound loop, **Anat. M-mode** in the toolbar reads a time and depth
-strip along a line you draw, at any angle, after the study. Click two points for a
+On a 2D ultrasound loop, the **Anatomical M-mode** tool (J), in the Tools menu
+with the drawing tools, reads a time and depth strip along a line you draw, at any
+angle, after the study. Choosing it opens the strip window; a click with it opens
+the window again after you close it. Click two points for a
 straight line and more for a curve through them. Drag a dot and the strip follows,
 right-click a dot to remove it, and click or drag in the strip to move the loop to
 that frame.
@@ -262,6 +264,6 @@ sets is migrated once, with the original kept as `settings.json.bak`.
 
 ## Menus and context (November 2026)
 
-The Tools menu holds the navigation tools (WL/WW, Move, Zoom, Rotate), the drawing and annotation tools (Arrow, Text, Point, Rectangle, Ellipse, Polygon, Pencil, Brush, Repulsor) and one Measure row. What Measure measures is chosen in the Measurements menu: Caliper, LV dimensions, Open polygon, Angle, Cobb angle or the angle between two lines.
+The Tools menu holds the navigation tools (WL/WW, Move, Zoom, Rotate), the drawing and annotation tools (Arrow, Text, Point, Rectangle, Ellipse, Polygon, Pencil, Brush, Repulsor, Anatomical M-mode) and one Measure row. What Measure measures is chosen in the Measurements menu: Caliper, LV dimensions, Open polygon, Angle, Cobb angle or the angle between two lines.
 
 The Measurements menu starts with the context, **For: Cardiac**, Abdominal, Musculoskeletal or All sets. It follows the study (an echo or a thorax is cardiac; an abdomen, kidney or bladder abdominal; a limb, joint or tendon musculoskeletal; ultrasound with nothing else to go on is cardiac; other studies offer every set) and can be changed in the menu or in the naming popup. Naming a measurement then offers only that context's sets, each as a short submenu. In Preferences > Measurements each set says which contexts it is offered for; a set with none ticked is offered everywhere. The built-in library adds an Abdomen set and a Tendons (equine) set of cross-sectional areas.

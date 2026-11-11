@@ -301,6 +301,12 @@ pub const MENU_BAR: &[MenuDef] = &[
                 Some("Q"),
                 AppAction::Viewer("tool:repulsor"),
             ),
+            item(
+                "viewer:tool:amm",
+                "Anatomical M-mode",
+                Some("J"),
+                AppAction::Viewer("tool:amm"),
+            ),
             Entry::Separator,
             item(
                 "viewer:roi-manager",
