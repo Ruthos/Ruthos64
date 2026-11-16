@@ -92,6 +92,9 @@ pub struct Volume {
     /// Slices whose spacing differs from the rest by more than a fifth
     /// (a gap in the series); measurements across them are approximate.
     pub irregular_spacing: bool,
+    /// The loaded frames describe parallel, calibrated patient planes with
+    /// no appreciable shift between the grids in their own plane.
+    patient_geometry: bool,
 }
 
 /// Why a series cannot be reconstructed, in words for the user.
@@ -100,7 +103,7 @@ pub fn unsuitable(frames: &[Frame]) -> Option<String> {
         return Some("MPR needs a series of at least three slices.".into());
     }
     let first = &frames[0];
-    if first.is_color() {
+    if frames.iter().any(Frame::is_color) {
         return Some("MPR works on grayscale series (CT, MR, CBCT), not colour images.".into());
     }
     if frames
@@ -138,6 +141,7 @@ impl Volume {
 
         // Sort along the normal by position, else by instance number.
         let have_positions = frames.iter().all(|f| f.meta.image_position.is_some());
+        let have_orientations = frames.iter().all(|f| f.meta.image_orientation.is_some());
         if have_positions {
             frames.sort_by(|a, b| {
                 let pa = dot(a.meta.image_position.unwrap_or_default(), ax_z);
@@ -182,6 +186,27 @@ impl Volume {
             (first.meta.slice_thickness.unwrap_or(1.0).max(1e-6), false)
         };
         let origin = first.meta.image_position.unwrap_or([0.0, 0.0, 0.0]);
+        let spacing = [col_mm, row_mm, dz];
+        let axes = [ax_x, ax_y, ax_z];
+        let pixel_tolerance = col_mm.min(row_mm) * 0.5;
+        let patient_geometry = have_positions
+            && have_orientations
+            && spacing.iter().all(|s| s.is_finite() && *s > 0.0)
+            && axes.iter().all(|a| (norm(*a) - 1.0).abs() < 1e-6)
+            && dot(ax_x, ax_y).abs() < 1e-3
+            && frames.iter().all(|f| {
+                let meta = &f.meta;
+                meta.image_position.is_some_and(|position| {
+                    let offset = sub(position, origin);
+                    let in_plane = sub(offset, scale(ax_z, dot(offset, ax_z)));
+                    norm(in_plane) <= pixel_tolerance
+                }) && meta
+                    .pixel_spacing_tag
+                    .or_else(|| meta.pixel_spacing.filter(|_| meta.pixel_spacing_is_calibrated))
+                    .is_some_and(|[row, col]| {
+                        (row - row_mm).abs() <= row_mm * 1e-3 && (col - col_mm).abs() <= col_mm * 1e-3
+                    })
+            });
 
         let (w, h, n) = (first.width as usize, first.height as usize, frames.len());
         let integral = frames.iter().all(|f| match &f.pixels {
@@ -216,14 +241,15 @@ impl Volume {
         };
         Ok(Volume {
             dims: [w, h, n],
-            spacing: [col_mm, row_mm, dz],
+            spacing,
             origin,
-            axes: [ax_x, ax_y, ax_z],
+            axes,
             data,
             min,
             max,
             meta: first.meta.clone(),
             irregular_spacing: irregular,
+            patient_geometry,
         })
     }
 
@@ -386,6 +412,127 @@ impl Plane {
     }
 }
 
+/// The single-plane reconstructions offered in the 2D viewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OrthogonalPlane {
+    #[default]
+    Acquisition,
+    Axial,
+    Coronal,
+    Sagittal,
+}
+
+/// An evenly spaced set of parallel planes through a volume.
+pub struct OrthogonalStack {
+    middle: Plane,
+    normal: V3,
+    span: f64,
+    slices: usize,
+}
+
+impl OrthogonalPlane {
+    pub fn stack(self, volume: &Volume) -> Result<OrthogonalStack> {
+        let expected = volume.dims.into_iter().try_fold(1usize, usize::checked_mul);
+        let actual = match &volume.data {
+            VoxelData::I16(values) => values.len(),
+            VoxelData::F32(values) => values.len(),
+        };
+        if !volume.patient_geometry || volume.dims.contains(&0) || expected != Some(actual) {
+            return Err(CoreError::Other(
+                "Reslice and MIP need calibrated, parallel grayscale slices with valid patient positions.".into(),
+            ));
+        }
+
+        // DICOM patient coordinates are left, posterior, head. Keep the head
+        // up in the longitudinal planes and the patient's left on the right
+        // of both the axial and coronal images.
+        let (right, down) = match self {
+            Self::Acquisition => (volume.axes[0], volume.axes[1]),
+            Self::Axial => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+            Self::Coronal => ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+            Self::Sagittal => ([0.0, 1.0, 0.0], [0.0, 0.0, -1.0]),
+        };
+        let normal = normalize(cross(right, down));
+        let span_along = |direction| {
+            (0..3)
+                .map(|i| dot(direction, volume.axes[i]).abs() * (volume.dims[i] - 1) as f64 * volume.spacing[i])
+                .sum::<f64>()
+        };
+        let spacing_along = |direction| {
+            (0..3)
+                .map(|i| (dot(direction, volume.axes[i]) / volume.spacing[i]).powi(2))
+                .sum::<f64>()
+                .sqrt()
+                .recip()
+        };
+        let [width_mm, height_mm, span] = [right, down, normal].map(span_along);
+        let centre = volume.centre();
+        // As in MPR, keep the largest viewport texture side at 1024 pixels.
+        const MAX_SIDE: f64 = 1024.0;
+        let pixel_mm = spacing_along(right)
+            .min(spacing_along(down))
+            .max(width_mm.max(height_mm) / (MAX_SIDE - 1.0));
+        let steps = (span / spacing_along(normal) - 1e-6).ceil();
+        if !centre.into_iter().all(f64::is_finite)
+            || !pixel_mm.is_finite()
+            || pixel_mm <= 0.0
+            || !steps.is_finite()
+            || steps > 4095.0
+        {
+            return Err(CoreError::Other(
+                "The reslice grid is too large or has invalid spacing.".into(),
+            ));
+        }
+        let side = |extent: f64| ((extent / pixel_mm - 1e-6).ceil() + 1.0).clamp(1.0, MAX_SIDE) as u32;
+        Ok(OrthogonalStack {
+            middle: Plane {
+                centre,
+                right,
+                down,
+                width: side(width_mm),
+                height: side(height_mm),
+                pixel_mm,
+                slab_mm: 0.0,
+                slab_mode: SlabMode::Mip,
+            },
+            normal,
+            span,
+            slices: steps as usize + 1,
+        })
+    }
+}
+
+impl OrthogonalStack {
+    pub fn slices(&self) -> usize {
+        self.slices
+    }
+
+    pub fn nearest_index(&self, position: V3) -> usize {
+        if self.span == 0.0 {
+            return 0;
+        }
+        let fraction = dot(sub(position, self.middle.centre), self.normal) / self.span + 0.5;
+        (fraction.clamp(0.0, 1.0) * (self.slices - 1) as f64).round() as usize
+    }
+
+    pub fn plane(&self, index: usize, slab_mm: f64) -> Plane {
+        let offset = if self.slices > 1 {
+            self.span * (index.min(self.slices - 1) as f64 / (self.slices - 1) as f64 - 0.5)
+        } else {
+            0.0
+        };
+        Plane {
+            centre: add(self.middle.centre, scale(self.normal, offset)),
+            slab_mm: if slab_mm.is_finite() {
+                slab_mm.clamp(0.0, 60.0)
+            } else {
+                0.0
+            },
+            ..self.middle
+        }
+    }
+}
+
 /// Resample a plane into a frame. Pixels outside the volume take the
 /// volume's minimum, so they show as background.
 pub fn reslice(volume: &Volume, plane: &Plane) -> Frame {
@@ -394,9 +541,15 @@ pub fn reslice(volume: &Volume, plane: &Plane) -> Frame {
     let steps: Vec<f64> = if plane.slab_mm > 0.0 {
         let step = volume.finest().max(0.1);
         let n = (plane.slab_mm / step).ceil().max(1.0) as usize;
-        (0..=n)
+        let mut offsets: Vec<_> = (0..=n)
             .map(|i| -plane.slab_mm / 2.0 + plane.slab_mm * i as f64 / n as f64)
-            .collect()
+            .collect();
+        // Preserve the centre plane in a MIP even when the two nearest
+        // equidistant samples straddle it.
+        if plane.slab_mode == SlabMode::Mip && !n.is_multiple_of(2) {
+            offsets.push(0.0);
+        }
+        offsets
     } else {
         vec![0.0]
     };
@@ -446,7 +599,8 @@ pub fn reslice(volume: &Volume, plane: &Plane) -> Frame {
     meta.pixel_spacing_tag = Some([plane.pixel_mm, plane.pixel_mm]);
     meta.imager_pixel_spacing = None;
     meta.us_regions = Vec::new();
-    meta.image_position = Some(plane.point(-0.5, -0.5));
+    // DICOM positions refer to the centre of the first pixel.
+    meta.image_position = Some(plane.point(0.0, 0.0));
     meta.image_orientation = Some([
         plane.right[0],
         plane.right[1],
@@ -489,7 +643,7 @@ mod tests {
 
     /// A synthetic CT: value = x + 10 y + 100 z in voxel indices, 0.5 mm
     /// pixels, 2 mm slices, given out of order.
-    fn volume() -> Volume {
+    fn volume_frames() -> Vec<Frame> {
         let (w, h) = (8u32, 6u32);
         let mut frames = Vec::new();
         for z in [3usize, 0, 4, 1, 2] {
@@ -498,6 +652,7 @@ mod tests {
                 .collect();
             let meta = InstanceMeta {
                 pixel_spacing: Some([0.5, 0.5]),
+                pixel_spacing_tag: Some([0.5, 0.5]),
                 image_position: Some([10.0, 20.0, -30.0 + 2.0 * z as f64]),
                 image_orientation: Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 modality: "CT".into(),
@@ -517,7 +672,91 @@ mod tests {
                 meta,
             });
         }
-        Volume::from_frames(frames).unwrap()
+        frames
+    }
+
+    fn volume() -> Volume {
+        Volume::from_frames(volume_frames()).unwrap()
+    }
+
+    #[test]
+    fn an_inline_stack_has_patient_axes_and_native_slice_positions() {
+        let volume = volume();
+        let rendered = |orientation: OrthogonalPlane, position: V3| {
+            let stack = orientation.stack(&volume).unwrap();
+            let index = stack.nearest_index(position);
+            (stack.slices(), index, reslice(&volume, &stack.plane(index, 0.0)))
+        };
+        let position = volume.to_patient([3.0, 2.0, 2.0]);
+        let (count, index, axial) = rendered(OrthogonalPlane::Axial, position);
+        assert_eq!((count, index, axial.width, axial.height), (5, 2, 8, 6));
+        assert_eq!(axial.value_at(3, 2), Some(223.0));
+        assert_eq!(axial.meta.image_position, Some(volume.to_patient([0.0, 0.0, 2.0])));
+        let (count, index, coronal) = rendered(OrthogonalPlane::Coronal, position);
+        assert_eq!((count, index, coronal.width, coronal.height), (6, 2, 8, 17));
+        assert_eq!(coronal.value_at(3, 8), Some(223.0));
+        assert_eq!(coronal.value_at(3, 0), Some(423.0));
+        let (count, index, sagittal) = rendered(OrthogonalPlane::Sagittal, position);
+        assert_eq!((count, index, sagittal.width, sagittal.height), (8, 4, 6, 17));
+        assert_eq!(sagittal.value_at(2, 8), Some(223.0));
+    }
+
+    #[test]
+    fn acquisition_follows_the_source_even_when_the_scan_is_coronal() {
+        let mut frames = volume_frames();
+        for frame in &mut frames {
+            let [x, y, z] = frame.meta.image_position.unwrap();
+            frame.meta.image_position = Some([x, z, -y]);
+            frame.meta.image_orientation = Some([1.0, 0.0, 0.0, 0.0, 0.0, -1.0]);
+        }
+        let volume = Volume::from_frames(frames).unwrap();
+        let acquisition = OrthogonalPlane::Acquisition.stack(&volume).unwrap();
+        let coronal = OrthogonalPlane::Coronal.stack(&volume).unwrap();
+        assert_eq!(acquisition.slices(), 5);
+        assert_eq!(acquisition.plane(4, 0.0), coronal.plane(4, 0.0));
+        assert_eq!(acquisition.plane(4, 0.0).centre[1], -22.0);
+    }
+
+    #[test]
+    fn an_inline_stack_requires_patient_geometry_on_the_series() {
+        let mut frames = volume_frames();
+        frames[2].meta.image_position = None;
+        let volume = Volume::from_frames(frames).unwrap();
+        assert!(OrthogonalPlane::Axial.stack(&volume).is_err());
+
+        let mut frames = volume_frames();
+        frames[2].meta.pixel_spacing_tag = None;
+        let volume = Volume::from_frames(frames).unwrap();
+        assert!(OrthogonalPlane::Axial.stack(&volume).is_err());
+
+        let mut frames = volume_frames();
+        frames[2].meta.image_position.as_mut().unwrap()[0] += 2.0;
+        let volume = Volume::from_frames(frames).unwrap();
+        assert!(OrthogonalPlane::Acquisition.stack(&volume).is_err());
+    }
+
+    #[test]
+    fn a_color_slice_among_grayscale_slices_is_refused() {
+        let mut frames = volume_frames();
+        let frame = &mut frames[2];
+        frame.pixels = FramePixels::Rgba(vec![255; 4 * (frame.width * frame.height) as usize]);
+        assert!(Volume::from_frames(frames).is_err());
+    }
+
+    #[test]
+    fn a_mip_keeps_the_centre_peak_with_an_odd_number_of_steps() {
+        let mut volume = volume();
+        let [w, h, d] = volume.dims;
+        let mut voxels = vec![0; w * h * d];
+        voxels[(2 * h + 2) * w + 3] = 100;
+        volume.data = VoxelData::I16(voxels);
+        let plane = OrthogonalPlane::Acquisition.stack(&volume).unwrap().plane(2, 0.25);
+        assert_eq!(reslice(&volume, &plane).value_at(3, 2), Some(100.0));
+        let mean = Plane {
+            slab_mode: SlabMode::Mean,
+            ..plane
+        };
+        assert_eq!(reslice(&volume, &mean).value_at(3, 2), Some(93.75));
     }
 
     #[test]
