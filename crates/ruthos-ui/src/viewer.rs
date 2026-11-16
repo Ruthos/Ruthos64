@@ -11,6 +11,7 @@ use std::time::Instant;
 use egui::{Align2, Color32, FontId, Key, PointerButton, Pos2, Rect, Sense, Ui, Vec2, ViewportId};
 
 use ruthos_core::measure::Library;
+use ruthos_core::volume::{self, OrthogonalPlane, V3};
 use ruthos_core::{ImageRow, SeriesRow, StudyRow};
 
 use ruthos_dicom::Frame;
@@ -27,6 +28,9 @@ use crate::shared::Shared;
 use crate::theme;
 #[path = "session_view.rs"]
 mod session_view;
+#[path = "viewer_reformat.rs"]
+mod viewer_reformat;
+use viewer_reformat::{Reformat, ReformatOptions};
 
 use crate::widgets::{
     menu_check, menu_heading, menu_item, menu_item_enabled, menu_item_shortcut, shadow_text, thumbnail_cell,
@@ -570,6 +574,12 @@ impl Pane {
     }
 }
 
+struct ReformatViewer {
+    preview: Reformat,
+    tool: Tool,
+    right_tool: Tool,
+}
+
 pub struct ViewerState {
     pub id: u64,
     pub viewport_id: ViewportId,
@@ -728,6 +738,7 @@ pub struct ViewerState {
     mouse_pixel: Option<(i64, i64)>,
     status: Option<(String, Instant)>,
     wl_drag_anchor: Option<(f32, f32)>,
+    reformat: Option<ReformatViewer>,
     calibrate: Option<CalibrateDraft>,
     pending_clear_calibration: Option<i64>,
 }
@@ -1000,6 +1011,7 @@ impl ViewerState {
             mouse_pixel: None,
             status: None,
             wl_drag_anchor: None,
+            reformat: None,
             calibrate: None,
             pending_clear_calibration: None,
         };
@@ -1060,6 +1072,7 @@ impl ViewerState {
             self.refuse_locked();
             return;
         }
+        self.reformat = None;
         self.persist_pane(shared, a);
         let p = &mut self.panes[a];
         p.series_idx = idx;
@@ -3605,6 +3618,10 @@ impl ViewerState {
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("viewer");
         self.pump_movie();
+        if self.reformat.is_some() {
+            self.show_reformat(ui, shared);
+            return;
+        }
         self.dial_input(ui, shared);
         self.dev_options(ui);
         let ctx = ui.ctx().clone();
@@ -3687,19 +3704,11 @@ impl ViewerState {
         self.draw_cine_banner(ui);
         self.draw_status(ui);
 
-        let dark = true;
-        egui::Panel::top(("viewer-toolbar", self.id))
-            .exact_size(theme::TOOLBAR_HEIGHT)
-            .frame(
-                egui::Frame::NONE
-                    .fill(Color32::TRANSPARENT)
-                    .stroke(theme::toolbar_stroke(dark))
-                    .inner_margin(egui::Margin::symmetric(6, 3)),
-            )
-            .show(ui, |ui| {
-                theme::paint_toolbar_background(ui, true, egui::vec2(6.0, 3.0));
-                self.toolbar(ui, shared)
-            });
+        self.toolbar_panel(ui, shared);
+        if self.reformat.is_some() {
+            ui.ctx().request_repaint();
+            return;
+        }
 
         egui::Panel::left(("viewer-drawer", self.id))
             .exact_size(theme::THUMB_SIZE + 36.0)
@@ -3745,6 +3754,71 @@ impl ViewerState {
         if !self.close_requested && (shared.loader.has_pending() || self.playing) {
             self.repaint_after(ui, std::time::Duration::from_millis(16));
         }
+    }
+
+    fn show_reformat(&mut self, ui: &mut Ui, shared: &Shared) {
+        ui.style_mut().visuals = theme::viewer_visuals();
+        if ui.input(|i| i.viewport().close_requested()) {
+            self.reformat = None;
+            self.persist_series_display(shared);
+            self.close_requested = true;
+            ui.ctx().request_repaint_of(ViewportId::ROOT);
+            return;
+        }
+        if ui.input(|i| i.viewport().focused.unwrap_or(false)) {
+            shared
+                .focused_viewer
+                .store(self.id, std::sync::atomic::Ordering::Relaxed);
+        }
+        // The guided review protocol addresses the original series and image IDs.
+        if shared.session.lock().viewer == Some(self.id) {
+            self.reformat = None;
+            ui.ctx().request_repaint();
+            return;
+        }
+        if let Some(MenuAction::SetTool(tool)) = self.pending_menu.take() {
+            if Tool::NAVIGATE.contains(&tool) {
+                if let Some(reformat) = &mut self.reformat {
+                    reformat.tool = tool;
+                }
+            }
+        }
+        self.toolbar_panel(ui, shared);
+        if let Some(reformat) = &mut self.reformat {
+            let result = egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(Color32::BLACK))
+                .show(ui, |ui| {
+                    reformat.preview.show(ui, shared, reformat.tool, reformat.right_tool)
+                });
+            if let Err(e) = result.inner {
+                self.reformat = None;
+                self.set_status(format!("Could not reformat series: {e}"));
+                ui.ctx().request_repaint();
+            }
+        } else {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    fn toolbar_panel(&mut self, ui: &mut Ui, shared: &Shared) {
+        egui::Panel::top(("viewer-toolbar", self.id))
+            .exact_size(theme::TOOLBAR_HEIGHT)
+            .frame(
+                egui::Frame::NONE
+                    .fill(Color32::TRANSPARENT)
+                    .stroke(theme::toolbar_stroke(true))
+                    .inner_margin(egui::Margin::symmetric(6, 3)),
+            )
+            .show(ui, |ui| {
+                theme::paint_toolbar_background(ui, true, egui::vec2(6.0, 3.0));
+                egui::ScrollArea::horizontal().id_salt("viewer-tools").show(ui, |ui| {
+                    if self.reformat.is_some() {
+                        self.reformat_toolbar(ui, shared);
+                    } else {
+                        self.toolbar(ui, shared);
+                    }
+                });
+            });
     }
 
     /// Ask for the next frame, leaving a gap if the main window needs one.
@@ -4014,6 +4088,121 @@ impl ViewerState {
         }
     }
 
+    fn reformat_controls(&mut self, ui: &mut Ui, shared: &Shared) {
+        let current = self.reformat.as_ref().map(|r| r.preview.options()).unwrap_or_default();
+        let mut options = current;
+        let active = self.reformat.is_some();
+        let frame = self.current_key().and_then(|key| self.frames.get(&key));
+        let eligible = !self.active_locked()
+            && self.session.role.is_none_or(|role| role == crate::session::Role::None)
+            && crate::mpr::series_suits_mpr(&self.panes[self.active].images)
+            && frame.is_some_and(|f| !f.is_color());
+
+        ui.add_enabled_ui(active || eligible, |ui| {
+            viewer_toolbar_menu(ui, Bitmap::Mpr, "Reslice", |ui| {
+                for (plane, label) in [
+                    (OrthogonalPlane::Acquisition, "Acquisition plane"),
+                    (OrthogonalPlane::Axial, "Axial"),
+                    (OrthogonalPlane::Coronal, "Coronal"),
+                    (OrthogonalPlane::Sagittal, "Sagittal"),
+                ] {
+                    if menu_item(ui, label, options.plane == plane).clicked() {
+                        options.plane = plane;
+                        ui.close();
+                    }
+                }
+            });
+            viewer_toolbar_menu(ui, Bitmap::Stack, "MIP", |ui| {
+                if menu_item(ui, "Single slice", options.slab_mm == 0.0).clicked() {
+                    options.slab_mm = 0.0;
+                    ui.close();
+                }
+                if menu_item(ui, "Maximum intensity projection", options.slab_mm > 0.0).clicked()
+                    && options.slab_mm == 0.0
+                {
+                    options.slab_mm = 10.0;
+                }
+                if options.slab_mm > 0.0 {
+                    ui.add(
+                        egui::Slider::new(&mut options.slab_mm, 0.5..=60.0)
+                            .step_by(0.5)
+                            .suffix(" mm"),
+                    );
+                }
+            });
+        })
+        .response
+        .on_disabled_hover_text(
+            "Select an unlocked grayscale series of at least three single-frame slices outside guided review",
+        );
+
+        if options == current {
+            return;
+        }
+        if options == ReformatOptions::default() {
+            self.reformat = None;
+        } else if let Some(reformat) = &mut self.reformat {
+            reformat.preview.set_options(options);
+        } else if let Some(frame) = frame {
+            let pane = &self.panes[self.active];
+            let centre = image_centre(frame);
+            let files = pane.images.iter().map(|image| shared.resolve(&image.path)).collect();
+            let display = (pane.view, pane.clut.clone(), frame.inverted);
+            let preview = Reformat::new(ui.ctx(), files, options, centre, display, self.id);
+            self.reformat = Some(ReformatViewer {
+                preview,
+                tool: if Tool::NAVIGATE.contains(&self.tool) {
+                    self.tool
+                } else {
+                    Tool::Scroll
+                },
+                right_tool: if Tool::NAVIGATE.contains(&self.right_tool) {
+                    self.right_tool
+                } else {
+                    Tool::WindowLevel
+                },
+            });
+            self.playing = false;
+            self.scroll_target = None;
+        }
+    }
+
+    fn reformat_toolbar(&mut self, ui: &mut Ui, shared: &Shared) {
+        ui.horizontal(|ui| {
+            self.reformat_controls(ui, shared);
+            let Some(reformat) = &mut self.reformat else { return };
+            toolbar_separator(ui);
+            let tool_label = format!("Tool: {}", reformat.tool.label());
+            viewer_toolbar_menu(ui, reformat.tool.bitmap(), &tool_label, |ui| {
+                navigation_tools(ui, &mut reformat.tool, &mut reformat.right_tool);
+                ui.label("Click: left button · Right-click: right button");
+            });
+            viewer_toolbar_menu(ui, Bitmap::Wlww, "WL/WW", |ui| {
+                let view = reformat.preview.view_mut();
+                for preset in &shared.presets.presets {
+                    if menu_item(ui, &preset.name, false).clicked() {
+                        view.window_center = preset.center;
+                        view.window_width = preset.width;
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("WL");
+                    ui.add(egui::DragValue::new(&mut view.window_center));
+                    ui.label("WW");
+                    ui.add(egui::DragValue::new(&mut view.window_width).range(1.0..=f32::MAX));
+                });
+            });
+            if ToolbarButton::new(Bitmap::Reset, "Reset").show(ui).clicked() {
+                reformat.preview.reset();
+            }
+            if ui.button("Original images").clicked() {
+                self.reformat = None;
+            }
+        });
+    }
+
     fn toolbar_inner(&mut self, ui: &mut Ui, shared: &Shared) {
         ui.horizontal(|ui| {
             let viewing = ruthos_core::portable::active();
@@ -4060,6 +4249,12 @@ impl ViewerState {
                     self.select_series(shared, chosen);
                 }
             });
+            toolbar_separator(ui);
+
+            self.reformat_controls(ui, shared);
+            if self.reformat.is_some() {
+                return;
+            }
             toolbar_separator(ui);
 
             // Tiling menu (Horos: image tiling and series layout)
@@ -4136,20 +4331,8 @@ impl ViewerState {
                         // One row per tool. Left-click puts it on the left mouse
                         // button, right-click on the right button; a small mouse
                         // glyph beside the name shows which.
-                        let mut changed = false;
                         menu_heading(ui, "Navigate");
-                        for t in Tool::NAVIGATE {
-                            let r = tool_menu_row(ui, t.bitmap(), t.label(), self.tool == t, self.right_tool == t);
-                            if r.clicked() {
-                                self.tool = t;
-                                changed = true;
-                                ui.close();
-                            } else if r.secondary_clicked() {
-                                self.right_tool = t;
-                                changed = true;
-                                ui.close();
-                            }
-                        }
+                        let mut changed = navigation_tools(ui, &mut self.tool, &mut self.right_tool);
                         // Drawing and annotation.
                         menu_heading(ui, "Draw");
                         for t in Tool::DRAW {
@@ -6634,6 +6817,46 @@ fn draft_kind(tool: Tool, a: Vec2, b: Vec2) -> Option<RoiKind> {
 #[allow(dead_code)]
 fn rect_from_points(a: Pos2, b: Pos2) -> Rect {
     Rect::from_two_pos(a, b)
+}
+
+fn image_centre(frame: &Frame) -> Option<V3> {
+    let origin = frame.meta.image_position?;
+    let [rx, ry, rz, dx, dy, dz] = frame.meta.image_orientation?;
+    let [row, col] = frame.meta.pixel_spacing.or(frame.meta.pixel_spacing_tag)?;
+    let horizontal = volume::scale([rx, ry, rz], col * f64::from(frame.width.saturating_sub(1)) / 2.0);
+    let vertical = volume::scale([dx, dy, dz], row * f64::from(frame.height.saturating_sub(1)) / 2.0);
+    Some(volume::add(origin, volume::add(horizontal, vertical)))
+}
+
+fn viewer_toolbar_menu(ui: &mut Ui, bitmap: Bitmap, caption: &str, contents: impl FnOnce(&mut Ui)) {
+    ui.vertical(|ui| {
+        ui.add_space(2.0);
+        ui.menu_button(
+            (
+                icons::image(ui.ctx(), bitmap, 18.0),
+                egui::RichText::new(" ").size(13.0),
+                icons::rich(icons::CARET_DOWN, 11.0),
+            ),
+            contents,
+        );
+        toolbar_caption(ui, caption);
+    });
+}
+
+fn navigation_tools(ui: &mut Ui, tool: &mut Tool, right_tool: &mut Tool) -> bool {
+    for item in Tool::NAVIGATE {
+        let row = tool_menu_row(ui, item.bitmap(), item.label(), *tool == item, *right_tool == item);
+        if row.clicked() {
+            *tool = item;
+        } else if row.secondary_clicked() {
+            *right_tool = item;
+        } else {
+            continue;
+        }
+        ui.close();
+        return true;
+    }
+    false
 }
 
 fn drag_scroll_position(start: usize, dy: f32, height: f32, count: usize) -> usize {
