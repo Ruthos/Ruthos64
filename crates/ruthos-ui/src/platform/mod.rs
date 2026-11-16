@@ -228,6 +228,7 @@ pub const MENU_BAR: &[MenuDef] = &[
                 Some("W"),
                 AppAction::Viewer("tool:wl"),
             ),
+            item("viewer:tool:scroll", "Scroll", None, AppAction::Viewer("tool:scroll")),
             item("viewer:tool:move", "Move", Some("M"), AppAction::Viewer("tool:move")),
             item("viewer:tool:zoom", "Zoom", Some("Z"), AppAction::Viewer("tool:zoom")),
             item(
