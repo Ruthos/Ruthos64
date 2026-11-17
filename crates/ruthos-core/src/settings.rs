@@ -91,7 +91,8 @@ pub struct Settings {
     pub loupe_size: u32,
     /// Shift scales pointer movement by the reciprocal of the magnification.
     pub loupe_fine_movement: bool,
-    /// Length unit for echocardiography values: "mm" or "cm".
+    /// Length unit for echocardiography values: "auto" (mm below 10 mm,
+    /// cm from 10 mm up), "mm" or "cm".
     pub echo_length_unit: String,
     /// PACS that Ruthos can search, retrieve from and send to.
     pub pacs_nodes: Vec<PacsNode>,
@@ -417,7 +418,7 @@ impl Default for Settings {
             loupe_magnification: 4,
             loupe_size: 160,
             loupe_fine_movement: true,
-            echo_length_unit: "mm".to_string(),
+            echo_length_unit: "auto".to_string(),
             pacs_nodes: Vec::new(),
             routing_rules: Vec::new(),
             watch_folders: Vec::new(),

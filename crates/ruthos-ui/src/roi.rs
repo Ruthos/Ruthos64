@@ -303,15 +303,26 @@ impl MmodePhase {
     }
 }
 
-static ECHO_CM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+use ruthos_core::mmode::EchoUnit;
 
-/// Show echo lengths in centimetres (true) or millimetres (false).
-pub fn set_echo_cm(cm: bool) {
-    ECHO_CM.store(cm, std::sync::atomic::Ordering::Relaxed);
+static ECHO_UNIT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The unit echo lengths are shown in, from Preferences.
+pub fn set_echo_unit(unit: EchoUnit) {
+    let n = match unit {
+        EchoUnit::Auto => 0,
+        EchoUnit::Mm => 1,
+        EchoUnit::Cm => 2,
+    };
+    ECHO_UNIT.store(n, std::sync::atomic::Ordering::Relaxed);
 }
 
-pub fn echo_cm() -> bool {
-    ECHO_CM.load(std::sync::atomic::Ordering::Relaxed)
+pub fn echo_unit() -> EchoUnit {
+    match ECHO_UNIT.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => EchoUnit::Mm,
+        2 => EchoUnit::Cm,
+        _ => EchoUnit::Auto,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1249,16 +1260,11 @@ impl Roi {
             RoiKind::Lv { phase, .. } => match self.mmode_values(frame) {
                 Ok((v, basis)) => {
                     let labels = phase.labels();
-                    let cm = echo_cm();
+                    let unit = echo_unit();
                     let parts: Vec<String> = (0..3)
-                        .map(|i| format!("{} {}", labels[i], mmode_number(v[i], cm)))
+                        .map(|i| format!("{} {}", labels[i], mmode_number(v[i], unit)))
                         .collect();
-                    format!(
-                        "{} {}{}",
-                        parts.join("  "),
-                        if cm { "cm" } else { "mm" },
-                        basis.marker()
-                    )
+                    format!("{}{}", parts.join("  "), basis.marker())
                 }
                 Err(e) => e.label().to_string(),
             },
@@ -1422,6 +1428,55 @@ impl Roi {
         selected: bool,
         labels: bool,
     ) -> Option<Rect> {
+        self.draw_avoiding(painter, t, frame, color, selected, labels, &[])
+    }
+
+    /// The lines this measurement draws, on screen: what other labels keep off.
+    pub fn screen_segments(&self, t: &ViewTransform) -> Vec<[Pos2; 2]> {
+        let p: Vec<Pos2> = self.points().into_iter().map(|p| t.image_to_screen(p)).collect();
+        let pairs = |idx: &[(usize, usize)]| -> Vec<[Pos2; 2]> {
+            idx.iter()
+                .filter(|(i, j)| *i < p.len() && *j < p.len())
+                .map(|(i, j)| [p[*i], p[*j]])
+                .collect()
+        };
+        match &self.kind {
+            RoiKind::Length { .. } | RoiKind::Arrow { .. } => pairs(&[(0, 1)]),
+            RoiKind::Lv { .. } => pairs(&[(0, 3)]),
+            RoiKind::Angle { .. } => pairs(&[(0, 1), (1, 2)]),
+            RoiKind::TwoLines { .. } => pairs(&[(0, 1), (2, 3)]),
+            RoiKind::Polyline { .. } => p.windows(2).map(|w| [w[0], w[1]]).collect(),
+            RoiKind::Polygon { .. } | RoiKind::Pencil { .. } if p.len() > 1 => {
+                let mut s: Vec<[Pos2; 2]> = p.windows(2).map(|w| [w[0], w[1]]).collect();
+                s.push([p[p.len() - 1], p[0]]);
+                s
+            }
+            RoiKind::Rect { .. } if p.len() == 2 => {
+                let r = Rect::from_two_pos(p[0], p[1]);
+                vec![
+                    [r.left_top(), r.right_top()],
+                    [r.right_top(), r.right_bottom()],
+                    [r.right_bottom(), r.left_bottom()],
+                    [r.left_bottom(), r.left_top()],
+                ]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Draw, with the value labels put where they cross none of `avoid`
+    /// (the lines of the other measurements on the image) when they can.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_avoiding(
+        &self,
+        painter: &Painter,
+        t: &ViewTransform,
+        frame: &Frame,
+        color: Color32,
+        selected: bool,
+        labels: bool,
+        avoid: &[[Pos2; 2]],
+    ) -> Option<Rect> {
         let shadow_text =
             |painter: &Painter, pos: Pos2, anchor: Align2, text: &str, font: FontId, color: Color32| -> Rect {
                 if labels {
@@ -1454,14 +1509,17 @@ impl Roi {
                 }
                 let _ = selected;
                 let mid = Pos2::new((pts[0].x + pts[1].x) / 2.0, (pts[0].y + pts[1].y) / 2.0);
-                let r = shadow_text(
-                    painter,
-                    mid + Vec2::new(8.0, -8.0),
-                    Align2::LEFT_BOTTOM,
-                    &self.label(frame),
-                    label_font,
-                    color,
-                );
+                let text = self.label(frame);
+                let mut lines = avoid.to_vec();
+                lines.push([pts[0], pts[1]]);
+                let candidates = [
+                    (mid + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM),
+                    (mid + Vec2::new(-8.0, 8.0), Align2::RIGHT_TOP),
+                    (mid + Vec2::new(-8.0, -8.0), Align2::RIGHT_BOTTOM),
+                    (mid + Vec2::new(8.0, 8.0), Align2::LEFT_TOP),
+                ];
+                let (at, align) = clearest(painter, &candidates, &text, &label_font, &lines);
+                let r = shadow_text(painter, at, align, &text, label_font, color);
                 return Some(r);
             }
             RoiKind::Arrow { .. } => {
@@ -1716,25 +1774,40 @@ impl Roi {
                 }
                 let values = self.mmode_values(frame).ok();
                 let labels = phase.labels();
-                let cm = echo_cm();
-                for i in 0..3 {
-                    let mid = pts[i] + (pts[i + 1] - pts[i]) / 2.0;
-                    let text = match &values {
-                        Some((v, _)) => format!("{} {}", labels[i], mmode_number(v[i], cm)),
-                        None => labels[i].to_string(),
-                    };
-                    shadow_text(
-                        painter,
-                        mid + normal * 10.0,
-                        if normal.x >= 0.0 {
-                            Align2::LEFT_CENTER
-                        } else {
-                            Align2::RIGHT_CENTER
-                        },
-                        &text,
-                        font.clone(),
-                        color,
-                    );
+                let unit = echo_unit();
+                let texts: Vec<(Pos2, String)> = (0..3)
+                    .map(|i| {
+                        let mid = pts[i] + (pts[i + 1] - pts[i]) / 2.0;
+                        let text = match &values {
+                            Some((v, _)) => format!("{} {}", labels[i], mmode_number(v[i], unit)),
+                            None => labels[i].to_string(),
+                        };
+                        (mid, text)
+                    })
+                    .collect();
+                let place = |side: Vec2| -> Vec<(Pos2, Align2)> {
+                    texts
+                        .iter()
+                        .map(|(mid, _)| {
+                            let align = if side.x >= 0.0 {
+                                Align2::LEFT_CENTER
+                            } else {
+                                Align2::RIGHT_CENTER
+                            };
+                            (*mid + side * 10.0, align)
+                        })
+                        .collect()
+                };
+                let hits = |side: Vec2| -> usize {
+                    place(side)
+                        .iter()
+                        .zip(&texts)
+                        .map(|((at, align), (_, text))| crossings(label_box(painter, *at, *align, text, &font), avoid))
+                        .sum()
+                };
+                let side = if hits(-normal) < hits(normal) { -normal } else { normal };
+                for ((at, align), (_, text)) in place(side).into_iter().zip(&texts) {
+                    shadow_text(painter, at, align, text, font.clone(), color);
                 }
                 let title = match (&self.name, &values) {
                     (Some(n), _) => n.clone(),
@@ -1754,6 +1827,56 @@ impl Roi {
         }
         None
     }
+}
+
+/// The box a label takes, a little larger than its text.
+fn label_box(painter: &Painter, at: Pos2, align: Align2, text: &str, font: &FontId) -> Rect {
+    let size = painter
+        .layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE)
+        .size();
+    align.anchor_size(at, size).expand(2.0)
+}
+
+/// How many of the lines cross a box.
+fn crossings(r: Rect, lines: &[[Pos2; 2]]) -> usize {
+    lines.iter().filter(|s| segment_meets_rect(s[0], s[1], r)).count()
+}
+
+fn segment_meets_rect(a: Pos2, b: Pos2, r: Rect) -> bool {
+    if r.contains(a) || r.contains(b) {
+        return true;
+    }
+    let edges = [
+        (r.left_top(), r.right_top()),
+        (r.right_top(), r.right_bottom()),
+        (r.right_bottom(), r.left_bottom()),
+        (r.left_bottom(), r.left_top()),
+    ];
+    edges.iter().any(|(p, q)| segments_cross(a, b, *p, *q))
+}
+
+fn segments_cross(a: Pos2, b: Pos2, c: Pos2, d: Pos2) -> bool {
+    let side = |p: Pos2, q: Pos2, r: Pos2| (q - p).x * (r - p).y - (q - p).y * (r - p).x;
+    let (d1, d2) = (side(c, d, a), side(c, d, b));
+    let (d3, d4) = (side(a, b, c), side(a, b, d));
+    ((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0))
+}
+
+/// Of the places a label could go, the first that crosses none of the
+/// lines, or failing that the one that crosses fewest.
+fn clearest(
+    painter: &Painter,
+    candidates: &[(Pos2, Align2)],
+    text: &str,
+    font: &FontId,
+    lines: &[[Pos2; 2]],
+) -> (Pos2, Align2) {
+    candidates
+        .iter()
+        .enumerate()
+        .min_by_key(|(i, (at, align))| (crossings(label_box(painter, *at, *align, text, font), lines), *i))
+        .map(|(_, c)| *c)
+        .unwrap_or(candidates[0])
 }
 
 /// A dashed line from `a` to `b`.
@@ -1941,12 +2064,9 @@ pub fn roi_color(selected: bool) -> Color32 {
 }
 
 /// An echo length without its unit, in the chosen unit.
-pub fn mmode_number(mm: f64, cm: bool) -> String {
-    if cm {
-        format!("{:.2}", mm / 10.0)
-    } else {
-        format!("{mm:.1}")
-    }
+/// An LV M-mode value with its unit, always.
+pub fn mmode_number(mm: f64, unit: EchoUnit) -> String {
+    ruthos_core::mmode::echo_value(mm, unit)
 }
 
 #[cfg(test)]
@@ -2149,6 +2269,21 @@ mod tests {
     }
 
     #[test]
+    fn a_label_box_knows_which_lines_cross_it() {
+        let r = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0));
+        // Through the box, ending inside it, and missing it.
+        assert!(segment_meets_rect(Pos2::new(-5.0, 5.0), Pos2::new(15.0, 5.0), r));
+        assert!(segment_meets_rect(Pos2::new(5.0, 5.0), Pos2::new(50.0, 50.0), r));
+        assert!(!segment_meets_rect(Pos2::new(20.0, 0.0), Pos2::new(20.0, 10.0), r));
+        assert!(!segment_meets_rect(Pos2::new(-5.0, -5.0), Pos2::new(-1.0, 20.0), r));
+        let lines = [
+            [Pos2::new(5.0, -5.0), Pos2::new(5.0, 15.0)],
+            [Pos2::new(30.0, 0.0), Pos2::new(30.0, 9.0)],
+        ];
+        assert_eq!(crossings(r, &lines), 1);
+    }
+
+    #[test]
     fn a_caliper_on_a_strip_reads_what_its_axis_measures() {
         let f = mmode_frame();
         let line = |a: (f32, f32), b: (f32, f32)| {
@@ -2181,11 +2316,14 @@ mod tests {
         let (v, basis) = roi.mmode_values(&f).unwrap();
         assert_eq!(v, [10.0, 40.0, 10.0]);
         assert_eq!(basis, SpacingBasis::UltrasoundRegion);
-        set_echo_cm(false);
-        assert_eq!(roi.value_text(&f), "IVSd 10.0  LVIDd 40.0  LVFWd 10.0 mm");
-        set_echo_cm(true);
-        assert_eq!(roi.value_text(&f), "IVSd 1.00  LVIDd 4.00  LVFWd 1.00 cm");
-        set_echo_cm(false);
+        set_echo_unit(EchoUnit::Mm);
+        assert_eq!(roi.value_text(&f), "IVSd 10.0 mm  LVIDd 40.0 mm  LVFWd 10.0 mm");
+        set_echo_unit(EchoUnit::Cm);
+        assert_eq!(roi.value_text(&f), "IVSd 1.00 cm  LVIDd 4.00 cm  LVFWd 1.00 cm");
+        set_echo_unit(EchoUnit::Auto);
+        assert_eq!(roi.value_text(&f), "IVSd 1.00 cm  LVIDd 4.00 cm  LVFWd 1.00 cm");
+        assert_eq!(mmode_number(5.12, EchoUnit::Auto), "5.1 mm", "below 10 mm, in mm");
+        set_echo_unit(EchoUnit::Mm);
         let rec = roi.to_record(1, 0, Some(&f));
         assert_eq!(
             (rec.kind.as_str(), rec.value, rec.unit.as_str()),
