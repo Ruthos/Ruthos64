@@ -1459,13 +1459,13 @@ impl PrefsState {
         Self::heading(ui, "Echocardiography");
         ui.horizontal(|ui| {
             ui.label("Lengths in");
-            for (v, label) in [("mm", "millimetres"), ("cm", "centimetres")] {
+            for (v, label) in [("auto", "automatic"), ("mm", "millimetres"), ("cm", "centimetres")] {
                 ui.selectable_value(&mut self.draft.echo_length_unit, v.to_string(), label);
             }
         });
         Self::hint(
             ui,
-            "The unit of LV M-mode values on the image and in reports. Calculations work in centimetres regardless.",
+            "The unit of LV M-mode values on the image and in reports. Automatic shows millimetres below 10 mm and centimetres from 10 mm up. Every value carries its unit. Calculations work in centimetres regardless.",
         );
         ui.add_space(16.0);
 

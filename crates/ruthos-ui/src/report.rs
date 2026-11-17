@@ -123,7 +123,7 @@ impl ReportState {
     /// shortening, in the echo length unit from Preferences.
     fn mmode_block(&self, shared: &Shared) -> Vec<ReportMeasurement> {
         use ruthos_core::mmode::{echo_value, mean_of_sets, sets_from_rows, KEYS_D, KEYS_S, LABELS_D, LABELS_S};
-        let cm = shared.settings.lock().echo_length_unit == "cm";
+        let cm = ruthos_core::mmode::EchoUnit::from_key(&shared.settings.lock().echo_length_unit);
         let rows = shared.db.mmode_rows_for_study(self.study.id).unwrap_or_default();
         let sets = sets_from_rows(rows);
         let numbered = sets.len() > 1;

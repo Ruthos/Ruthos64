@@ -219,8 +219,34 @@ pub fn latest_per_series(rows: &[MmodeRow], series_id: i64) -> (Option<&MmodeRow
     (newest('d'), newest('s'))
 }
 
-/// An echo length in the chosen unit: "4.21 cm" or "42.1 mm".
-pub fn echo_value(mm: f64, cm: bool) -> String {
+/// The unit echo lengths are shown in (Preferences > Viewer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EchoUnit {
+    /// Millimetres below 10 mm, centimetres from 10 mm up.
+    #[default]
+    Auto,
+    Mm,
+    Cm,
+}
+
+impl EchoUnit {
+    /// From the setting's text: "mm", "cm", or anything else for automatic.
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "mm" => EchoUnit::Mm,
+            "cm" => EchoUnit::Cm,
+            _ => EchoUnit::Auto,
+        }
+    }
+}
+
+/// An echo length with its unit, always: "4.21 cm" or "4.2 mm".
+pub fn echo_value(mm: f64, unit: EchoUnit) -> String {
+    let cm = match unit {
+        EchoUnit::Cm => true,
+        EchoUnit::Mm => false,
+        EchoUnit::Auto => mm.abs() >= 10.0,
+    };
     if cm {
         format!("{:.2} cm", mm / 10.0)
     } else {
@@ -325,7 +351,12 @@ mod tests {
 
     #[test]
     fn echo_units() {
-        assert_eq!(echo_value(42.1, false), "42.1 mm");
-        assert_eq!(echo_value(42.1, true), "4.21 cm");
+        assert_eq!(echo_value(42.1, EchoUnit::Mm), "42.1 mm");
+        assert_eq!(echo_value(42.1, EchoUnit::Cm), "4.21 cm");
+        // Automatic: mm below 10 mm, cm from 10 mm up, the unit always shown.
+        assert_eq!(echo_value(5.1, EchoUnit::Auto), "5.1 mm");
+        assert_eq!(echo_value(10.7, EchoUnit::Auto), "1.07 cm");
+        assert_eq!(EchoUnit::from_key("cm"), EchoUnit::Cm);
+        assert_eq!(EchoUnit::from_key("auto"), EchoUnit::Auto);
     }
 }

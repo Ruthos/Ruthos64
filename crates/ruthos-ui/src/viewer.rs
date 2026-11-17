@@ -3590,7 +3590,7 @@ impl ViewerState {
         {
             let st = shared.settings.lock();
             self.loupe = LoupeSettings::from(&*st);
-            crate::roi::set_echo_cm(st.echo_length_unit == "cm");
+            crate::roi::set_echo_unit(ruthos_core::mmode::EchoUnit::from_key(&st.echo_length_unit));
         }
         {
             let library = shared.library.lock().clone();
@@ -5431,9 +5431,25 @@ impl ViewerState {
         }
         let hidden = (self.study.teaching_answer_key && !self.reveal_answers) || !self.show_rois;
         if let Some(list) = self.rois.get(&key).filter(|_| !hidden) {
+            // Each label keeps off the other measurements' lines where it can.
+            let lines: Vec<Vec<[Pos2; 2]>> = list.iter().map(|r| r.screen_segments(&transform)).collect();
             for (i, roi) in list.iter().enumerate() {
                 let sel = active && self.selected_roi == Some(i);
-                let label = roi.draw_opts(&painter, &transform, &frame, roi_color(sel), sel, self.show_labels);
+                let avoid: Vec<[Pos2; 2]> = lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .flat_map(|(_, s)| s.iter().copied())
+                    .collect();
+                let label = roi.draw_avoiding(
+                    &painter,
+                    &transform,
+                    &frame,
+                    roi_color(sel),
+                    sel,
+                    self.show_labels,
+                    &avoid,
+                );
                 if sel {
                     roi.draw_handles(&painter, &transform, Some(self.active_handle), roi_color(true));
                 }
