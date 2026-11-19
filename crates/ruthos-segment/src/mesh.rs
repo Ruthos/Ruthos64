@@ -285,13 +285,13 @@ pub enum Smoothing {
 pub fn sphere_mask(grid: Grid, radius: f64) -> Mask {
     let mut m = Mask::empty(grid);
     let centre: [f64; 3] = std::array::from_fn(|a| (grid.dims[a] - 1) as f64 * grid.spacing[a] / 2.0);
-    for i in 0..grid.len() {
+    for (i, on) in m.on.iter_mut().enumerate() {
         let p = grid.position(i);
         let r: f64 = (0..3)
             .map(|a| (p[a] as f64 * grid.spacing[a] - centre[a]).powi(2))
             .sum::<f64>()
             .sqrt();
-        m.on[i] = r <= radius;
+        *on = r <= radius;
     }
     m
 }
