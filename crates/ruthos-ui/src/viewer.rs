@@ -4515,6 +4515,7 @@ impl ViewerState {
                 } else {
                     shared.image_thumbnail(image)
                 };
+                let flow = shared.shows_colour_flow(if looping { image.series_id } else { -image.id });
                 let caption = entry
                     .clock()
                     .unwrap_or_else(|| format!("Image {}", image.instance_number.unwrap_or(i as i64 + 1)));
@@ -4524,7 +4525,7 @@ impl ViewerState {
                     "Still".to_string()
                 };
                 let selected = current == Some(image.id);
-                let r = thumbnail_cell(ui, tex.as_ref(), &caption, &sub, selected, theme::THUMB_SIZE);
+                let r = thumbnail_cell(ui, tex.as_ref(), &caption, &sub, selected, theme::THUMB_SIZE, flow);
                 if selected && follow {
                     r.scroll_to_me(None);
                 }
@@ -4581,6 +4582,7 @@ impl ViewerState {
                     &sub,
                     i == self.panes[self.active].series_idx,
                     theme::THUMB_SIZE,
+                    shared.shows_colour_flow(s.id),
                 );
                 if r.clicked() {
                     clicked = Some(i);
