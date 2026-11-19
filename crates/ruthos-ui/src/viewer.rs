@@ -4883,10 +4883,9 @@ impl ViewerState {
 
     /// Read a loop's trim from the database, once.
     fn ensure_trim(&mut self, shared: &Shared, image_id: i64) {
-        if !self.trims.contains_key(&image_id) {
-            let trim = shared.db.loop_trim(image_id).ok().flatten();
-            self.trims.insert(image_id, trim);
-        }
+        self.trims
+            .entry(image_id)
+            .or_insert_with(|| shared.db.loop_trim(image_id).ok().flatten());
     }
 
     /// The trim of the loop pane `k` shows, if it is one loop and trimmed.
