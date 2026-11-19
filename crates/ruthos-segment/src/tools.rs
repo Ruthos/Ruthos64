@@ -532,9 +532,9 @@ mod tests {
         // Two blocks of bone with a one-voxel crack between them.
         let g = cube(20);
         let mut bone = Mask::empty(g);
-        for i in 0..g.len() {
+        for (i, on) in bone.on.iter_mut().enumerate() {
             let [x, y, z] = g.position(i);
-            bone.on[i] = (3..16).contains(&x) && x != 9 && (5..15).contains(&y) && (5..15).contains(&z);
+            *on = (3..16).contains(&x) && x != 9 && (5..15).contains(&y) && (5..15).contains(&z);
         }
         assert_eq!(islands(&bone).len(), 2);
         assert_eq!(islands(&close(&bone, 1.5)).len(), 1);
@@ -559,10 +559,10 @@ mod tests {
     fn holes_fill_but_open_spaces_do_not() {
         let g = cube(9);
         let mut shell = Mask::empty(g);
-        for i in 0..g.len() {
+        for (i, on) in shell.on.iter_mut().enumerate() {
             let [x, y, z] = g.position(i);
             let on_wall = [x, y, z].iter().any(|v| *v == 2 || *v == 6);
-            shell.on[i] = on_wall && [x, y, z].iter().all(|v| (2..=6).contains(v));
+            *on = on_wall && [x, y, z].iter().all(|v| (2..=6).contains(v));
         }
         assert_eq!(fill_holes(&shell).count(), 125);
         let mut open_box = shell.clone();
