@@ -1774,12 +1774,12 @@ impl Roi {
                 }
                 let values = self.mmode_values(frame).ok();
                 let labels = phase.labels();
-                let unit = echo_unit();
+                let echo = echo_unit();
                 let texts: Vec<(Pos2, String)> = (0..3)
                     .map(|i| {
                         let mid = pts[i] + (pts[i + 1] - pts[i]) / 2.0;
                         let text = match &values {
-                            Some((v, _)) => format!("{} {}", labels[i], mmode_number(v[i], unit)),
+                            Some((v, _)) => format!("{} {}", labels[i], mmode_number(v[i], echo)),
                             None => labels[i].to_string(),
                         };
                         (mid, text)
