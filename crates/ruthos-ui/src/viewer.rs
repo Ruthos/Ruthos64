@@ -351,6 +351,9 @@ pub enum TilingMode {
     Series,
     /// One series of the study per cell.
     Study,
+    /// One image (a loop or a still) per cell, each chosen for its own
+    /// cell: an echo's views side by side.
+    Images,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1110,6 +1113,33 @@ impl ViewerState {
                 }
                 self.active = (current.series_idx - first).min(panes.len().saturating_sub(1));
             }
+            TilingMode::Images => {
+                // The image shown, then those after it in the order they
+                // were taken.
+                let order = self.image_order(shared);
+                let here = current
+                    .image()
+                    .and_then(|i| order.iter().position(|o| o.id == i.id))
+                    .unwrap_or(0);
+                let first = here.min(order.len().saturating_sub(cells));
+                for image in order.iter().skip(first).take(cells) {
+                    panes.push(self.image_pane(shared, image));
+                }
+                if panes.is_empty() {
+                    panes.push(current.clone());
+                }
+                self.active = (here - first).min(panes.len() - 1);
+                // Spare tiles wait, empty, for an image to be put in them.
+                while panes.len() < cells {
+                    let mut empty = current.clone();
+                    empty.images.clear();
+                    empty.image_idx = 0;
+                    empty.frame_idx = 0;
+                    empty.locked = false;
+                    empty.cine = None;
+                    panes.push(empty);
+                }
+            }
         }
         self.panes = panes;
         self.tiling = tiling;
@@ -1120,7 +1150,95 @@ impl ViewerState {
         self.set_status(match tiling.mode {
             TilingMode::Series => format!("Tiling {}: images of this series", tiling.label()),
             TilingMode::Study => format!("Tiling {}: series of this study", tiling.label()),
+            TilingMode::Images => format!(
+                "Tiling {}: click a tile, then the loop or still to show in it",
+                tiling.label()
+            ),
         });
+    }
+
+    fn tiled_images(&self) -> bool {
+        self.tiling.mode == TilingMode::Images && self.panes.len() > 1
+    }
+
+    /// The study's images in the order the tiles take them: the timeline's
+    /// for an echo, else series by series.
+    fn image_order(&self, shared: &Shared) -> Vec<ImageRow> {
+        if !self.timeline.is_empty() {
+            return self.timeline.iter().map(|e| e.image.clone()).collect();
+        }
+        self.series
+            .iter()
+            .flat_map(|s| shared.db.images_for_series(s.id).unwrap_or_default())
+            .collect()
+    }
+
+    /// A cell holding just one image of the study.
+    fn image_pane(&self, shared: &Shared, image: &ImageRow) -> Pane {
+        let idx = self.series.iter().position(|s| s.id == image.series_id).unwrap_or(0);
+        let mut p = Pane::new(shared, &self.series[idx], idx);
+        p.images = vec![image.clone()];
+        p.image_idx = 0;
+        p.frame_idx = 0;
+        p
+    }
+
+    /// Put an image in the active cell of a grid of images, and move on to
+    /// the next cell, so a grid fills one click at a time.
+    fn place_in_active_tile(&mut self, shared: &Shared, image: &ImageRow) {
+        let a = self.active;
+        if self.panes[a].locked {
+            self.refuse_locked();
+            return;
+        }
+        if self.panes[a].image().is_some_and(|i| i.id == image.id) {
+            return;
+        }
+        self.persist_pane(shared, a);
+        self.panes[a] = self.image_pane(shared, image);
+        self.selected_roi = None;
+        self.drag_draft = None;
+        self.angle_draft = None;
+        let n = self.panes.len();
+        if let Some(next) = (1..n).map(|k| (a + k) % n).find(|k| !self.panes[*k].locked) {
+            self.active = next;
+        }
+    }
+
+    /// Page a grid of images through the study a gridful at a time.
+    fn page_tiles(&mut self, shared: &Shared, delta: i64) {
+        let order = self.image_order(shared);
+        let cells = self.tiling.cells().max(1);
+        let first = self.panes[0]
+            .image()
+            .and_then(|i| order.iter().position(|o| o.id == i.id))
+            .unwrap_or(0) as i64;
+        let last_page = order.len().saturating_sub(cells) as i64;
+        let start = (first + delta * cells as i64).clamp(0, last_page) as usize;
+        if start as i64 == first {
+            return;
+        }
+        let page: Vec<&ImageRow> = order.iter().skip(start).take(cells).collect();
+        for k in 0..self.panes.len() {
+            if self.panes[k].locked {
+                continue;
+            }
+            self.persist_pane(shared, k);
+            match page.get(k) {
+                Some(image) => self.panes[k] = self.image_pane(shared, image),
+                None => {
+                    self.panes[k].images.clear();
+                    self.panes[k].cine = None;
+                }
+            }
+        }
+        self.selected_roi = None;
+        self.set_status(format!(
+            "Images {} to {} of {}",
+            start + 1,
+            (start + cells).min(order.len()),
+            order.len()
+        ));
     }
 
     fn tiled_series(&self) -> bool {
@@ -3796,7 +3914,7 @@ impl ViewerState {
             self.timeline = entries;
         }
         let from_start = std::mem::take(&mut self.timeline_from_start);
-        if self.on_timeline() {
+        if self.on_timeline() && !self.tiled_images() {
             let current = self.current_image().map(|i| i.id);
             let here = self.timeline.iter().position(|e| Some(e.image.id) == current);
             self.show_timeline_entry(shared, if from_start { 0 } else { here.unwrap_or(0) });
@@ -3836,6 +3954,11 @@ impl ViewerState {
     /// Show an image of the timeline in the active cell.
     fn show_timeline_entry(&mut self, shared: &Shared, index: usize) {
         let Some(entry) = self.timeline.get(index) else { return };
+        if self.tiled_images() {
+            let image = entry.image.clone();
+            self.place_in_active_tile(shared, &image);
+            return;
+        }
         let (series_id, image_id) = (entry.image.series_id, entry.image.id);
         let still = entry.image.number_of_frames <= 1;
         let Some(series) = self.series.iter().position(|s| s.id == series_id) else {
@@ -3861,6 +3984,10 @@ impl ViewerState {
 
     /// Move along the timeline, across stills and loops alike.
     fn step_timeline(&mut self, shared: &Shared, delta: i64) {
+        if self.tiled_images() {
+            self.page_tiles(shared, delta);
+            return;
+        }
         let current = self.current_image().map(|i| i.id);
         let Some(here) = self.timeline.iter().position(|e| Some(e.image.id) == current) else {
             return;
@@ -4059,7 +4186,9 @@ impl ViewerState {
                 let caption = match self.tiling.mode {
                     TilingMode::Series => "Tiling",
                     TilingMode::Study => "Tiling: series",
+                    TilingMode::Images => "Tiling: images",
                 };
+                let echo = !self.timeline.is_empty();
                 let mut chosen: Option<Tiling> = None;
                 ui.menu_button(
                     (
@@ -4068,16 +4197,32 @@ impl ViewerState {
                         icons::rich(icons::CARET_DOWN, 11.0),
                     ),
                     |ui| {
-                        for (mode, title) in [
-                            (TilingMode::Series, "Images of this series"),
-                            (TilingMode::Study, "Series of this study"),
-                        ] {
+                        // An echo's loops and stills each want their own
+                        // tile; a stack's slices follow one another.
+                        let modes: &[(TilingMode, &str)] = if echo {
+                            &[
+                                (TilingMode::Images, "Each tile its own loop or still"),
+                                (TilingMode::Series, "Tiles follow one series"),
+                                (TilingMode::Study, "Series of this study"),
+                            ]
+                        } else {
+                            &[
+                                (TilingMode::Series, "Images of this series"),
+                                (TilingMode::Study, "Series of this study"),
+                                (TilingMode::Images, "Each tile its own image"),
+                            ]
+                        };
+                        for (i, &(mode, title)) in modes.iter().enumerate() {
+                            if i > 0 {
+                                ui.add_space(4.0);
+                                ui.separator();
+                            }
                             menu_heading(ui, title);
                             ui.horizontal_wrapped(|ui| {
                                 ui.set_max_width(236.0);
                                 for (rows, cols) in Tiling::GRIDS {
                                     let t = Tiling { mode, rows, cols };
-                                    let enabled = mode == TilingMode::Series
+                                    let enabled = mode != TilingMode::Study
                                         || rows * cols <= self.series.len().max(1)
                                         || rows * cols == 1;
                                     let r = crate::widgets::tiling_button(ui, rows, cols, self.tiling == t, enabled);
@@ -4087,10 +4232,6 @@ impl ViewerState {
                                     }
                                 }
                             });
-                            if mode == TilingMode::Series {
-                                ui.add_space(4.0);
-                                ui.separator();
-                            }
                         }
                     },
                 );
@@ -4881,7 +5022,7 @@ impl ViewerState {
             return;
         }
 
-        let targets: Vec<usize> = if self.tiling.mode == TilingMode::Study && self.panes.len() > 1 {
+        let targets: Vec<usize> = if self.tiling.mode != TilingMode::Series && self.panes.len() > 1 {
             (0..self.panes.len()).collect()
         } else {
             vec![self.active]
@@ -5423,7 +5564,11 @@ impl ViewerState {
                 &painter,
                 rect.center(),
                 Align2::CENTER_CENTER,
-                "No images in this series",
+                if self.tiling.mode == TilingMode::Images {
+                    "Click here, then a loop or still"
+                } else {
+                    "No images in this series"
+                },
                 FontId::proportional(16.0),
                 Color32::from_gray(160),
             );
@@ -6592,6 +6737,7 @@ fn parse_tiling(v: &str) -> Option<Tiling> {
     let mode = match mode {
         "series" => TilingMode::Series,
         "study" => TilingMode::Study,
+        "images" => TilingMode::Images,
         _ => return None,
     };
     let (r, c) = grid.split_once('x')?;

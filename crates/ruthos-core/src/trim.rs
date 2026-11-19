@@ -81,7 +81,7 @@ pub fn write_trimmed_copy(source: &Path, out: &Path, trim: LoopTrim) -> Result<S
     let pixels = obj
         .take_element(tags::PIXEL_DATA)
         .map_err(|_| CoreError::Other("the image has no pixel data".into()))?;
-    let (header, value) = (pixels.header().clone(), pixels.into_value());
+    let (header, value) = (*pixels.header(), pixels.into_value());
     let value = match value {
         Value::PixelSequence(seq) => {
             let (table, fragments) = seq.into_parts();
@@ -105,7 +105,7 @@ pub fn write_trimmed_copy(source: &Path, out: &Path, trim: LoopTrim) -> Result<S
                 .unwrap_or_default();
             // 4:2:2 holds two samples a pixel, whatever it says.
             let samples = if photometric.ends_with("_422") { 2 } else { samples };
-            if bits % 8 != 0 {
+            if !bits.is_multiple_of(8) {
                 return Err(CoreError::Other("the image's pixel packing cannot be trimmed".into()));
             }
             let frame_len = rows * cols * samples * bits / 8;
