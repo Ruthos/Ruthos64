@@ -87,6 +87,9 @@ See [docs/measurements.md](docs/measurements.md).
 
 - **Anatomical M-mode.** Draw a straight line at any angle, or a curve through several points, on a 2D loop, and a time and depth strip follows live. A curve can follow a wall that no line from the probe could. Saved to the study, the strip is an M-mode image the caliper and LV tools measure.
 - **Timeline.** Stills and loops in the order the machine stored them, with times and long pauses, instead of each loop as a series of its own. Page Up and Page Down move along the exam.
+- **Colour thumbnails.** Timeline and browser thumbnails keep their colour, and a CF badge marks those that carry colour flow.
+- **Loop trimming.** Set a loop's first and last frame with `[` and `]` or the buttons by the frame slider, for example to keep one cardiac cycle. The trim is kept with the study, playback and exported movies follow it, and Save copy writes a trimmed DICOM copy, marked as derived, beside the original.
+- **A loop or still per tile.** On an echo, tiling gives each tile its own image: click a tile, then pick a loop or still from the timeline, and every tile plays at once.
 
 A strip has only the frames of its loop, far fewer than the thousand or so lines a second of a true M-mode, so it suits dimensions better than fine timing; every strip and report states the rate it was derived at.
 
