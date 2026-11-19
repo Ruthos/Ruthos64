@@ -3819,7 +3819,11 @@ impl ViewerState {
             )
             .show(ui, |ui| self.drawer(ui, shared));
 
-        if self.panes[self.active].positions() > 1 {
+        // The frame slider along the bottom, and the images above it. A
+        // bottom panel inside a top-down Ui leaves the space below the
+        // cursor to whatever comes next, so the image area is cut short of
+        // the slider here rather than painting over it.
+        let slider_top = (self.panes[self.active].positions() > 1).then(|| {
             egui::Panel::bottom(("viewer-slider", self.id))
                 .exact_size(26.0)
                 .frame(
@@ -3827,12 +3831,20 @@ impl ViewerState {
                         .fill(Color32::from_rgb(30, 30, 32))
                         .inner_margin(egui::Margin::symmetric(10, 4)),
                 )
-                .show(ui, |ui| self.slider(ui, shared));
-        }
+                .show(ui, |ui| ui.horizontal_centered(|ui| self.slider(ui, shared)))
+                .response
+                .rect
+                .top()
+        });
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(Color32::BLACK))
-            .show(ui, |ui| self.image_area(ui, shared));
+        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+            let mut rect = ui.available_rect_before_wrap();
+            if let Some(top) = slider_top {
+                rect.max.y = rect.max.y.min(top);
+            }
+            let mut images = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            self.image_area(&mut images, shared);
+        });
 
         self.run_menu_action(ui, shared);
         self.basis_panel(ui);

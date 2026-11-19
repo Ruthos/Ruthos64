@@ -1,0 +1,43 @@
+# A Windows build of main to try between releases, built where Windows
+# Smart App Control cannot block the compiler's build scripts.
+# Started by hand from the Actions tab (or `gh workflow run windows-test.yml`).
+#
+# The executable is not signed. Releases come only from release.yml, which
+# signs them once signing is set up.
+name: Windows test build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  exe:
+    name: ruthos.exe (unsigned, for testing)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ilammy/setup-nasm@v1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p ruthos
+      - run: cargo install cargo-about --locked --version 0.9.3 --features cli
+      - name: Third-party notices
+        run: python scripts/notices.py build --target x86_64-pc-windows-msvc --out notices
+      - name: Zip
+        shell: pwsh
+        run: |
+          $name = "Ruthos-test-$(git rev-parse --short HEAD)-win64"
+          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
+          Copy-Item target/release/ruthos.exe, LICENSE, README.md, notices/THIRD_PARTY_LICENSES.html, notices/THIRD_PARTY_LICENSES.txt "dist/$name"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruthos-windows-test
+          path: dist/Ruthos-test-*-win64.zip
+          if-no-files-found: error
+          retention-days: 14
