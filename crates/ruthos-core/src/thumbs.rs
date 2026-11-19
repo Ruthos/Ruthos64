@@ -144,12 +144,18 @@ fn make_thumbnail(paths: &DataPaths, req: &Request, size: u32) -> anyhow::Result
         // Judged on the whole image, where a thin jet is still many pixels;
         // the region says so outright when the scanner wrote it.
         let flow = frame.meta.us_regions.iter().any(|r| r.data_type == 2) || shows_colour_flow(src.as_raw());
-        (image::DynamicImage::ImageRgb8(image::imageops::thumbnail(&src, tw, th)), flow)
+        (
+            image::DynamicImage::ImageRgb8(image::imageops::thumbnail(&src, tw, th)),
+            flow,
+        )
     } else {
         let gray = frame_to_gray8(&frame, center, width);
         let src = image::GrayImage::from_raw(frame.width, frame.height, gray)
             .ok_or_else(|| anyhow::anyhow!("thumbnail buffer size mismatch"))?;
-        (image::DynamicImage::ImageLuma8(image::imageops::thumbnail(&src, tw, th)), false)
+        (
+            image::DynamicImage::ImageLuma8(image::imageops::thumbnail(&src, tw, th)),
+            false,
+        )
     };
     let _ = std::fs::create_dir_all(paths.thumbs_dir());
     let _ = thumb.save(ThumbnailService::cached(paths, req.series_id, colour_flow));
