@@ -176,7 +176,7 @@ fn make_thumbnail(paths: &DataPaths, req: &Request, size: u32) -> anyhow::Result
 pub fn shows_colour_flow(rgb: &[u8]) -> bool {
     let mut total = 0usize;
     let mut flow = 0usize;
-    for p in rgb.chunks_exact(3) {
+    for p in rgb.as_chunks::<3>().0 {
         total += 1;
         let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
         let hi = r.max(g).max(b);
