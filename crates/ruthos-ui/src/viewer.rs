@@ -11,6 +11,7 @@ use std::time::Instant;
 use egui::{Align2, Color32, FontId, Key, PointerButton, Pos2, Rect, Sense, Ui, Vec2, ViewportId};
 
 use ruthos_core::measure::Library;
+use ruthos_core::trim::LoopTrim;
 use ruthos_core::{ImageRow, SeriesRow, StudyRow};
 
 use ruthos_dicom::Frame;
@@ -675,6 +676,10 @@ pub struct ViewerState {
     file_rates: HashMap<i64, Option<f32>>,
     /// While playing, how many positions ahead to decode: half a second.
     cine_ahead: usize,
+    /// Each loop's trim, by image id, as read from the database.
+    trims: HashMap<i64, Option<LoopTrim>>,
+    /// A trimmed copy being written.
+    trim_copy: Option<crate::pacs::Task<Result<String, String>>>,
     /// When the window opened, and whether the developer screenshot and
     /// playback options have run.
     opened_at: Instant,
@@ -958,6 +963,8 @@ impl ViewerState {
             skipping: None,
             file_rates: HashMap::new(),
             cine_ahead: 1,
+            trims: HashMap::new(),
+            trim_copy: None,
             opened_at: Instant::now(),
             dev_shot_done: false,
             dev_play_done: false,
@@ -2048,6 +2055,7 @@ impl ViewerState {
         };
         // The movie plays at the rate cine shows: the file's times the speed.
         let movie_rate = self.cine_rate(self.active);
+        let trim = self.pane_trim(self.active);
         let p = &self.panes[self.active];
         let (loop_only, files): (bool, Vec<std::path::PathBuf>) = if img.number_of_frames > 1 {
             (true, vec![shared.resolve(&img.path)])
@@ -2094,7 +2102,10 @@ impl ViewerState {
                 ruthos_core::movie::export_dicom_movie(
                     &encoder,
                     &out,
-                    &ruthos_core::movie::MovieSource { files },
+                    &ruthos_core::movie::MovieSource {
+                        trim: trim.filter(|_| loop_only),
+                        files,
+                    },
                     center,
                     width,
                     &clut,
@@ -2230,6 +2241,24 @@ impl ViewerState {
         }
         if cancel {
             self.encoder_prompt = None;
+        }
+    }
+
+    /// A trimmed copy finished: say where it went, and show it.
+    fn pump_trim_copy(&mut self, shared: &Shared) {
+        let Some(result) = self.trim_copy.as_ref().and_then(|task| task.take()) else {
+            return;
+        };
+        self.trim_copy = None;
+        match result {
+            Ok(message) => {
+                self.set_status(message);
+                shared
+                    .series_revision
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.timeline_read = false;
+            }
+            Err(e) => self.set_status(format!("The trimmed copy was not saved: {e}")),
         }
     }
 
@@ -3565,6 +3594,7 @@ impl ViewerState {
     pub fn show(&mut self, ui: &mut Ui, shared: &Shared) {
         crate::crash::debug_panic("viewer");
         self.pump_movie();
+        self.pump_trim_copy(shared);
         self.dial_input(ui, shared);
         self.dev_options(ui);
         let ctx = ui.ctx().clone();
@@ -3679,7 +3709,7 @@ impl ViewerState {
                         .fill(Color32::from_rgb(30, 30, 32))
                         .inner_margin(egui::Margin::symmetric(10, 4)),
                 )
-                .show(ui, |ui| self.slider(ui));
+                .show(ui, |ui| self.slider(ui, shared));
         }
 
         egui::CentralPanel::default()
@@ -4594,26 +4624,189 @@ impl ViewerState {
         });
     }
 
-    fn slider(&mut self, ui: &mut Ui) {
+    fn slider(&mut self, ui: &mut Ui, shared: &Shared) {
         let n = self.panes[self.active].positions();
         if n <= 1 {
             return;
         }
+        // A loop (one multi-frame image) can be trimmed.
+        let looped = self
+            .current_image()
+            .filter(|i| i.number_of_frames > 1 && self.panes[self.active].images.len() == 1)
+            .map(|i| i.id);
+        let trim = self.pane_trim(self.active);
         let current = self.panes[self.active].position().min(n - 1);
         let mut v = current;
-        ui.spacing_mut().slider_width = ui.available_width() - 70.0;
-        ui.add_enabled(
+        let controls = match (looped, trim) {
+            (None, _) => 0.0,
+            (Some(_), None) => 110.0,
+            (Some(_), Some(_)) => 250.0,
+        };
+        ui.spacing_mut().slider_width = (ui.available_width() - 70.0 - controls).max(60.0);
+        let r = ui.add_enabled(
             !self.active_locked(),
             egui::Slider::new(&mut v, 0..=n - 1).show_value(false),
         );
-        ui.label(
-            egui::RichText::new(format!("{}/{}", v + 1, n))
-                .size(11.5)
-                .color(Color32::from_gray(200)),
-        );
+        if let Some(t) = trim {
+            // The frames that play, marked on the rail.
+            let rail = r.rect.x_range().shrink(r.rect.height() / 2.5);
+            let x = |f: u32| rail.min + rail.span() * f as f32 / (n - 1).max(1) as f32;
+            let y = r.rect.center().y;
+            let painter = ui.painter();
+            let accent = Color32::from_rgb(240, 190, 90);
+            painter.line_segment(
+                [Pos2::new(x(t.first), y), Pos2::new(x(t.last), y)],
+                egui::Stroke::new(4.0, accent.gamma_multiply(0.55)),
+            );
+            for f in [t.first, t.last] {
+                painter.line_segment(
+                    [Pos2::new(x(f), y - 7.0), Pos2::new(x(f), y + 7.0)],
+                    egui::Stroke::new(2.0, accent),
+                );
+            }
+        }
+        let label = match trim {
+            Some(t) => format!("{}/{}  ({} of {})", v + 1, n, t.len(), n),
+            None => format!("{}/{}", v + 1, n),
+        };
+        ui.label(egui::RichText::new(label).size(11.5).color(Color32::from_gray(200)));
         if v != current {
             self.set_active_position(v);
         }
+        let Some(image_id) = looped else { return };
+        if self.active_locked() {
+            return;
+        }
+        let small = |text: &str| egui::RichText::new(text).size(11.0);
+        let here = current as u32;
+        let frames = n as u32;
+        let mut set: Option<Option<LoopTrim>> = None;
+        // [ and ] (outside the brush tools, which size with them) and the
+        // buttons set where the loop starts and ends.
+        let typing = ui.ctx().memory(|m| m.focused().is_some());
+        let brush = matches!(self.tool, Tool::Brush | Tool::Repulsor);
+        let (start_key, end_key) = if typing || brush {
+            (false, false)
+        } else {
+            ui.input(|i| (i.key_pressed(Key::OpenBracket), i.key_pressed(Key::CloseBracket)))
+        };
+        let (first, last) = trim.map_or((0, frames - 1), |t| (t.first, t.last));
+        if ui
+            .small_button(small("[ Start"))
+            .on_hover_text("Start the loop at this frame  ( [ )")
+            .clicked()
+            || start_key
+        {
+            set = Some(LoopTrim::new(here, if here < last { last } else { frames - 1 }, frames));
+        }
+        if ui
+            .small_button(small("End ]"))
+            .on_hover_text("End the loop at this frame  ( ] )")
+            .clicked()
+            || end_key
+        {
+            set = Some(LoopTrim::new(if here > first { first } else { 0 }, here, frames));
+        }
+        if let Some(t) = trim {
+            if ui
+                .small_button(small("Whole loop"))
+                .on_hover_text("Play every frame again")
+                .clicked()
+            {
+                set = Some(None);
+            }
+            let busy = self.trim_copy.is_some();
+            if ui
+                .add_enabled(
+                    !busy,
+                    egui::Button::new(small(if busy { "Saving\u{2026}" } else { "Save copy" })).small(),
+                )
+                .on_hover_text("Save the trimmed loop as a new image beside the original, which is kept as it is")
+                .clicked()
+            {
+                self.save_trimmed_copy(ui.ctx(), shared, image_id, t);
+            }
+        }
+        if let Some(new) = set {
+            if let Err(e) = shared.db.set_loop_trim(image_id, new) {
+                self.set_status(format!("The trim could not be saved: {e}"));
+            } else {
+                self.trims.insert(image_id, new);
+                self.set_status(match new {
+                    Some(t) => format!("The loop plays frames {} to {}", t.first + 1, t.last + 1),
+                    None => "The loop plays every frame".to_string(),
+                });
+            }
+        }
+    }
+
+    /// Read a loop's trim from the database, once.
+    fn ensure_trim(&mut self, shared: &Shared, image_id: i64) {
+        if !self.trims.contains_key(&image_id) {
+            let trim = shared.db.loop_trim(image_id).ok().flatten();
+            self.trims.insert(image_id, trim);
+        }
+    }
+
+    /// The trim of the loop pane `k` shows, if it is one loop and trimmed.
+    fn pane_trim(&self, k: usize) -> Option<LoopTrim> {
+        let p = self.panes.get(k)?;
+        let img = p.image().filter(|i| i.number_of_frames > 1)?;
+        self.trims
+            .get(&img.id)
+            .copied()
+            .flatten()
+            .filter(|t| t.last < img.number_of_frames as u32)
+    }
+
+    /// Write the trimmed frames of a loop as a new image of its series:
+    /// beside the original when it is linked where it lies, otherwise into
+    /// the database folder.
+    fn save_trimmed_copy(&mut self, ctx: &egui::Context, shared: &Shared, image_id: i64, trim: LoopTrim) {
+        let Some(image) = self.panes[self.active]
+            .images
+            .iter()
+            .find(|i| i.id == image_id)
+            .cloned()
+        else {
+            return;
+        };
+        let source = shared.resolve(&image.path);
+        let db = shared.db.clone();
+        let paths = shared.paths.clone();
+        let task = crate::pacs::Task::spawn(ctx, "ruthos-trim", move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String, String> {
+                let stem = source
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "loop".into());
+                let name = format!("{stem}_frames{}-{}.dcm", trim.first + 1, trim.last + 1);
+                let beside = source.parent().filter(|_| !image.stored_in_database_folder);
+                let (out, linked) = match beside {
+                    Some(dir) => (dir.join(&name), true),
+                    None => {
+                        let dir = paths.temp_dir();
+                        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                        (dir.join(&name), false)
+                    }
+                };
+                ruthos_core::trim::write_trimmed_copy(&source, &out, trim).map_err(|e| e.to_string())?;
+                let mode = if linked {
+                    ruthos_core::import::ImportMode::Link
+                } else {
+                    ruthos_core::import::ImportMode::Move
+                };
+                ruthos_core::import::import_file(&db, &paths, &out, mode).map_err(|e| e.to_string())?;
+                Ok(if linked {
+                    format!("Trimmed copy saved as {}", out.display())
+                } else {
+                    "Trimmed copy added to the study".to_string()
+                })
+            }))
+            .unwrap_or_else(|_| Err("an internal error stopped the copy; see crash.log".into()))
+        });
+        self.trim_copy = Some(task);
+        self.set_status("Saving the trimmed loop\u{2026}");
     }
 
     /// Frames a second image `image_id` was recorded at, from any of its
@@ -4701,9 +4894,19 @@ impl ViewerState {
             }
             let rate = self.cine_rate(k);
             fastest = fastest.max(rate);
+            let trim = self.pane_trim(k);
             let p = &mut self.panes[k];
-            let n = p.loop_len();
-            let pos = p.loop_pos();
+            // A trimmed loop plays its own frames: positions counted from
+            // its first, and a frame outside it goes to the first.
+            let (base, n) = match trim {
+                Some(t) => (t.first as usize, t.len()),
+                None => (0, p.loop_len()),
+            };
+            if p.loop_pos() < base || p.loop_pos() >= base + n {
+                p.set_loop_pos(base);
+                p.cine = None;
+            }
+            let pos = p.loop_pos() - base;
             // Start (or restart) the clock: at the first tick, on a new rate,
             // or when the position was moved by hand.
             let clock = match p.cine {
@@ -4719,9 +4922,9 @@ impl ViewerState {
             let advance = (next + n - pos) % n;
             // A frame still decoding is not shown blank: the cell keeps its
             // frame and the clock runs on, so real time is kept.
-            let ready = p.key_at(next).is_some_and(|k| self.frames.contains_key(&k));
+            let ready = p.key_at(base + next).is_some_and(|k| self.frames.contains_key(&k));
             let shown = if advance > 0 && ready {
-                p.set_loop_pos(next);
+                p.set_loop_pos(base + next);
                 self.cine_stats.0 += 1;
                 self.cine_stats.1 += advance as u32 - 1;
                 next
@@ -5230,6 +5433,10 @@ impl ViewerState {
         let Some(key) = self.panes[k].key() else { return };
 
         // Request this frame and, for the active cell, its neighbours.
+        if let Some(id) = self.panes[k].image().filter(|i| i.number_of_frames > 1).map(|i| i.id) {
+            self.ensure_trim(shared, id);
+        }
+        let trim = self.pane_trim(k);
         {
             let p = &self.panes[k];
             self.ensure_requested(shared, &p.images, p.image_idx, p.frame_idx);
@@ -5241,10 +5448,15 @@ impl ViewerState {
             {
                 let n = img.number_of_frames as u32;
                 let ahead = if self.playing { self.cine_ahead.max(4) } else { 2 } as u32;
-                for by in 1..=ahead.min(n - 1) {
+                let span = trim.map_or(n, |t| t.len() as u32);
+                for by in 1..=ahead.min(span - 1) {
+                    let frame = match trim {
+                        Some(t) if self.playing => t.after(p.frame_idx, by),
+                        _ => (p.frame_idx + by) % n,
+                    };
                     let key = FrameKey {
                         image_id: img.id,
-                        frame: (p.frame_idx + by) % n,
+                        frame,
                     };
                     if !self.frames.contains_key(&key) {
                         shared.loader.request_ahead(key, shared.resolve(&img.path));

@@ -1671,6 +1671,39 @@ impl Database {
         Ok(())
     }
 
+    // -------------------------------------------------------------- loop trim
+
+    /// The frames a loop plays, when it has been trimmed.
+    pub fn loop_trim(&self, image_id: i64) -> Result<Option<crate::trim::LoopTrim>> {
+        let conn = self.conn.lock();
+        Ok(conn
+            .query_row(
+                "SELECT first_frame, last_frame FROM loop_trim WHERE image_id = ?1",
+                params![image_id],
+                |r| {
+                    Ok(crate::trim::LoopTrim {
+                        first: r.get::<_, i64>(0)?.max(0) as u32,
+                        last: r.get::<_, i64>(1)?.max(0) as u32,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Keep a loop's trim, or forget it with `None`.
+    pub fn set_loop_trim(&self, image_id: i64, trim: Option<crate::trim::LoopTrim>) -> Result<()> {
+        let conn = self.conn.lock();
+        match trim {
+            Some(t) => conn.execute(
+                "INSERT OR REPLACE INTO loop_trim (image_id, first_frame, last_frame, date_set)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![image_id, t.first as i64, t.last as i64, now_unix()],
+            )?,
+            None => conn.execute("DELETE FROM loop_trim WHERE image_id = ?1", params![image_id])?,
+        };
+        Ok(())
+    }
+
     // ----------------------------------------------------------------- albums
 
     pub fn albums(&self) -> Result<Vec<AlbumRow>> {
@@ -2063,6 +2096,12 @@ fn migrate(conn: &Connection) -> Result<()> {
             path TEXT PRIMARY KEY,
             size INTEGER NOT NULL,
             mtime INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS loop_trim (
+            image_id INTEGER PRIMARY KEY REFERENCES image(id) ON DELETE CASCADE,
+            first_frame INTEGER NOT NULL,
+            last_frame INTEGER NOT NULL,
+            date_set INTEGER NOT NULL
          );
          CREATE TABLE IF NOT EXISTS roi_value (
             roi_id INTEGER NOT NULL REFERENCES roi(id) ON DELETE CASCADE,
@@ -2792,6 +2831,22 @@ mod tests {
             ("C:\\linked\\2.dcm".to_string(), false),
             "linked absolute paths are left alone"
         );
+    }
+
+    #[test]
+    fn a_loop_trim_is_kept_and_forgotten() {
+        let db = Database::open_in_memory(&DataPaths::new("x")).unwrap();
+        let mut m = meta("1.2.3", "1.2.3.4", "1.2.3.4.5");
+        m.number_of_frames = 40;
+        let InsertOutcome::Inserted { image_id: id, .. } = db.insert_instance(&m, "a.dcm", true, 100).unwrap() else {
+            panic!()
+        };
+        assert_eq!(db.loop_trim(id).unwrap(), None);
+        let t = crate::trim::LoopTrim::new(5, 20, 40);
+        db.set_loop_trim(id, t).unwrap();
+        assert_eq!(db.loop_trim(id).unwrap(), t);
+        db.set_loop_trim(id, None).unwrap();
+        assert_eq!(db.loop_trim(id).unwrap(), None);
     }
 
     #[test]

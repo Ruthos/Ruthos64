@@ -326,6 +326,8 @@ fn encode<W: Write + Seek>(
 pub struct MovieSource {
     /// Files in order; each contributes all its frames.
     pub files: Vec<std::path::PathBuf>,
+    /// For one loop, only the frames of its trim.
+    pub trim: Option<crate::trim::LoopTrim>,
 }
 
 /// Export DICOM frames as an MP4, rendered with the given window and colour
@@ -350,6 +352,9 @@ pub fn export_dicom_movie(
             .map(|m| m.number_of_frames.max(1))
             .unwrap_or(1);
         index.extend((0..n).map(|k| (f, k)));
+    }
+    if let Some(trim) = source.trim.filter(|_| source.files.len() == 1) {
+        index.retain(|(_, k)| trim.contains(*k));
     }
     let first = ruthos_dicom::decode_frame(
         source

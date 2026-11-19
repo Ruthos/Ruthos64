@@ -27,6 +27,7 @@ pub mod settings;
 pub mod structured;
 pub mod teaching;
 pub mod thumbs;
+pub mod trim;
 pub mod volume;
 pub mod watch;
 
