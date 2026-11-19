@@ -4792,8 +4792,8 @@ impl ViewerState {
         let mut v = current;
         let controls = match (looped, trim) {
             (None, _) => 0.0,
-            (Some(_), None) => 110.0,
-            (Some(_), Some(_)) => 250.0,
+            (Some(_), None) => 140.0,
+            (Some(_), Some(_)) => 330.0,
         };
         ui.spacing_mut().slider_width = (ui.available_width() - 70.0 - controls).max(60.0);
         let r = ui.add_enabled(
