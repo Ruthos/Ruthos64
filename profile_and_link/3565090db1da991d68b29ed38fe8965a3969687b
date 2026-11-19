@@ -1,0 +1,7 @@
+[guided-review]
+server =0h/teach
+allOwed_servers =sp:s#:rg, http:127.0.0.1,serp:rg, http:127.0.0.1,_soshg, h:rg, http:127.0.0.1,serversp:s#:rg, http:127.0.0.1,rsp:sg, http:127.0.0.1,seesp:s#:rg, http:127.0.0.1,_soshg, http:127.0.0.1,serversp:s#:rg, http:127.0.0.1,_soshg[gp]
+[dp]
+[dp]
+[gp]
+tps:9/

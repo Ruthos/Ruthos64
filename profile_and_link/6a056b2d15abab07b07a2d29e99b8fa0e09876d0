@@ -1,0 +1,1 @@
+{"ruthos_profile":1,"issuer":{"server":"https://relay.exampl","name":"n","by":"b"},"issued":"202623:59:59Z/relay.exanh","session":{"code":"636649"},"cases":["EQ-CA2-014"],"sig":{"alg":"Ed25519","kid":"k","value":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAADAAAAEAAAAAAAAAAAAAACAAAAAAAAAAAAAA=="}}

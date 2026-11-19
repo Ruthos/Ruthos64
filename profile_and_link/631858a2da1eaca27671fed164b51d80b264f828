@@ -1,0 +1,3 @@
+[guided-review]
+serve
+allowed_servers = h://MM.efag, hps://$g, hs://$rg, htokenttps://.$$
