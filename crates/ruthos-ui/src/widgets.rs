@@ -266,6 +266,27 @@ pub fn source_row(ui: &mut Ui, icon: impl Into<Icon>, text: &str, count: Option<
     response
 }
 
+/// The colour Doppler mark: a small red-over-blue scale bar and "CF" in
+/// the top-right corner of a thumbnail.
+fn doppler_badge(painter: &egui::Painter, image: Rect) {
+    let badge = Rect::from_min_size(
+        Pos2::new(image.right() - 30.0, image.top() + 3.0),
+        Vec2::new(27.0, 15.0),
+    );
+    painter.rect_filled(badge, 3.0, Color32::from_black_alpha(170));
+    let bar = Rect::from_min_size(badge.left_top() + Vec2::new(3.0, 3.0), Vec2::new(4.0, 9.0));
+    let (top, bottom) = bar.split_top_bottom_at_fraction(0.5);
+    painter.rect_filled(top, 0.0, Color32::from_rgb(230, 60, 40));
+    painter.rect_filled(bottom, 0.0, Color32::from_rgb(50, 110, 240));
+    painter.text(
+        Pos2::new(bar.right() + 3.0, badge.center().y),
+        Align2::LEFT_CENTER,
+        "CF",
+        FontId::proportional(10.0),
+        Color32::WHITE,
+    );
+}
+
 /// A thumbnail with a caption, used in the database strip and the viewer
 /// drawer. Returns the response of the whole cell.
 pub fn thumbnail_cell(
@@ -275,6 +296,7 @@ pub fn thumbnail_cell(
     subcaption: &str,
     selected: bool,
     size: f32,
+    colour_flow: bool,
 ) -> Response {
     let cell = Vec2::new(size + 14.0, size + 38.0);
     let (rect, response) = ui.allocate_exact_size(cell, Sense::click());
@@ -317,6 +339,9 @@ pub fn thumbnail_cell(
                     Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                     Color32::WHITE,
                 );
+                if colour_flow {
+                    doppler_badge(painter, draw_rect);
+                }
             }
             None => {
                 painter.text(

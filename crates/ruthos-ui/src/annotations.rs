@@ -79,8 +79,15 @@ pub fn draw(painter: &Painter, rect: Rect, ctx: &AnnotationContext<'_>) {
         s.window_width.round() as i64
     ));
     // The scale every measurement on this image is computed from.
-    let scale = m.image_scale();
-    tl.push(format!("Scale: {}", scale.basis.label()));
+    // A strip with time across has no 2D scale, but its region still
+    // calibrates every measurement on it: say so rather than "uncalibrated".
+    let (cx, cy) = (ctx.frame.width as f64 / 2.0, ctx.frame.height as f64 / 2.0);
+    let scale = match m.us_region_at(cx, cy).filter(|r| r.is_time_across()) {
+        Some(r) if r.is_velocity_y() => "Ultrasound region (spectral Doppler)".to_string(),
+        Some(_) => "Ultrasound region (M-mode)".to_string(),
+        None => m.image_scale().basis.label().to_string(),
+    };
+    tl.push(format!("Scale: {scale}"));
     if full {
         if let Some((x, y)) = ctx.mouse_pixel {
             match ctx.frame.value_at(x, y) {

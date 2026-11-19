@@ -1,6 +1,6 @@
 //! State shared between the database window and every viewer window.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -47,6 +47,8 @@ pub struct Shared {
     pub presets: WindowPresets,
     /// egui textures for series thumbnails, keyed by series id.
     pub thumb_textures: Mutex<HashMap<i64, TextureHandle>>,
+    /// The thumbnails (same keys) that show colour Doppler.
+    pub thumb_colour_flow: Mutex<HashSet<i64>>,
     pub import_tx: Sender<ImportEvent>,
     pub import_rx: Receiver<ImportEvent>,
     /// Counts finished imports that touched a study, so open viewers can
@@ -142,6 +144,7 @@ impl Shared {
             cluts: ClutLibrary::load(),
             presets: WindowPresets::default(),
             thumb_textures: Mutex::new(HashMap::new()),
+            thumb_colour_flow: Mutex::new(HashSet::new()),
             import_tx,
             import_rx,
             series_revision: AtomicU64::new(0),
@@ -182,7 +185,19 @@ impl Shared {
             let image = egui::ColorImage::from_rgba_unmultiplied([u.width as usize, u.height as usize], &u.rgba);
             let handle = ctx.load_texture(format!("thumb-{}", u.series_id), image, egui::TextureOptions::LINEAR);
             self.thumb_textures.lock().insert(u.series_id, handle);
+            let mut flow = self.thumb_colour_flow.lock();
+            if u.colour_flow {
+                flow.insert(u.series_id);
+            } else {
+                flow.remove(&u.series_id);
+            }
         }
+    }
+
+    /// Whether a thumbnail (by the key `thumbnail` or `image_thumbnail`
+    /// keeps it under) shows colour Doppler.
+    pub fn shows_colour_flow(&self, key: i64) -> bool {
+        self.thumb_colour_flow.lock().contains(&key)
     }
 
     /// Thumbnail texture for a series, requesting it if missing.

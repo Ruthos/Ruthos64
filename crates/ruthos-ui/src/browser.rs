@@ -1880,6 +1880,7 @@ impl BrowserState {
                             &sub,
                             self.selected_series == Some(s.id),
                             theme::THUMB_SIZE,
+                            shared.shows_colour_flow(s.id),
                         );
                         if r.clicked() {
                             select = Some(s.id);
