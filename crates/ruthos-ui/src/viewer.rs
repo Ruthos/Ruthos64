@@ -38,6 +38,7 @@ use crate::widgets::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     WindowLevel,
+    Scroll,
     Move,
     Zoom,
     Rotate,
@@ -71,7 +72,7 @@ pub enum Tool {
 
 impl Tool {
     /// The mouse tools of the Tools menu, besides Measure.
-    pub const NAVIGATE: [Tool; 4] = [Tool::WindowLevel, Tool::Move, Tool::Zoom, Tool::Rotate];
+    pub const NAVIGATE: [Tool; 5] = [Tool::WindowLevel, Tool::Scroll, Tool::Move, Tool::Zoom, Tool::Rotate];
 
     /// What Measure draws, chosen in the Measurements menu, in its order.
     /// What the Measure tool can be, chosen in the Measurements menu.
@@ -135,8 +136,9 @@ impl Tool {
         }
     }
 
-    pub const ALL: [Tool; 20] = [
+    pub const ALL: [Tool; 21] = [
         Tool::WindowLevel,
+        Tool::Scroll,
         Tool::Move,
         Tool::Zoom,
         Tool::Rotate,
@@ -161,6 +163,7 @@ impl Tool {
     pub fn label(self) -> &'static str {
         match self {
             Tool::WindowLevel => "WL/WW",
+            Tool::Scroll => "Scroll",
             Tool::Move => "Move",
             Tool::Zoom => "Zoom",
             Tool::Rotate => "Rotate",
@@ -186,6 +189,7 @@ impl Tool {
     pub fn glyph(self) -> &'static str {
         match self {
             Tool::WindowLevel => icons::TOOL_WL,
+            Tool::Scroll => icons::SERIES,
             Tool::Move => icons::TOOL_MOVE,
             Tool::Zoom => icons::TOOL_ZOOM,
             Tool::Rotate => icons::TOOL_ROTATE,
@@ -210,6 +214,7 @@ impl Tool {
     pub fn shortcut(self) -> &'static str {
         match self {
             Tool::WindowLevel => "W",
+            Tool::Scroll => "",
             Tool::Move => "M",
             Tool::Zoom => "Z",
             Tool::Rotate => "T",
@@ -261,6 +266,7 @@ impl Tool {
     pub fn bitmap(self) -> Bitmap {
         match self {
             Tool::WindowLevel => Bitmap::Wlww,
+            Tool::Scroll => Bitmap::Stack,
             Tool::Move => Bitmap::Move,
             Tool::Zoom => Bitmap::Zoom,
             Tool::Rotate => Bitmap::Rotate,
@@ -732,6 +738,13 @@ pub struct ViewerState {
     wl_drag_anchor: Option<(f32, f32)>,
     calibrate: Option<CalibrateDraft>,
     pending_clear_calibration: Option<i64>,
+}
+
+#[derive(Clone, Copy)]
+struct ScrollDrag {
+    start_y: f32,
+    start_position: usize,
+    last_position: usize,
 }
 
 /// An LV M-mode line being placed: the time column and the depths so far.
@@ -1296,6 +1309,32 @@ impl ViewerState {
             self.panes[self.active].set_position(pos);
         }
         self.selected_roi = None;
+    }
+
+    /// The requested position may be ahead of the last decoded slice on screen.
+    fn scroll_position(&self) -> usize {
+        let pane = &self.panes[self.active];
+        self.scroll_target
+            .and_then(|id| pane.images.iter().position(|image| image.id == id))
+            .unwrap_or_else(|| pane.position())
+    }
+
+    fn drag_scroll_to(&mut self, pos: usize) {
+        let from = self.scroll_position();
+        if pos == from {
+            return;
+        }
+        let pane = &self.panes[self.active];
+        if !self.playing && !self.tiled_series() && pane.images.len() > 1 && pane.images[pos].number_of_frames <= 1 {
+            // Keep the displayed slice until the requested one decodes. Dragging
+            // back to the displayed slice cancels the outstanding request.
+            self.scroll_target = (pos != pane.position()).then_some(pane.images[pos].id);
+            self.scroll_direction = (pos as i64 - from as i64).signum();
+            self.selected_roi = None;
+        } else {
+            self.scroll_target = None;
+            self.set_active_position(pos);
+        }
     }
 
     /// Move every unlocked cell of a tiled series by `delta`, stopping when
@@ -3667,6 +3706,7 @@ impl ViewerState {
     pub fn menu_from_id(id: &str) -> Option<MenuAction> {
         Some(match id {
             "tool:wl" => MenuAction::SetTool(Tool::WindowLevel),
+            "tool:scroll" => MenuAction::SetTool(Tool::Scroll),
             "tool:move" => MenuAction::SetTool(Tool::Move),
             "tool:zoom" => MenuAction::SetTool(Tool::Zoom),
             "tool:rotate" => MenuAction::SetTool(Tool::Rotate),
@@ -6186,6 +6226,37 @@ impl ViewerState {
                     self.wl_drag_anchor = None;
                 }
             }
+            Tool::Scroll => {
+                let drag_id = response.id.with(("slice_drag", button as u8));
+                if response.drag_started_by(button) || response.drag_stopped_by(button) {
+                    ui.data_mut(|data| data.remove::<ScrollDrag>(drag_id));
+                }
+                if response.dragged_by(button) {
+                    let Some(pos) = pos else { return };
+                    let count = self.panes[self.active].positions();
+                    if count > 1 {
+                        let press_y = ui.input(|i| i.pointer.press_origin()).map_or(pos.y, |origin| origin.y);
+                        let requested = ui.data_mut(|data| {
+                            let drag = data.get_temp_mut_or_insert_with(drag_id, || {
+                                let start_position = self.scroll_position();
+                                ScrollDrag {
+                                    start_y: press_y,
+                                    start_position,
+                                    last_position: start_position,
+                                }
+                            });
+                            let target =
+                                drag_scroll_position(drag.start_position, pos.y - drag.start_y, t.rect.height(), count);
+                            let changed = target != drag.last_position;
+                            drag.last_position = target;
+                            changed.then_some(target)
+                        });
+                        if let Some(target) = requested {
+                            self.drag_scroll_to(target);
+                        }
+                    }
+                }
+            }
             Tool::Move => {
                 if response.dragged_by(button) {
                     t.state.pan += response.drag_delta();
@@ -6950,6 +7021,26 @@ fn draft_kind(tool: Tool, a: Vec2, b: Vec2) -> Option<RoiKind> {
 #[allow(dead_code)]
 fn rect_from_points(a: Pos2, b: Pos2) -> Rect {
     Rect::from_two_pos(a, b)
+}
+
+fn drag_scroll_position(start: usize, dy: f32, height: f32, count: usize) -> usize {
+    let points_per_slice = (height * 0.75 / count as f32).clamp(2.5, 14.0);
+    let delta = (dy / points_per_slice).round() as i64;
+    (start as i64 + delta).clamp(0, count as i64 - 1) as usize
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn drag_scroll_reverses_and_stops_at_the_ends() {
+        assert_eq!(drag_scroll_position(40, 30.0, 600.0, 90), 46);
+        assert_eq!(drag_scroll_position(40, -30.0, 600.0, 90), 34);
+        assert_eq!(drag_scroll_position(40, 900.0, 600.0, 90), 89);
+        assert_eq!(drag_scroll_position(40, -900.0, 600.0, 90), 0);
+        assert_eq!(drag_scroll_position(40, 0.0, 600.0, 90), 40);
+    }
 }
 
 #[cfg(test)]
