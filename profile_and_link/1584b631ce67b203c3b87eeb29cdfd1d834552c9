@@ -1,0 +1,1 @@
+{"ruthos_profile":1,"issuer":{"server":"https://elay.exab"},"issued":"2026-11-31T23:59:59Z","server":"https://0Xlay.example.org/t[each","session":{"code":"273298"},"cases":["EQ-CARD-4052-01j"],"sig":{"alg":"Ed25519","kid":"k","value":"AAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAAAAAACAAAAAAAAAAAAHHHHHHHHXHHHHHHHHHHHAAAAAAAAAAAAAAAAA=="}}

@@ -1,0 +1,3 @@
+[guided-review]
+server = hittp://s:/+
+allowed_servers = https:ep:/ex

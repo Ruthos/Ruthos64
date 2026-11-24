@@ -1,0 +1,4 @@
+[guided-review]
+e
+server = https::@[::]:u.ncmch
+allowed_servers = https:.:@[::]::re:
